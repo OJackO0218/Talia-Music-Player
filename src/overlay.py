@@ -139,30 +139,30 @@ class OverlayWindow(QWidget):
         self.startup_duration = 0.20
 
         # Tactile Sound Effects (Hover Pop, Click Button, Hold Ramp-up with Bubbles, Heavy Sinking Shutdown)
-        # All SFX turned down by a further 30% for whisper-quiet subtle feedback
+        # All SFX reduced by a further 50% for soft, subtle background feedback
         self.sound_pop = QSoundEffect(self)
         pop_path = os.path.join(SOUNDS_DIR, "hover_pop.wav")
         if os.path.exists(pop_path):
             self.sound_pop.setSource(QUrl.fromLocalFile(pop_path))
-            self.sound_pop.setVolume(0.29)
+            self.sound_pop.setVolume(0.15)
 
         self.sound_btn = QSoundEffect(self)
         btn_path = os.path.join(SOUNDS_DIR, "click_button.wav")
         if os.path.exists(btn_path):
             self.sound_btn.setSource(QUrl.fromLocalFile(btn_path))
-            self.sound_btn.setVolume(0.25)
+            self.sound_btn.setVolume(0.12)
 
         self.sound_hold = QSoundEffect(self)
         hold_path = os.path.join(SOUNDS_DIR, "hold_ramp.wav")
         if os.path.exists(hold_path):
             self.sound_hold.setSource(QUrl.fromLocalFile(hold_path))
-            self.sound_hold.setVolume(0.25)
+            self.sound_hold.setVolume(0.12)
 
         self.sound_shutdown = QSoundEffect(self)
         shutdown_path = os.path.join(SOUNDS_DIR, "shutdown_heavy.wav")
         if os.path.exists(shutdown_path):
             self.sound_shutdown.setSource(QUrl.fromLocalFile(shutdown_path))
-            self.sound_shutdown.setVolume(0.31)
+            self.sound_shutdown.setVolume(0.15)
 
         # Cyber Mute Indicator (Displays when music is paused)
         self.mute_icon = QPixmap()
