@@ -20,7 +20,7 @@ Includes tactile feedback inspired by osu! lazer, custom sound effects, desktop 
    ```
 2. **Double-click `install.bat`**:
    - Automatically installs required dependencies (`requirements.txt`).
-   - Generates the high-resolution Windows app icon (`app_icon.ico`).
+   - Generates the high-resolution Windows app icon (`assets/icons/app_icon.ico`).
    - Compiles the zero-console native Windows launcher (`Talia.exe`).
    - Creates **Desktop** and **Start Menu** shortcuts.
 3. **Launch**:
@@ -28,10 +28,47 @@ Includes tactile feedback inspired by osu! lazer, custom sound effects, desktop 
 
 ---
 
+## 📁 Clean Project Structure
+
+```text
+Talia-Music-Player/
+├── ⚡ Talia.exe         <-- [Double-click to Run App!]
+├── 🔧 install.bat       <-- [1-Click Setup for New Users]
+│
+├── 📂 music/           <-- [Drop your .opus, .mp3, .wav songs here]
+│   └── Cyberpunk Edgerunners/
+│
+├── 📂 assets/          <-- [Character sprites, audio SFX & icons]
+│   ├── eye_parts/      <-- Character sprites & eye rig layers
+│   ├── sounds/         <-- Tactile low-latency sound effects
+│   └── icons/          <-- App icons & art
+│
+├── 📂 src/             <-- [Application Source Code]
+│   ├── main.py         <-- Application bootstrap & single-instance lock
+│   ├── overlay.py      <-- Live2D character overlay & tactile animations
+│   ├── controller.py   <-- Settings & tracklist control panel
+│   ├── audio_engine.py <-- Playback & WASAPI desktop loopback
+│   ├── visualizer.py   <-- Cyberpunk mouth FFT visualizer
+│   └── config.py       <-- Geometry coordinates & persistent settings
+│
+├── 📂 tools/           <-- [Utility Scripts]
+│   ├── setup_windows_app.py
+│   ├── push_to_github.bat
+│   ├── refresh_icon_cache.bat
+│   └── run_as_admin.bat
+│
+├── 📄 README.md
+└── 📄 requirements.txt
+```
+
+---
+
 ## 🌟 Controls & Behavior
 
 ### 1. Interactive Desktop Controls (osu! lazer Tactile Feedback & SFX)
 Talia is **not click-through**, meaning you can interact directly with her on your desktop with snappy visual and tactile sound effects:
+- **Snappy Pop-Up Entrance on Startup ($\le 0.20$s)**:
+  - When Talia launches, she smoothly glides UP into place from below her resting position with a crisp **Pop SFX** `[🫧]` in under **0.2 seconds**, welcoming you to your desktop!
 - **Hovering Cursor on Talia**: 
   - Plays a crisp **Bubble Pop SFX** `[🫧]`.
   - Brightens up with a noticeable **~20% luminous bloom highlight** + subtle 1.2% breathing pop!

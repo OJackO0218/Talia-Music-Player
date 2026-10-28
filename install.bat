@@ -34,7 +34,7 @@ if errorlevel 1 (
 :: 3. Run setup to build native launcher and desktop shortcuts
 echo.
 echo [*] Setting up Talia Desktop App, custom app icon, and native launcher...
-python setup_windows_app.py
+python tools\setup_windows_app.py
 
 echo.
 echo ========================================================
@@ -43,7 +43,7 @@ echo.
 echo    You can now launch Talia anytime via:
 echo    - Desktop shortcut: "Talia Visualizer"
 echo    - Windows Start Menu: Search for "Talia"
-echo    - Direct file: Double-click "Talia.exe" or "run_overlay.bat"
+echo    - Direct file: Double-click "Talia.exe"
 echo ========================================================
 echo.
 pause

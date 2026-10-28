@@ -130,6 +130,14 @@ class OverlayWindow(QWidget):
         self.shutdown_start_time = 0.0
         self.shutdown_start_pos = QPoint(0, 0)
 
+        # Snappy Rise-Up Startup Entrance State (<= 0.20s max)
+        self.is_starting_up = False
+        self.startup_start_time = 0.0
+        self.target_startup_x = 0
+        self.target_startup_y = 0
+        self.startup_offset_y = 110
+        self.startup_duration = 0.20
+
         # Tactile Sound Effects (Hover Pop, Click Button, Hold Ramp-up with Bubbles, Heavy Sinking Shutdown)
         # All SFX turned down by 30% for buttery smooth balanced volume
         self.sound_pop = QSoundEffect(self)
@@ -431,9 +439,33 @@ class OverlayWindow(QWidget):
             self.panel.update_move_talia_ui()
         self.update()
 
+    def trigger_startup_entrance(self):
+        """Snappy 0.20s rise-up entrance from below with pop SFX when application launches."""
+        self.target_startup_x = self.x()
+        self.target_startup_y = self.y()
+        self.startup_offset_y = min(140, max(75, int(self.height() * 0.16)))
+        self.is_starting_up = True
+        self.startup_start_time = time.time()
+        self.move(self.target_startup_x, self.target_startup_y + self.startup_offset_y)
+        if hasattr(self, "sound_pop") and self.sound_pop.isLoaded():
+            self.sound_pop.stop()
+            self.sound_pop.play()
+        self.update()
+
     def on_anim_tick(self):
         if not self.isVisible():
             return
+
+        # Snappy Rise-Up Entrance Animation (<= 0.20s max)
+        if self.is_starting_up:
+            elapsed = time.time() - self.startup_start_time
+            p = min(1.0, elapsed / self.startup_duration)
+            p_ease = 1.0 - ((1.0 - p) ** 3)  # Snappy cubic ease-out
+            curr_y = int(self.target_startup_y + self.startup_offset_y * (1.0 - p_ease))
+            self.move(self.target_startup_x, curr_y)
+            if p >= 1.0:
+                self.move(self.target_startup_x, self.target_startup_y)
+                self.is_starting_up = False
 
         # Sinking Power-Down Shutdown Sequence (3.0s to 3.6s)
         if self.is_shutting_down:

@@ -13,7 +13,7 @@ from PyQt6.QtGui import QIcon
 
 from config import (
     user32, VK_F8, VK_F9, VK_F10, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    save_settings, load_settings, PROJECT_ROOT
+    save_settings, load_settings, PROJECT_ROOT, ICON_PATH
 )
 from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
@@ -34,9 +34,8 @@ class ControlPanel(QWidget):
         self.is_user_scrubbing = False
 
         self.setWindowTitle("Talia Cyberpunk Music Controller")
-        icon_path = os.path.join(PROJECT_ROOT, "app_icon.ico")
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+        if os.path.exists(ICON_PATH):
+            self.setWindowIcon(QIcon(ICON_PATH))
         self.setFixedSize(460, 890)
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet("""

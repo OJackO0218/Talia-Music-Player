@@ -17,11 +17,12 @@ else:
     PROJECT_ROOT = CURRENT_DIR
 
 BASE_DIR = PROJECT_ROOT
-EYE_PARTS_DIR = os.path.join(PROJECT_ROOT, "eye_parts")
+EYE_PARTS_DIR = os.path.join(PROJECT_ROOT, "assets", "eye_parts") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "eye_parts")) else os.path.join(PROJECT_ROOT, "eye_parts")
 DEFAULT_MUSIC_DIR = os.path.join(PROJECT_ROOT, "music")
 SETTINGS_FILE = os.path.join(PROJECT_ROOT, "settings.json")
-PNGS_DIR = os.path.join(PROJECT_ROOT, "PNGs")
-SOUNDS_DIR = os.path.join(PROJECT_ROOT, "sounds")
+PNGS_DIR = os.path.join(PROJECT_ROOT, "assets", "icons") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons")) else os.path.join(PROJECT_ROOT, "PNGs")
+SOUNDS_DIR = os.path.join(PROJECT_ROOT, "assets", "sounds") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "sounds")) else os.path.join(PROJECT_ROOT, "sounds")
+ICON_PATH = os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico")) else os.path.join(PROJECT_ROOT, "app_icon.ico")
 
 SUPPORTED_AUDIO_EXTS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus')
 

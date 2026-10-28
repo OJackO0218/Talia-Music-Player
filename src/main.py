@@ -13,7 +13,7 @@ if CURRENT_DIR not in sys.path:
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
-from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings
+from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH
 from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
 from controller import ControlPanel
@@ -38,9 +38,8 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     # Set application icon for Windows taskbar & alt-tab
-    icon_path = os.path.join(PROJECT_ROOT, "app_icon.ico")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+    if os.path.exists(ICON_PATH):
+        app.setWindowIcon(QIcon(ICON_PATH))
 
     # Load persistent settings from settings.json
     saved_cfg = load_settings()
@@ -60,6 +59,9 @@ def main():
     print("[3/4] Initializing Controller Panel & restoring saved settings...")
     panel = ControlPanel(overlay, audio_engine)
     panel.apply_settings(saved_cfg)
+
+    # Snappy 0.20s rise-up entrance from below with pop SFX
+    overlay.trigger_startup_entrance()
 
     # Load first track into engine in paused state (no autoplay)
     if audio_engine.playlist:

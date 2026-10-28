@@ -11,12 +11,21 @@ import sys
 import subprocess
 from PIL import Image
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-ICON_PATH = os.path.join(PROJECT_ROOT, "app_icon.ico")
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if os.path.basename(CURRENT_DIR).lower() in ("tools", "scripts"):
+    PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+else:
+    PROJECT_ROOT = CURRENT_DIR
+
+ICONS_DIR = os.path.join(PROJECT_ROOT, "assets", "icons")
+ICON_PATH = os.path.join(ICONS_DIR, "app_icon.ico") if os.path.exists(ICONS_DIR) else os.path.join(PROJECT_ROOT, "app_icon.ico")
 EXE_PATH = os.path.join(PROJECT_ROOT, "Talia.exe")
-PNG_SOURCE = os.path.join(PROJECT_ROOT, "PNGs", "talia_avatar_icon.png")
+
+PNG_SOURCE = os.path.join(ICONS_DIR, "talia_avatar_icon.png")
 if not os.path.exists(PNG_SOURCE):
-    PNG_SOURCE = os.path.join(PROJECT_ROOT, "PNGs", "mouth_overlay_1024.png")
+    PNG_SOURCE = os.path.join(ICONS_DIR, "mouth_overlay_1024.png")
+if not os.path.exists(PNG_SOURCE):
+    PNG_SOURCE = os.path.join(PROJECT_ROOT, "PNGs", "talia_avatar_icon.png")
 
 
 def create_app_icon():
@@ -65,7 +74,15 @@ namespace TaliaAppLauncher
         static void Main(string[] args)
         {{
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string scriptPath = Path.Combine(baseDir, "Python Code", "mouth_overlay_app.py");
+            string scriptPath = Path.Combine(baseDir, "src", "main.py");
+            if (!File.Exists(scriptPath))
+            {{
+                scriptPath = Path.Combine(baseDir, "src", "mouth_overlay_app.py");
+            }}
+            if (!File.Exists(scriptPath))
+            {{
+                scriptPath = Path.Combine(baseDir, "Python Code", "mouth_overlay_app.py");
+            }}
             if (!File.Exists(scriptPath))
             {{
                 scriptPath = Path.Combine(baseDir, "mouth_overlay_app.py");
@@ -151,7 +168,8 @@ def create_shortcuts():
     else:
         pythonw_cand = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
         target = pythonw_cand if os.path.exists(pythonw_cand) else sys.executable
-        args = f'"{os.path.join(PROJECT_ROOT, "mouth_overlay_app.py")}"'
+        main_py = os.path.join(PROJECT_ROOT, "src", "main.py")
+        args = f'"{main_py}"'
 
     desktop_dir = os.path.join(os.environ["USERPROFILE"], "Desktop")
     start_menu_dir = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs")
