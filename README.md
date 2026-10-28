@@ -1,5 +1,11 @@
 # Talia Music Player & Visualizer
 
+
+
+<img width="317" height="315" alt="image" src="https://github.com/user-attachments/assets/f19277f1-6acb-4f5e-8b62-ed3fafcd33d5" />
+
+
+
 A transparent desktop audio visualizer with eye tracking, tactile controls, and low-latency audio reactivity for desktop audio (osu!, Spotify, games) and local playlists.
 
 ---
