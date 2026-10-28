@@ -17,7 +17,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtMultimedia import QSoundEffect
 
 from config import (
-    EYE_PARTS_DIR, SOUNDS_DIR, CANVAS_BASE_SIZE, MOUTH_BOX_X, MOUTH_BOX_Y,
+    EYE_PARTS_DIR, SOUNDS_DIR, PNGS_DIR, CANVAS_BASE_SIZE, MOUTH_BOX_X, MOUTH_BOX_Y,
     MOUTH_BOX_W, MOUTH_BOX_H, DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY,
     DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
     user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW
@@ -139,30 +139,39 @@ class OverlayWindow(QWidget):
         self.startup_duration = 0.20
 
         # Tactile Sound Effects (Hover Pop, Click Button, Hold Ramp-up with Bubbles, Heavy Sinking Shutdown)
-        # All SFX turned down by 30% for buttery smooth balanced volume
+        # All SFX turned down by a further 25% for balanced comfortable audio
         self.sound_pop = QSoundEffect(self)
         pop_path = os.path.join(SOUNDS_DIR, "hover_pop.wav")
         if os.path.exists(pop_path):
             self.sound_pop.setSource(QUrl.fromLocalFile(pop_path))
-            self.sound_pop.setVolume(0.56)
+            self.sound_pop.setVolume(0.42)
 
         self.sound_btn = QSoundEffect(self)
         btn_path = os.path.join(SOUNDS_DIR, "click_button.wav")
         if os.path.exists(btn_path):
             self.sound_btn.setSource(QUrl.fromLocalFile(btn_path))
-            self.sound_btn.setVolume(0.48)  # Reduced by 20% for softer tactile feel
+            self.sound_btn.setVolume(0.36)
 
         self.sound_hold = QSoundEffect(self)
         hold_path = os.path.join(SOUNDS_DIR, "hold_ramp.wav")
         if os.path.exists(hold_path):
             self.sound_hold.setSource(QUrl.fromLocalFile(hold_path))
-            self.sound_hold.setVolume(0.48)  # Reduced by 20%
+            self.sound_hold.setVolume(0.36)
 
         self.sound_shutdown = QSoundEffect(self)
         shutdown_path = os.path.join(SOUNDS_DIR, "shutdown_heavy.wav")
         if os.path.exists(shutdown_path):
             self.sound_shutdown.setSource(QUrl.fromLocalFile(shutdown_path))
-            self.sound_shutdown.setVolume(0.60)
+            self.sound_shutdown.setVolume(0.45)
+
+        # Cyber Mute Indicator (Displays when music is paused)
+        self.mute_icon = QPixmap()
+        mute_path = os.path.join(PNGS_DIR, "mute_icon.png")
+        if os.path.exists(mute_path):
+            self.mute_icon.load(mute_path)
+        self.mute_alpha = 0.0
+        self._cached_scaled_mute_size = -1
+        self._cached_scaled_mute = QPixmap()
 
         # Caching optimization: store pre-scaled pixmaps to avoid re-scaling on every 16ms frame
         self._last_scaled_size = -1
@@ -587,6 +596,11 @@ class OverlayWindow(QWidget):
         else:
             self.flash_alpha = 0.0
 
+        # 4.5. Cyber Mute Indicator Interpolation (Smooth fade in when paused, fade out when playing)
+        is_paused = not getattr(self.audio_engine, "is_active", self.audio_engine.is_playing)
+        target_mute = 1.0 if is_paused else 0.0
+        self.mute_alpha += (target_mute - self.mute_alpha) * 0.22
+
         # 5. Dynamic Rotation & Sway computation (osu! lazer left-right rocking & tilt)
         t = time.time()
         if self.is_holding and not self.has_dragged:
@@ -727,6 +741,65 @@ class OverlayWindow(QWidget):
             vis_opacity = self.opacity_val * self.hold_saturation
             painter.setOpacity(vis_opacity)
             self.visualizer.draw(painter, mouth_rect, self.audio_engine)
+            painter.setOpacity(self.opacity_val)
+
+        # ==========================================================
+        # LAYER 0.5: CYBER MUTE INDICATOR (Inside Mouth Cavity on Pause)
+        # ==========================================================
+        if self.mute_alpha > 0.005 and not self.mute_icon.isNull() and self.hold_saturation > 0.05:
+            t = time.time()
+            pulse = 0.88 + 0.12 * math.sin(t * 3.5)
+            eff_alpha = min(1.0, max(0.0, self.mute_alpha * pulse))
+            cx = mouth_x + mouth_w // 2
+            cy = mouth_y + mouth_h // 2
+            icon_dim = max(18, int(mouth_h * 0.56))
+
+            # 1. Soft Cyber Neon Radial Glow
+            glow_rad = icon_dim * 0.90
+            glow = QRadialGradient(cx, cy, glow_rad)
+            glow.setColorAt(0.0, QColor(255, 30, 60, int(85 * eff_alpha)))
+            glow.setColorAt(0.55, QColor(255, 10, 40, int(30 * eff_alpha)))
+            glow.setColorAt(1.0, QColor(255, 0, 30, 0))
+            painter.setBrush(glow)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(QPoint(cx, cy), int(glow_rad), int(glow_rad))
+
+            # 2. Sleek Cyber HUD Corner Brackets
+            bracket_pad = int(icon_dim * 0.12)
+            bx1 = cx - icon_dim // 2 - bracket_pad
+            bx2 = cx + icon_dim // 2 + bracket_pad
+            by1 = cy - icon_dim // 2 - bracket_pad
+            by2 = cy + icon_dim // 2 + bracket_pad
+            blen = max(4, int(icon_dim * 0.18))
+
+            bpen = QPen(QColor(255, 45, 75, int(180 * eff_alpha)), max(1, int(1.5 * scale)))
+            painter.setPen(bpen)
+            # Top-left
+            painter.drawLine(bx1, by1, bx1 + blen, by1)
+            painter.drawLine(bx1, by1, bx1, by1 + blen)
+            # Top-right
+            painter.drawLine(bx2, by1, bx2 - blen, by1)
+            painter.drawLine(bx2, by1, bx2, by1 + blen)
+            # Bottom-left
+            painter.drawLine(bx1, by2, bx1 + blen, by2)
+            painter.drawLine(bx1, by2, bx1, by2 - blen)
+            # Bottom-right
+            painter.drawLine(bx2, by2, bx2 - blen, by2)
+            painter.drawLine(bx2, by2, bx2, by2 - blen)
+
+            # 3. Mute Icon Pixmap
+            if self._cached_scaled_mute_size != icon_dim:
+                self._cached_scaled_mute = self.mute_icon.scaled(
+                    icon_dim, icon_dim,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self._cached_scaled_mute_size = icon_dim
+
+            ix = cx - self._cached_scaled_mute.width() // 2
+            iy = cy - self._cached_scaled_mute.height() // 2
+            painter.setOpacity(self.opacity_val * eff_alpha * self.hold_saturation)
+            painter.drawPixmap(ix, iy, self._cached_scaled_mute)
             painter.setOpacity(self.opacity_val)
 
         # ==========================================================

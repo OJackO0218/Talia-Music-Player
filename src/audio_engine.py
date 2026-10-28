@@ -192,6 +192,7 @@ class CyberAudioEngine:
         if self.audio_mode == "desktop":
             user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
             user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
+            self.desktop_playing = not getattr(self, "desktop_playing", True)
             print("[DESKTOP AUDIO] Sent Play/Pause command to system.")
             return
 
@@ -204,6 +205,13 @@ class CyberAudioEngine:
             self.pause()
         else:
             self.play()
+
+    @property
+    def is_active(self):
+        """Returns True if local player or desktop audio is active."""
+        if self.audio_mode == "desktop":
+            return getattr(self, "desktop_playing", True)
+        return self.is_playing
 
     def next_track(self):
         if self.audio_mode == "desktop":
