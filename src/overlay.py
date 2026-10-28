@@ -150,13 +150,13 @@ class OverlayWindow(QWidget):
         btn_path = os.path.join(SOUNDS_DIR, "click_button.wav")
         if os.path.exists(btn_path):
             self.sound_btn.setSource(QUrl.fromLocalFile(btn_path))
-            self.sound_btn.setVolume(0.60)
+            self.sound_btn.setVolume(0.48)  # Reduced by 20% for softer tactile feel
 
         self.sound_hold = QSoundEffect(self)
         hold_path = os.path.join(SOUNDS_DIR, "hold_ramp.wav")
         if os.path.exists(hold_path):
             self.sound_hold.setSource(QUrl.fromLocalFile(hold_path))
-            self.sound_hold.setVolume(0.60)
+            self.sound_hold.setVolume(0.48)  # Reduced by 20%
 
         self.sound_shutdown = QSoundEffect(self)
         shutdown_path = os.path.join(SOUNDS_DIR, "shutdown_heavy.wav")
@@ -445,11 +445,8 @@ class OverlayWindow(QWidget):
         self.target_startup_y = self.y()
         self.startup_offset_y = min(140, max(75, int(self.height() * 0.16)))
         self.is_starting_up = True
-        self.startup_start_time = time.time()
+        self.startup_start_time = 0.0  # Will be stamped on the very first live animation frame!
         self.move(self.target_startup_x, self.target_startup_y + self.startup_offset_y)
-        if hasattr(self, "sound_pop") and self.sound_pop.isLoaded():
-            self.sound_pop.stop()
-            self.sound_pop.play()
         self.update()
 
     def on_anim_tick(self):
@@ -458,6 +455,12 @@ class OverlayWindow(QWidget):
 
         # Snappy Rise-Up Entrance Animation (<= 0.20s max)
         if self.is_starting_up:
+            if self.startup_start_time == 0.0:
+                self.startup_start_time = time.time()
+                if hasattr(self, "sound_pop"):
+                    self.sound_pop.stop()
+                    self.sound_pop.play()
+
             elapsed = time.time() - self.startup_start_time
             p = min(1.0, elapsed / self.startup_duration)
             p_ease = 1.0 - ((1.0 - p) ** 3)  # Snappy cubic ease-out

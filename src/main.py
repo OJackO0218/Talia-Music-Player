@@ -52,7 +52,6 @@ def main():
     # Initialize transparent Live2D character overlay
     print("[2/4] Loading Talia character rig & visualizer surface...")
     overlay = OverlayWindow(audio_engine)
-    overlay.show()
 
     # Initialize controller panel and apply saved layout/settings
     # Note: Controller panel starts closed/hidden as requested; open with 3 clicks on Talia!
@@ -60,14 +59,15 @@ def main():
     panel = ControlPanel(overlay, audio_engine)
     panel.apply_settings(saved_cfg)
 
-    # Snappy 0.20s rise-up entrance from below with pop SFX
-    overlay.trigger_startup_entrance()
-
     # Load first track into engine in paused state (no autoplay)
     if audio_engine.playlist:
         audio_engine.current_index = 0
         audio_engine.load_file(audio_engine.playlist[0], auto_play=False)
         panel.sync_play_state()
+
+    # Show overlay and trigger snappy rise-up entrance from below with pop SFX
+    overlay.show()
+    overlay.trigger_startup_entrance()
 
     print("[4/4] Talia is ready!")
     print("\n=======================================================")
