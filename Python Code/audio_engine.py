@@ -1,0 +1,339 @@
+"""
+High-performance audio streaming engine with vectorized FFT spectral analysis.
+"""
+
+import os
+import random
+import threading
+import ctypes
+import sounddevice as sd
+import soundfile as sf
+import soundcard as sc
+import numpy as np
+
+from config import (
+    SUPPORTED_AUDIO_EXTS, user32,
+    VK_MEDIA_PLAY_PAUSE, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK
+)
+
+
+class CyberAudioEngine:
+    """Streams audio via sounddevice and calculates real-time FFT spectrum & waveform data."""
+
+    def __init__(self, num_bars: int = 28):
+        self.stream = None
+        self.data = None
+        self.sr = 44100
+        self.channels = 2
+        self.current_frame = 0
+        self.total_frames = 0
+        self.is_playing = False
+        self.volume = 0.85
+
+        # Raw audio buffer from audio callback (1024 mono samples)
+        self.latest_buffer = np.zeros(1024, dtype=np.float32)
+
+        # FFT Analysis & Vectorized Cache
+        self.num_bars = num_bars
+        self.smoothed_bars = np.zeros(num_bars, dtype=np.float32)
+        self.peak_bars = np.zeros(num_bars, dtype=np.float32)
+        self.peak_decay = np.zeros(num_bars, dtype=np.float32)
+        self.beat_energy = 0.0
+
+        # Pre-computed FFT arrays for 60 FPS zero-allocation performance
+        self.hanning_window = np.hanning(1024).astype(np.float32)
+        # Logarithmic grouping indices for 513 FFT bins (0 - 22.05 kHz)
+        self.indices = np.logspace(np.log10(1), np.log10(512), num_bars + 1).astype(int)
+        # High-frequency pink noise compensation curve
+        self.boost_weights = (1.0 + (np.arange(num_bars, dtype=np.float32) / float(num_bars)) * 2.2).astype(np.float32)
+
+        # Audio Input Source Mode: 'player' (Local Playlist) or 'desktop' (Desktop Loopback)
+        self.audio_mode = "player"
+        self.desktop_running = False
+        self.desktop_thread = None
+
+        # Playlist State
+        self.folder_path = ""
+        self.playlist = []
+        self.current_index = -1
+        self.shuffle = False
+        self.track_finished = False
+
+    def set_audio_mode(self, mode: str):
+        """Switches between 'player' (local playlist files) and 'desktop' (Windows audio loopback)."""
+        if mode == self.audio_mode:
+            return
+
+        self.audio_mode = mode
+        if mode == "desktop":
+            # Pause local file playback
+            if self.is_playing:
+                self.pause()
+            self._start_desktop_capture()
+            print("[AUDIO SOURCE] Switched to DESKTOP AUDIO (Listening to osu!, Spotify, Games).")
+        else:
+            self._stop_desktop_capture()
+            print("[AUDIO SOURCE] Switched to BUILT-IN MUSIC PLAYER.")
+
+    def _start_desktop_capture(self):
+        """Spawns background audio loopback capture thread."""
+        self._stop_desktop_capture()
+        self.desktop_running = True
+        self.desktop_thread = threading.Thread(target=self._desktop_capture_worker, daemon=True)
+        self.desktop_thread.start()
+
+    def _stop_desktop_capture(self):
+        """Stops background loopback capture thread."""
+        self.desktop_running = False
+        if self.desktop_thread and self.desktop_thread.is_alive():
+            self.desktop_thread.join(timeout=0.25)
+        self.desktop_thread = None
+
+    def _desktop_capture_worker(self):
+        """Real-time WASAPI loopback capture worker thread."""
+        ctypes.windll.ole32.CoInitialize(None)
+        try:
+            spk = sc.default_speaker()
+            mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
+            with mic.recorder(samplerate=48000, blocksize=1024) as recorder:
+                while self.desktop_running:
+                    data = recorder.record(numframes=1024)
+                    if not self.desktop_running:
+                        break
+                    # Convert stereo to mono and scale with volume sensitivity
+                    mono = np.mean(data, axis=1) * (self.volume / 0.85)
+                    self.latest_buffer = mono.astype(np.float32)
+        except Exception as e:
+            print(f"[DESKTOP AUDIO ERROR] {e}")
+        finally:
+            ctypes.windll.ole32.CoUninitialize()
+
+    def set_folder(self, folder_path: str):
+        """Sets the active playlist directory and refreshes tracks."""
+        self.folder_path = folder_path
+        self.refresh_playlist()
+
+    def refresh_playlist(self):
+        """Scans the folder for supported audio files and sorts alphabetically."""
+        if not os.path.exists(self.folder_path):
+            self.playlist = []
+            return
+        files = []
+        for f in os.listdir(self.folder_path):
+            if f.lower().endswith(SUPPORTED_AUDIO_EXTS):
+                files.append(os.path.join(self.folder_path, f))
+        files.sort()
+        self.playlist = files
+        if self.playlist and self.current_index < 0:
+            self.current_index = 0
+
+    def play_index(self, idx: int) -> bool:
+        """Loads and plays the track at the specified index."""
+        if not self.playlist or idx < 0 or idx >= len(self.playlist):
+            return False
+        self.current_index = idx
+        path = self.playlist[idx]
+        return self.load_file(path, auto_play=True)
+
+    def load_file(self, file_path: str, auto_play: bool = True) -> bool:
+        """Reads audio into memory and initializes the sounddevice OutputStream."""
+        try:
+            if self.stream is not None:
+                self.stream.stop()
+                self.stream.close()
+                self.stream = None
+
+            audio, sr = sf.read(file_path, dtype='float32')
+            if len(audio.shape) == 1:
+                audio = np.column_stack((audio, audio))
+            self.data = audio
+            self.sr = sr
+            self.channels = audio.shape[1]
+            self.total_frames = len(audio)
+            self.current_frame = 0
+            self.track_finished = False
+
+            self.stream = sd.OutputStream(
+                samplerate=self.sr,
+                channels=self.channels,
+                callback=self._audio_callback,
+                blocksize=1024
+            )
+            if auto_play:
+                self.play()
+            return True
+        except Exception as e:
+            print(f"[AUDIO ERROR] Could not open {file_path}: {e}")
+            return False
+
+    def play(self):
+        if self.stream and not self.stream.active:
+            self.is_playing = True
+            self.stream.start()
+
+    def pause(self):
+        if self.stream and self.stream.active:
+            self.is_playing = False
+            self.stream.stop()
+
+    def shutdown(self):
+        """Immediately aborts audio stream and releases hardware audio handles."""
+        self.is_playing = False
+        self._stop_desktop_capture()
+        try:
+            if self.stream is not None:
+                self.stream.abort()
+                self.stream.close()
+                self.stream = None
+        except Exception:
+            pass
+
+    def toggle_play_pause(self):
+        if self.audio_mode == "desktop":
+            user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
+            user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
+            print("[DESKTOP AUDIO] Sent Play/Pause command to system.")
+            return
+
+        if self.stream is None:
+            if self.playlist:
+                idx = max(0, self.current_index)
+                self.play_index(idx)
+            return
+        if self.is_playing:
+            self.pause()
+        else:
+            self.play()
+
+    def next_track(self):
+        if self.audio_mode == "desktop":
+            user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 0, 0)
+            user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 2, 0)
+            print("[DESKTOP AUDIO] Sent Next Track command to system.")
+            return
+
+        if not self.playlist:
+            return
+        if self.shuffle:
+            idx = random.randint(0, len(self.playlist) - 1)
+        else:
+            idx = (self.current_index + 1) % len(self.playlist)
+        self.play_index(idx)
+
+    def prev_track(self):
+        if self.audio_mode == "desktop":
+            user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 0, 0)
+            user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 2, 0)
+            return
+
+        if not self.playlist:
+            return
+        if self.get_position() > 3.0:
+            self.seek(0)
+        else:
+            idx = (self.current_index - 1) % len(self.playlist)
+            self.play_index(idx)
+
+    def seek(self, seconds: float):
+        if self.sr > 0 and self.data is not None:
+            target_frame = int(seconds * self.sr)
+            self.current_frame = max(0, min(target_frame, self.total_frames))
+
+    def get_position(self) -> float:
+        if self.sr > 0:
+            return self.current_frame / float(self.sr)
+        return 0.0
+
+    def get_duration(self) -> float:
+        if self.sr > 0 and self.total_frames > 0:
+            return self.total_frames / float(self.sr)
+        return 0.0
+
+    def set_volume(self, vol: float):
+        self.volume = max(0.0, min(float(vol), 1.0))
+
+    def get_current_track_title(self) -> str:
+        if self.audio_mode == "desktop":
+            return "Desktop Audio (osu!, Spotify, Games)"
+        if 0 <= self.current_index < len(self.playlist):
+            return os.path.basename(self.playlist[self.current_index])
+        return "No Track Loaded"
+
+    def _audio_callback(self, outdata, frames, time_info, status):
+        """High-priority audio streaming thread callback."""
+        if not self.is_playing or self.data is None:
+            outdata.fill(0)
+            return
+
+        pos = self.current_frame
+        chunk = self.data[pos : pos + frames]
+        actual_frames = len(chunk)
+
+        if actual_frames < frames:
+            outdata[:actual_frames] = chunk * self.volume
+            outdata[actual_frames:] = 0
+            self.current_frame = self.total_frames
+            self.track_finished = True
+        else:
+            outdata[:] = chunk * self.volume
+            self.current_frame += frames
+
+        # Extract mono buffer for FFT visualizer
+        mono = np.mean(outdata, axis=1)
+        self.latest_buffer = mono.copy()
+
+    def update_spectrum(self):
+        """Vectorized FFT spectral analysis and bass beat energy computation."""
+        buf = self.latest_buffer
+        if (self.audio_mode == "player" and not self.is_playing) or np.max(np.abs(buf)) < 0.001:
+            # Smooth decay when silent or paused
+            self.smoothed_bars *= 0.85
+            self.peak_bars *= 0.90
+            self.beat_energy *= 0.85
+            return self.smoothed_bars, self.peak_bars, self.beat_energy
+
+        # 1. Apply pre-computed Hanning window & Real FFT
+        windowed = buf * self.hanning_window
+        fft = np.abs(np.fft.rfft(windowed))
+
+        # 2. Bass & kick drum energy (20Hz - 250Hz)
+        bass_mag = float(np.mean(fft[1:8]))
+        target_beat = min(1.0, bass_mag / 20.0)
+        self.beat_energy = max(target_beat, self.beat_energy * 0.82)
+
+        # 3. Logarithmic band grouping
+        raw_bars = np.zeros(self.num_bars, dtype=np.float32)
+        for i in range(self.num_bars):
+            start = self.indices[i]
+            end = max(start + 1, self.indices[i + 1])
+            raw_bars[i] = np.mean(fft[start:end])
+
+        # Apply high-frequency boost and normalize to [0.0, 1.0]
+        raw_bars = np.clip((raw_bars * self.boost_weights) / 28.0, 0.0, 1.0)
+
+        # 4. Vectorized attack & release smoothing
+        rising = raw_bars > self.smoothed_bars
+        self.smoothed_bars = np.where(
+            rising,
+            self.smoothed_bars + (raw_bars - self.smoothed_bars) * 0.65,  # Fast attack
+            self.smoothed_bars + (raw_bars - self.smoothed_bars) * 0.16   # Smooth release
+        )
+
+        # 5. Vectorized peak hold with gravity acceleration
+        new_peaks = self.smoothed_bars >= self.peak_bars
+        self.peak_bars = np.where(
+            new_peaks,
+            self.smoothed_bars,
+            np.maximum(0.0, self.peak_bars - self.peak_decay)
+        )
+        self.peak_decay = np.where(new_peaks, 0.005, self.peak_decay + 0.008)
+
+        return self.smoothed_bars, self.peak_bars, self.beat_energy
+
+    def get_waveform(self, sample_count: int = 80) -> np.ndarray:
+        """Returns sampled oscilloscope points [-1.0, 1.0]."""
+        buf = self.latest_buffer
+        if len(buf) < sample_count:
+            return np.zeros(sample_count, dtype=np.float32)
+        step = len(buf) // sample_count
+        return np.clip(buf[::step][:sample_count] * 1.8, -1.0, 1.0)
