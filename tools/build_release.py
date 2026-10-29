@@ -55,9 +55,9 @@ cmd = [
     "--hidden-import", "soundfile",
     "--hidden-import", "soundcard",
     "--hidden-import", "numpy",
-    "--hidden-import", "cv2",
     "--hidden-import", "PIL",
     # Exclude heavy unused modules to keep build fast (<60s) and lean
+    "--exclude-module", "cv2",
     "--exclude-module", "PyQt6.QtWebEngineCore",
     "--exclude-module", "PyQt6.QtWebEngineWidgets",
     "--exclude-module", "PyQt6.QtWebEngineQuick",

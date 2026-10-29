@@ -5,9 +5,8 @@ Transparent Live2D-rigged character overlay with 60 FPS eye-tracking and mouth v
 import os
 import math
 import time
-import cv2
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QPoint, QPointF, QTimer, QRect, QRectF, QUrl
@@ -26,19 +25,13 @@ from audio_engine import CyberAudioEngine
 from visualizer import CyberVisualizer
 
 
-def cv2_to_qpixmap(cv_img: np.ndarray) -> QPixmap:
-    """Converts OpenCV BGRA numpy array to QPixmap."""
-    if cv_img is None:
+def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
+    """Converts PIL RGBA Image directly to QPixmap with zero OpenCV overhead."""
+    if pil_img is None:
         return QPixmap()
-    h, w = cv_img.shape[:2]
-    if len(cv_img.shape) == 2:
-        qimg = QImage(cv_img.data, w, h, w, QImage.Format.Format_Grayscale8)
-    elif cv_img.shape[2] == 4:
-        rgba = cv2.cvtColor(cv_img, cv2.COLOR_BGRA2RGBA)
-        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
-    else:
-        rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-        qimg = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
+    arr = np.array(pil_img)
+    h, w = arr.shape[:2]
+    qimg = QImage(arr.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
     return QPixmap.fromImage(qimg.copy())
 
 
@@ -228,10 +221,11 @@ class OverlayWindow(QWidget):
         self.whites = QPixmap(p2_path)
 
         # Layer 2: Moving Pupils - Auto-slice left and right pupils from part1_pupils_full.png
-        p1_cv = cv2.imread(p1_path, cv2.IMREAD_UNCHANGED)
-        if p1_cv is not None and p1_cv.shape[2] == 4:
+        p1_pil = Image.open(p1_path).convert("RGBA")
+        p1_np = np.array(p1_pil)
+        if p1_np is not None and p1_np.shape[2] == 4:
             # Left pupil (x < 300)
-            p1_l = p1_cv.copy()
+            p1_l = p1_np.copy()
             p1_l[:, 300:, 3] = 0
             coords_l = np.column_stack(np.where(p1_l[:, :, 3] > 0))
             if len(coords_l):
@@ -239,13 +233,13 @@ class OverlayWindow(QWidget):
                 yl_max, xl_max = coords_l[:, 0].max(), coords_l[:, 1].max()
                 self.origin_lx = int(xl_min)
                 self.origin_ly = int(yl_min)
-                self.raw_pupil_l_cv = p1_cv[yl_min:yl_max+1, xl_min:xl_max+1].copy()
+                self.raw_pupil_l_pil = Image.fromarray(p1_np[yl_min:yl_max+1, xl_min:xl_max+1])
             else:
                 self.origin_lx, self.origin_ly = DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY
-                self.raw_pupil_l_cv = None
+                self.raw_pupil_l_pil = None
 
             # Right pupil (x >= 300)
-            p1_r = p1_cv.copy()
+            p1_r = p1_np.copy()
             p1_r[:, :300, 3] = 0
             coords_r = np.column_stack(np.where(p1_r[:, :, 3] > 0))
             if len(coords_r):
@@ -253,15 +247,15 @@ class OverlayWindow(QWidget):
                 yr_max, xr_max = coords_r[:, 0].max(), coords_r[:, 1].max()
                 self.origin_rx = int(xr_min)
                 self.origin_ry = int(yr_min)
-                self.raw_pupil_r_cv = p1_cv[yr_min:yr_max+1, xr_min:xr_max+1].copy()
+                self.raw_pupil_r_pil = Image.fromarray(p1_np[yr_min:yr_max+1, xr_min:xr_max+1])
             else:
                 self.origin_rx, self.origin_ry = DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY
-                self.raw_pupil_r_cv = None
+                self.raw_pupil_r_pil = None
         else:
             self.origin_lx, self.origin_ly = DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY
             self.origin_rx, self.origin_ry = DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY
-            self.raw_pupil_l_cv = None
-            self.raw_pupil_r_cv = None
+            self.raw_pupil_l_pil = None
+            self.raw_pupil_r_pil = None
 
         self._apply_pupil_saturation()
 
@@ -301,17 +295,19 @@ class OverlayWindow(QWidget):
             sat_factor = (1.0 + boost * 1.5) * self.hold_saturation
             val_factor = (1.0 + boost * 0.35) * (0.35 + 0.65 * self.hold_saturation)
 
-        def _process(cv_img):
-            bgr = cv_img[:, :, :3].astype(np.float32)
-            alpha = cv_img[:, :, 3]
-            hsv = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2HSV).astype(np.float32)
-            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * sat_factor, 0, 255)
-            hsv[:, :, 2] = np.clip(hsv[:, :, 2] * val_factor, 0, 255)
-            new_bgr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-            return cv2_to_qpixmap(np.dstack([new_bgr, alpha]))
+        def _process(raw_pil):
+            if raw_pil is None:
+                return QPixmap()
+            rgb = raw_pil.convert("RGB")
+            alpha = raw_pil.split()[3]
+            enh_rgb = ImageEnhance.Color(rgb).enhance(sat_factor)
+            enh_rgb = ImageEnhance.Brightness(enh_rgb).enhance(val_factor)
+            r, g, b = enh_rgb.split()
+            merged = Image.merge("RGBA", (r, g, b, alpha))
+            return pil_to_qpixmap(merged)
 
-        self.pupil_l = _process(self.raw_pupil_l_cv)
-        self.pupil_r = _process(self.raw_pupil_r_cv)
+        self.pupil_l = _process(self.raw_pupil_l_pil)
+        self.pupil_r = _process(self.raw_pupil_r_pil)
         self._last_scaled_volume = self.current_volume
         self._last_scaled_size = -1
 
