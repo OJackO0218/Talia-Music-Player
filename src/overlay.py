@@ -90,8 +90,8 @@ class OverlayWindow(QWidget):
 
         # Volume & Eye-Saturation Indicator State
         self.current_volume = getattr(self.audio_engine, "volume", 0.85)
-        self.raw_pupil_l_cv = None
-        self.raw_pupil_r_cv = None
+        self.raw_pupil_l_pil = None
+        self.raw_pupil_r_pil = None
         self._last_scaled_volume = -1.0
 
         # Feedback Satisfaction: Hover, Hold Rumbler, Tactile Button Punch, and Color Flashes
@@ -280,7 +280,7 @@ class OverlayWindow(QWidget):
         - Above 50%: Saturation scales up to 2.5x with neon brightness boost for high volume.
         - During 4s shutdown hold (after 2s): All saturation drops to 0.0 as Talia powers off.
         """
-        if self.raw_pupil_l_cv is None or self.raw_pupil_r_cv is None:
+        if self.raw_pupil_l_pil is None or self.raw_pupil_r_pil is None:
             self.pupil_l = QPixmap()
             self.pupil_r = QPixmap()
             return
