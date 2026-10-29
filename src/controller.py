@@ -1,6 +1,6 @@
 """
 Cyberpunk 2077 HUD Controller for Talia Music Player, Visualizer, and Calibration.
-Zero emojis, clean minimal typography, authentic Cyberpunk 2077 aesthetics, fully resizable.
+Zero emojis, clean minimal typography, soft-contrast eye-friendly aesthetic, fully resizable.
 """
 
 import os
@@ -21,27 +21,27 @@ from overlay import OverlayWindow
 
 
 def create_section_header(title: str) -> QWidget:
-    """Creates an authentic Cyberpunk 2077 section header with a thin crimson accent rule."""
+    """Creates a refined Cyberpunk HUD section header with a soft crimson accent rule."""
     container = QWidget()
     layout = QVBoxLayout(container)
     layout.setContentsMargins(0, 8, 0, 4)
     layout.setSpacing(4)
 
     lbl = QLabel(title.upper())
-    lbl.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 11px; letter-spacing: 1.5px;")
+    lbl.setStyleSheet("color: #dce3ed; font-weight: bold; font-size: 11px; letter-spacing: 1.5px;")
     layout.addWidget(lbl)
 
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Plain)
-    line.setStyleSheet("border: none; border-top: 1px solid #ff003c; max-height: 1px;")
+    line.setStyleSheet("border: none; border-top: 1px solid #7a222e; max-height: 1px;")
     layout.addWidget(line)
 
     return container
 
 
 class ControlPanel(QWidget):
-    """The Cyberpunk 2077 HUD Controller with audio playback, tracklist, visualizer, and calibration."""
+    """The Cyberpunk HUD Controller with audio playback, tracklist, visualizer, and calibration."""
 
     def __init__(self, overlay: OverlayWindow, audio_engine: CyberAudioEngine):
         super().__init__()
@@ -63,10 +63,11 @@ class ControlPanel(QWidget):
         self.resize(480, 780)
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
 
+        # Softened, eye-friendly Cyberpunk slate palette (no harsh blinding neons)
         self.setStyleSheet("""
             QWidget {
-                background-color: #07080b;
-                color: #e6edf3;
+                background-color: #0d0f15;
+                color: #d1d9e6;
                 font-family: 'Segoe UI', Arial, sans-serif;
             }
             QScrollArea {
@@ -75,173 +76,176 @@ class ControlPanel(QWidget):
             }
             QScrollBar:vertical {
                 border: none;
-                background: #07080b;
+                background: #0d0f15;
                 width: 6px;
                 margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: #3d101c;
+                background: #2e3547;
                 min-height: 24px;
+                border-radius: 2px;
             }
             QScrollBar::handle:vertical:hover {
-                background: #ff003c;
+                background: #38d9d9;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
             }
             QPushButton {
-                background-color: #0e0f17;
-                border: 1px solid #4a1521;
-                color: #ff3347;
+                background-color: #141722;
+                border: 1px solid #2e3547;
+                color: #d94452;
                 padding: 6px 12px;
                 font-weight: bold;
                 font-size: 11px;
-                letter-spacing: 1px;
+                letter-spacing: 0.8px;
             }
             QPushButton:hover {
-                background-color: #1a1520;
-                border-color: #00f0ff;
-                color: #00f0ff;
+                background-color: #1c2230;
+                border-color: #38d9d9;
+                color: #38d9d9;
             }
             QPushButton:pressed {
-                background-color: #00f0ff;
-                color: #07080b;
+                background-color: #24464c;
+                color: #38d9d9;
+                border-color: #38d9d9;
             }
             QPushButton#btnMoveTalia {
-                background-color: #14080e;
-                color: #ff003c;
-                border: 1px solid #4a121e;
+                background-color: #181318;
+                color: #d94452;
+                border: 1px solid #4d1f27;
                 font-size: 11px;
                 padding: 8px 12px;
                 font-weight: bold;
-                letter-spacing: 1px;
+                letter-spacing: 0.8px;
             }
             QPushButton#btnAudioMode {
-                background-color: #14080e;
-                color: #ff003c;
-                border: 1px solid #4a121e;
+                background-color: #181318;
+                color: #d94452;
+                border: 1px solid #4d1f27;
                 font-size: 11px;
                 padding: 8px 12px;
                 font-weight: bold;
-                letter-spacing: 1px;
+                letter-spacing: 0.8px;
             }
             QPushButton#btnPlayPause {
-                background-color: #14080e;
-                color: #ff003c;
-                border: 1px solid #ff003c;
-                font-size: 12px;
+                background-color: #181318;
+                color: #d94452;
+                border: 1px solid #6b242e;
+                font-size: 11px;
                 padding: 7px 16px;
                 font-weight: bold;
-                letter-spacing: 1px;
+                letter-spacing: 0.8px;
             }
             QPushButton#btnPlayPause:hover {
-                background-color: #ff003c;
-                color: #07080b;
+                background-color: #5c1e26;
+                color: #ffffff;
             }
             QPushButton#btnSaveSettings {
-                background-color: #14080e;
-                color: #00f0ff;
-                border: 1px solid #00f0ff;
+                background-color: #141f26;
+                color: #38d9d9;
+                border: 1px solid #285d66;
                 font-weight: bold;
                 padding: 7px;
-                letter-spacing: 1px;
+                letter-spacing: 0.8px;
             }
             QPushButton#btnSaveSettings:hover {
-                background-color: #00f0ff;
-                color: #07080b;
+                background-color: #1e3a42;
+                border-color: #38d9d9;
+                color: #ffffff;
             }
             QPushButton#btnExitApp {
-                background-color: #16080b;
-                color: #ff3347;
-                border: 1px solid #541421;
+                background-color: #181215;
+                color: #d94452;
+                border: 1px solid #4d1c23;
                 font-size: 11px;
                 padding: 7px;
                 font-weight: bold;
-                letter-spacing: 1px;
+                letter-spacing: 0.8px;
             }
             QPushButton#btnExitApp:hover {
-                background-color: #ff003c;
+                background-color: #8c2734;
                 color: #ffffff;
-                border-color: #ff003c;
+                border-color: #b83344;
             }
             QComboBox {
-                background-color: #0e0f17;
-                border: 1px solid #4a1521;
-                color: #ff3347;
+                background-color: #141722;
+                border: 1px solid #2e3547;
+                color: #d94452;
                 padding: 5px 10px;
                 font-weight: bold;
                 font-size: 11px;
             }
             QComboBox:hover {
-                border-color: #00f0ff;
-                color: #00f0ff;
+                border-color: #38d9d9;
+                color: #38d9d9;
             }
             QComboBox QAbstractItemView {
-                background-color: #0a0b10;
-                border: 1px solid #ff003c;
-                color: #e6edf3;
-                selection-background-color: #ff003c;
-                selection-color: #000000;
+                background-color: #0f121a;
+                border: 1px solid #38d9d9;
+                color: #d1d9e6;
+                selection-background-color: #1e3a42;
+                selection-color: #38d9d9;
             }
             QListWidget {
-                background-color: #07080c;
-                border: 1px solid #2d0b14;
-                color: #c9d1d9;
+                background-color: #0a0c11;
+                border: 1px solid #242938;
+                color: #cbd5e1;
                 font-family: 'Consolas', monospace;
                 font-size: 11px;
                 padding: 4px;
             }
             QListWidget::item {
                 padding: 6px 10px;
-                border-bottom: 1px solid #14080e;
+                border-bottom: 1px solid #141722;
             }
             QListWidget::item:hover {
-                background-color: #1c0d16;
-                color: #00f0ff;
+                background-color: #171d2b;
+                color: #38d9d9;
             }
             QListWidget::item:selected {
-                background-color: #2b0c17;
-                color: #00f0ff;
+                background-color: #1a2933;
+                color: #38d9d9;
                 font-weight: bold;
-                border-left: 3px solid #00f0ff;
+                border-left: 3px solid #38d9d9;
             }
             QSlider::groove:horizontal {
                 height: 6px;
-                background: #12060c;
-                border: 1px solid #331018;
+                background: #141722;
+                border: 1px solid #262c3d;
             }
             QSlider::sub-page:horizontal {
-                background: #ff003c;
+                background: #a82e3b;
             }
             QSlider::handle:horizontal {
-                background: #d43142;
-                border: 1px solid #ffffff;
+                background: #c93646;
+                border: 1px solid #dce3ed;
                 width: 14px;
                 margin-top: -6px;
                 margin-bottom: -6px;
             }
             QSlider::handle:horizontal:hover {
-                background: #00f0ff;
+                background: #38d9d9;
                 border: 1px solid #ffffff;
             }
             QCheckBox {
                 spacing: 8px;
-                color: #c9d1d9;
+                color: #b0bac9;
                 font-size: 11px;
                 font-weight: bold;
             }
             QCheckBox::indicator {
                 width: 14px;
                 height: 14px;
-                border: 1px solid #4a1521;
-                background: #12060c;
+                border: 1px solid #2e3547;
+                background: #141722;
             }
             QCheckBox::indicator:checked {
-                background: #00f0ff;
-                border: 1px solid #00f0ff;
+                background: #38d9d9;
+                border: 1px solid #38d9d9;
             }
             QCheckBox::indicator:hover {
-                border-color: #00f0ff;
+                border-color: #38d9d9;
             }
             QLabel {
                 font-size: 11px;
@@ -269,7 +273,7 @@ class ControlPanel(QWidget):
         # TOP HUD BAR (Anchored)
         # -------------------------------------------------------------
         top_hud = QWidget()
-        top_hud.setStyleSheet("background-color: #0a0c12; border-bottom: 1px solid #3d101c; padding: 6px 12px;")
+        top_hud.setStyleSheet("background-color: #10141e; border-bottom: 1px solid #2e3547; padding: 6px 12px;")
         top_hud_layout = QVBoxLayout(top_hud)
         top_hud_layout.setContentsMargins(8, 6, 8, 6)
         top_hud_layout.setSpacing(4)
@@ -277,34 +281,34 @@ class ControlPanel(QWidget):
         # Category tabs matching Cyberpunk 2077 HUD
         hbox_tabs = QHBoxLayout()
         lbl_bracket_l = QLabel("[ 1 ]")
-        lbl_bracket_l.setStyleSheet("color: #00f0ff; font-weight: bold; font-family: monospace;")
+        lbl_bracket_l.setStyleSheet("color: #38d9d9; font-weight: bold; font-family: monospace;")
         hbox_tabs.addWidget(lbl_bracket_l)
 
         lbl_tab_active = QLabel("TALIA HUD")
-        lbl_tab_active.setStyleSheet("color: #00f0ff; font-weight: bold; font-size: 12px; letter-spacing: 2px;")
+        lbl_tab_active.setStyleSheet("color: #38d9d9; font-weight: bold; font-size: 12px; letter-spacing: 2px;")
         hbox_tabs.addWidget(lbl_tab_active)
 
         lbl_tab_mid1 = QLabel("AUDIO")
-        lbl_tab_mid1.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
+        lbl_tab_mid1.setStyleSheet("color: #d94452; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
         hbox_tabs.addWidget(lbl_tab_mid1)
 
         lbl_tab_mid2 = QLabel("VISUALS")
-        lbl_tab_mid2.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
+        lbl_tab_mid2.setStyleSheet("color: #d94452; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
         hbox_tabs.addWidget(lbl_tab_mid2)
 
         lbl_tab_mid3 = QLabel("CALIBRATION")
-        lbl_tab_mid3.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
+        lbl_tab_mid3.setStyleSheet("color: #d94452; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
         hbox_tabs.addWidget(lbl_tab_mid3)
 
         hbox_tabs.addStretch()
         lbl_bracket_r = QLabel("[ 3 ]")
-        lbl_bracket_r.setStyleSheet("color: #00f0ff; font-weight: bold; font-family: monospace;")
+        lbl_bracket_r.setStyleSheet("color: #38d9d9; font-weight: bold; font-family: monospace;")
         hbox_tabs.addWidget(lbl_bracket_r)
 
         top_hud_layout.addLayout(hbox_tabs)
 
         self.lbl_telemetry = QLabel("// WASAPI DIRECT LOOPBACK // ZERO-LATENCY FFT // 60 FPS")
-        self.lbl_telemetry.setStyleSheet("color: #00f0ff; font-size: 9px; font-family: 'Consolas', monospace; letter-spacing: 0.5px;")
+        self.lbl_telemetry.setStyleSheet("color: #72849c; font-size: 9px; font-family: 'Consolas', monospace; letter-spacing: 0.5px;")
         top_hud_layout.addWidget(self.lbl_telemetry)
 
         root_layout.addWidget(top_hud)
@@ -338,20 +342,20 @@ class ControlPanel(QWidget):
 
         # Track title banner
         self.lbl_track_title = QLabel("SYSTEM IDLE")
-        self.lbl_track_title.setStyleSheet("color: #00f0ff; font-weight: bold; font-size: 12px; font-family: 'Consolas', monospace;")
+        self.lbl_track_title.setStyleSheet("color: #38d9d9; font-weight: bold; font-size: 12px; font-family: 'Consolas', monospace;")
         content_layout.addWidget(self.lbl_track_title)
 
         # Timeline seeker
         hbox_time = QHBoxLayout()
         self.lbl_time_cur = QLabel("00:00")
-        self.lbl_time_cur.setStyleSheet("color: #8b949e; font-family: 'Consolas', monospace;")
+        self.lbl_time_cur.setStyleSheet("color: #8b9cb3; font-family: 'Consolas', monospace;")
         self.slider_seek = QSlider(Qt.Orientation.Horizontal)
         self.slider_seek.setRange(0, 1000)
         self.slider_seek.setValue(0)
         self.slider_seek.sliderPressed.connect(self.on_seek_pressed)
         self.slider_seek.sliderReleased.connect(self.on_seek_released)
         self.lbl_time_dur = QLabel("00:00")
-        self.lbl_time_dur.setStyleSheet("color: #8b949e; font-family: 'Consolas', monospace;")
+        self.lbl_time_dur.setStyleSheet("color: #8b9cb3; font-family: 'Consolas', monospace;")
 
         hbox_time.addWidget(self.lbl_time_cur)
         hbox_time.addWidget(self.slider_seek)
@@ -381,7 +385,7 @@ class ControlPanel(QWidget):
         # Volume Slider
         hbox_vol = QHBoxLayout()
         lbl_vol_title = QLabel("VOLUME:")
-        lbl_vol_title.setStyleSheet("color: #e62030; font-weight: bold;")
+        lbl_vol_title.setStyleSheet("color: #d94452; font-weight: bold;")
         hbox_vol.addWidget(lbl_vol_title)
 
         self.slider_vol = QSlider(Qt.Orientation.Horizontal)
@@ -392,7 +396,7 @@ class ControlPanel(QWidget):
 
         self.lbl_vol_val = QLabel(f"{int(self.audio_engine.volume * 100)}%")
         self.lbl_vol_val.setFixedWidth(36)
-        self.lbl_vol_val.setStyleSheet("color: #ffffff; font-family: 'Consolas', monospace; font-weight: bold;")
+        self.lbl_vol_val.setStyleSheet("color: #dce3ed; font-family: 'Consolas', monospace; font-weight: bold;")
         hbox_vol.addWidget(self.lbl_vol_val)
         content_layout.addLayout(hbox_vol)
 
@@ -400,7 +404,7 @@ class ControlPanel(QWidget):
         content_layout.addWidget(create_section_header("Playlist & Directory"))
 
         self.lbl_folder_path = QLabel(f"{self.audio_engine.folder_path}")
-        self.lbl_folder_path.setStyleSheet("color: #8b949e; font-size: 10px; font-family: 'Consolas', monospace;")
+        self.lbl_folder_path.setStyleSheet("color: #8b9cb3; font-size: 10px; font-family: 'Consolas', monospace;")
         content_layout.addWidget(self.lbl_folder_path)
 
         hbox_folder_btns = QHBoxLayout()
@@ -427,7 +431,7 @@ class ControlPanel(QWidget):
 
         hbox_style = QHBoxLayout()
         lbl_vis_mode = QLabel("STYLE:")
-        lbl_vis_mode.setStyleSheet("color: #e62030; font-weight: bold;")
+        lbl_vis_mode.setStyleSheet("color: #d94452; font-weight: bold;")
         hbox_style.addWidget(lbl_vis_mode)
 
         self.combo_mode = QComboBox()
@@ -436,7 +440,7 @@ class ControlPanel(QWidget):
         hbox_style.addWidget(self.combo_mode)
 
         lbl_vis_theme = QLabel("PALETTE:")
-        lbl_vis_theme.setStyleSheet("color: #e62030; font-weight: bold;")
+        lbl_vis_theme.setStyleSheet("color: #d94452; font-weight: bold;")
         hbox_style.addWidget(lbl_vis_theme)
 
         self.combo_theme = QComboBox()
@@ -451,7 +455,7 @@ class ControlPanel(QWidget):
         # Eye sensitivity
         hbox_sens = QHBoxLayout()
         lbl_sens = QLabel("EYE SENSITIVITY:")
-        lbl_sens.setStyleSheet("color: #e62030; font-weight: bold;")
+        lbl_sens.setStyleSheet("color: #d94452; font-weight: bold;")
         hbox_sens.addWidget(lbl_sens)
 
         self.slider_eye_sens = QSlider(Qt.Orientation.Horizontal)
@@ -462,14 +466,14 @@ class ControlPanel(QWidget):
 
         self.lbl_sens_val = QLabel("1.0x")
         self.lbl_sens_val.setFixedWidth(36)
-        self.lbl_sens_val.setStyleSheet("color: #ffffff; font-family: 'Consolas', monospace; font-weight: bold;")
+        self.lbl_sens_val.setStyleSheet("color: #dce3ed; font-family: 'Consolas', monospace; font-weight: bold;")
         hbox_sens.addWidget(self.lbl_sens_val)
         content_layout.addLayout(hbox_sens)
 
         # Character size
         hbox_sz = QHBoxLayout()
         lbl_sz = QLabel("CHARACTER SCALE:")
-        lbl_sz.setStyleSheet("color: #e62030; font-weight: bold;")
+        lbl_sz.setStyleSheet("color: #d94452; font-weight: bold;")
         hbox_sz.addWidget(lbl_sz)
 
         self.slider_size = QSlider(Qt.Orientation.Horizontal)
@@ -482,7 +486,7 @@ class ControlPanel(QWidget):
         # Character opacity
         hbox_op = QHBoxLayout()
         lbl_op = QLabel("OPACITY:")
-        lbl_op.setStyleSheet("color: #e62030; font-weight: bold;")
+        lbl_op.setStyleSheet("color: #d94452; font-weight: bold;")
         hbox_op.addWidget(lbl_op)
 
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
@@ -536,24 +540,24 @@ class ControlPanel(QWidget):
         # BOTTOM TELEMETRY & HOTKEY BAR (Anchored)
         # -------------------------------------------------------------
         bottom_bar = QWidget()
-        bottom_bar.setStyleSheet("background-color: #08090e; border-top: 1px solid #3d101c; padding: 4px;")
+        bottom_bar.setStyleSheet("background-color: #10141e; border-top: 1px solid #2e3547; padding: 4px;")
         bottom_layout = QHBoxLayout(bottom_bar)
         bottom_layout.setContentsMargins(12, 6, 12, 6)
 
         lbl_f8 = QLabel("[ F8 ] MOVE TALIA")
-        lbl_f8.setStyleSheet("color: #00f0ff; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
+        lbl_f8.setStyleSheet("color: #38d9d9; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
         bottom_layout.addWidget(lbl_f8)
 
         bottom_layout.addStretch()
 
         lbl_f9 = QLabel("[ F9 ] HIDE / SHOW")
-        lbl_f9.setStyleSheet("color: #8b949e; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
+        lbl_f9.setStyleSheet("color: #8b9cb3; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
         bottom_layout.addWidget(lbl_f9)
 
         bottom_layout.addStretch()
 
         lbl_f10 = QLabel("[ F10 ] SOURCE")
-        lbl_f10.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
+        lbl_f10.setStyleSheet("color: #d94452; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
         bottom_layout.addWidget(lbl_f10)
 
         root_layout.addWidget(bottom_bar)
@@ -585,10 +589,10 @@ class ControlPanel(QWidget):
     def update_audio_mode_ui(self):
         if self.audio_engine.audio_mode == "desktop":
             self.btn_audio_mode.setText("SOURCE: DESKTOP AUDIO")
-            self.btn_audio_mode.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff; font-weight: bold;")
+            self.btn_audio_mode.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9; font-weight: bold;")
         else:
             self.btn_audio_mode.setText("SOURCE: LOCAL PLAYER")
-            self.btn_audio_mode.setStyleSheet("background-color: #14080e; color: #ff003c; border: 1px solid #4a121e; font-weight: bold;")
+            self.btn_audio_mode.setStyleSheet("background-color: #181318; color: #d94452; border: 1px solid #4d1f27; font-weight: bold;")
 
     def on_play_pause_clicked(self):
         if self.audio_engine.audio_mode == "desktop":
@@ -605,17 +609,17 @@ class ControlPanel(QWidget):
     def sync_play_state(self):
         if self.audio_engine.audio_mode == "desktop":
             self.btn_play_pause.setText("LIVE INPUT")
-            self.btn_play_pause.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
+            self.btn_play_pause.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9;")
             self.lbl_track_title.setText("DESKTOP AUDIO (LIVE LOOPBACK)")
             return
 
         if self.audio_engine.is_playing:
             self.btn_play_pause.setText("PAUSE")
-            self.btn_play_pause.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
+            self.btn_play_pause.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9;")
             self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
         else:
             self.btn_play_pause.setText("PLAY")
-            self.btn_play_pause.setStyleSheet("background-color: #14080e; color: #ff003c; border: 1px solid #ff003c;")
+            self.btn_play_pause.setStyleSheet("background-color: #181318; color: #d94452; border: 1px solid #6b242e;")
             self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
         if 0 <= self.audio_engine.current_index < self.list_tracks.count():
             self.list_tracks.setCurrentRow(self.audio_engine.current_index)
@@ -632,10 +636,10 @@ class ControlPanel(QWidget):
         self.audio_engine.shuffle = not self.audio_engine.shuffle
         if self.audio_engine.shuffle:
             self.btn_shuffle.setText("SHUFFLE: ON")
-            self.btn_shuffle.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
+            self.btn_shuffle.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9;")
         else:
             self.btn_shuffle.setText("SHUFFLE: OFF")
-            self.btn_shuffle.setStyleSheet("background-color: #0e0f17; color: #ff3347; border: 1px solid #4a1521;")
+            self.btn_shuffle.setStyleSheet("background-color: #141722; color: #8b9cb3; border: 1px solid #2e3547;")
 
     def on_track_double_clicked(self, item):
         row = self.list_tracks.row(item)
@@ -779,10 +783,10 @@ class ControlPanel(QWidget):
         """Refreshes the Move Talia toggle button appearance to match current overlay state."""
         if self.overlay.move_talia_mode:
             self.btn_move_talia.setText("MOVE TALIA: ACTIVE")
-            self.btn_move_talia.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff; font-weight: bold;")
+            self.btn_move_talia.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9; font-weight: bold;")
         else:
             self.btn_move_talia.setText("MOVE TALIA: LOCKED")
-            self.btn_move_talia.setStyleSheet("background-color: #14080e; color: #ff003c; border: 1px solid #4a121e; font-weight: bold;")
+            self.btn_move_talia.setStyleSheet("background-color: #181318; color: #d94452; border: 1px solid #4d1f27; font-weight: bold;")
 
     def toggle_move_talia(self):
         new_state = not self.overlay.move_talia_mode
@@ -802,11 +806,14 @@ class ControlPanel(QWidget):
     # Settings Persistence
     # ==========================================================
     def get_current_settings_dict(self) -> dict:
-        """Gathers all current configuration into a dictionary, protecting against shutdown states."""
+        """Gathers all current configuration into a dictionary, protecting against shutdown/startup states."""
         # Use pre-shutdown coordinates if currently in a sinking shutdown sequence
         if getattr(self.overlay, "is_shutting_down", False) and hasattr(self.overlay, "shutdown_start_pos"):
             pos_x = int(self.overlay.shutdown_start_pos.x())
             pos_y = int(self.overlay.shutdown_start_pos.y())
+        elif getattr(self.overlay, "is_starting_up", False) and hasattr(self.overlay, "target_startup_y"):
+            pos_x = int(self.overlay.target_startup_x)
+            pos_y = int(self.overlay.target_startup_y)
         else:
             pos_x = int(self.overlay.pos().x())
             pos_y = int(self.overlay.pos().y())
@@ -832,22 +839,23 @@ class ControlPanel(QWidget):
         }
 
     def apply_settings(self, cfg: dict):
-        """Applies loaded settings to the overlay and controls with screen-boundary safety."""
+        """Applies loaded settings to the overlay and controls with generous boundary safety."""
         # 1. Size
         size = int(cfg.get("char_size", self.overlay.width()))
-        if size < 200 or size > MAX_CHAR_SIZE:
-            size = min(960, max(450, size))
+        size = max(MIN_CHAR_SIZE, min(MAX_CHAR_SIZE, size))
         self.slider_size.setValue(size)
         self.overlay.resize(size, size)
 
-        # 2. Position (ensure it is within visible screen bounds, never sunk below taskbar)
+        # 2. Position (ensure it is within visible screen bounds on laptop/desktop scaling)
         screen = QApplication.primaryScreen().geometry()
         pos_x = int(cfg.get("pos_x", -1))
         pos_y = int(cfg.get("pos_y", -1))
-        if 0 <= pos_x <= (screen.width() - 80) and 0 <= pos_y <= (screen.height() - 120):
+
+        # Accept any coordinate that places at least part of Talia on screen
+        if (-size // 2 <= pos_x <= screen.width()) and (-size // 2 <= pos_y <= screen.height()):
             self.overlay.move(pos_x, pos_y)
         else:
-            # Fallback to visible position at lower-right above taskbar
+            # Fallback to sensible visible bottom-right position
             def_x = max(20, screen.width() - size - 40)
             def_y = max(20, screen.height() - size - 80)
             self.overlay.move(def_x, def_y)
@@ -903,7 +911,7 @@ class ControlPanel(QWidget):
         cfg = self.get_current_settings_dict()
         if save_settings(cfg):
             self.btn_save_settings.setText("CONFIG SAVED")
-            self.btn_save_settings.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
+            self.btn_save_settings.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9;")
             QTimer.singleShot(1500, self._reset_save_btn)
 
     def closeEvent(self, event):

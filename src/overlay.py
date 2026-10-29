@@ -188,10 +188,10 @@ class OverlayWindow(QWidget):
         self.load_assets()
         self.init_position()
 
-        # Continuous topmost enforcement (100ms)
+        # Continuous topmost enforcement (1000ms, non-intrusive)
         self.topmost_timer = QTimer(self)
         self.topmost_timer.timeout.connect(self.enforce_topmost)
-        self.topmost_timer.start(100)
+        self.topmost_timer.start(1000)
 
         # 60 FPS Animation & Eye-tracking loop (16ms)
         self.anim_timer = QTimer(self)
@@ -433,15 +433,17 @@ class OverlayWindow(QWidget):
         self.enforce_topmost()
 
     def enforce_topmost(self):
-        if self.isVisible():
-            hwnd = int(self.winId())
-            user32.SetWindowPos(
-                hwnd, HWND_TOPMOST,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-            )
-            user32.BringWindowToTop(hwnd)
-            self.raise_()
+        if not self.isVisible():
+            return
+        # If Controller window is visible or active, NEVER steal topmost or fight Z-order!
+        if self.panel and (self.panel.isVisible() or self.panel.isActiveWindow() or self.panel.underMouse()):
+            return
+        hwnd = int(self.winId())
+        user32.SetWindowPos(
+            hwnd, HWND_TOPMOST,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+        )
 
     def set_move_talia_mode(self, enabled: bool):
         self.move_talia_mode = enabled
@@ -919,6 +921,11 @@ class OverlayWindow(QWidget):
         if self.is_shutting_down:
             event.accept()
             return
+        if event.button() == Qt.MouseButton.RightButton:
+            self.right_drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self.is_right_dragging = True
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self.press_pos = event.globalPosition().toPoint()
             self.press_time = time.time()
@@ -945,6 +952,10 @@ class OverlayWindow(QWidget):
         if self.is_shutting_down:
             event.accept()
             return
+        if (event.buttons() & Qt.MouseButton.RightButton) and getattr(self, "is_right_dragging", False):
+            self.move(event.globalPosition().toPoint() - self.right_drag_pos)
+            event.accept()
+            return
         if event.buttons() & Qt.MouseButton.LeftButton:
             dist = (event.globalPosition().toPoint() - self.press_pos).manhattanLength()
             if dist > 6:
@@ -961,6 +972,15 @@ class OverlayWindow(QWidget):
         if self.is_shutting_down:
             event.accept()
             return
+        if event.button() == Qt.MouseButton.RightButton:
+            if getattr(self, "is_right_dragging", False):
+                self.is_right_dragging = False
+                # Auto-save new position immediately after right-click drag!
+                if self.panel:
+                    cfg = self.panel.get_current_settings_dict()
+                    save_settings(cfg)
+                event.accept()
+                return
         if event.button() == Qt.MouseButton.LeftButton:
             elapsed = time.time() - self.press_time
             self.is_holding = False
@@ -972,6 +992,10 @@ class OverlayWindow(QWidget):
             if self.has_dragged:
                 # User dragged Talia in Move Mode
                 self.is_dragging = False
+                # Auto-save new position immediately after left-click drag!
+                if self.panel:
+                    cfg = self.panel.get_current_settings_dict()
+                    save_settings(cfg)
                 event.accept()
                 return
 
