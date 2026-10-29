@@ -1,26 +1,47 @@
 """
-Cyberpunk Controller UI for Talia Music Player, Visualizers, and Layout Configuration.
+Cyberpunk 2077 HUD Controller for Talia Music Player, Visualizer, and Calibration.
+Zero emojis, clean minimal typography, authentic Cyberpunk 2077 aesthetics, fully resizable.
 """
 
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
-    QCheckBox, QPushButton, QGroupBox, QFileDialog,
-    QComboBox, QListWidget, QListWidgetItem
+    QCheckBox, QPushButton, QFileDialog, QComboBox,
+    QListWidget, QListWidgetItem, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 
 from config import (
     user32, VK_F8, VK_F9, VK_F10, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    save_settings, load_settings, PROJECT_ROOT, ICON_PATH
+    save_settings, PROJECT_ROOT, ICON_PATH
 )
 from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
 
 
+def create_section_header(title: str) -> QWidget:
+    """Creates an authentic Cyberpunk 2077 section header with a thin crimson accent rule."""
+    container = QWidget()
+    layout = QVBoxLayout(container)
+    layout.setContentsMargins(0, 8, 0, 4)
+    layout.setSpacing(4)
+
+    lbl = QLabel(title.upper())
+    lbl.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 11px; letter-spacing: 1.5px;")
+    layout.addWidget(lbl)
+
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFrameShadow(QFrame.Shadow.Plain)
+    line.setStyleSheet("border: none; border-top: 1px solid #ff003c; max-height: 1px;")
+    layout.addWidget(line)
+
+    return container
+
+
 class ControlPanel(QWidget):
-    """The Controller UI with audio playback, tracklist, visualizer themes, and layout persistence."""
+    """The Cyberpunk 2077 HUD Controller with audio playback, tracklist, visualizer, and calibration."""
 
     def __init__(self, overlay: OverlayWindow, audio_engine: CyberAudioEngine):
         super().__init__()
@@ -33,136 +54,194 @@ class ControlPanel(QWidget):
         self.last_f10_state = False
         self.is_user_scrubbing = False
 
-        self.setWindowTitle("Talia Cyberpunk Music Controller")
+        self.setWindowTitle("TALIA // SYSTEM CONTROLLER")
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
-        self.setFixedSize(460, 890)
+
+        # Resizable window with sensible minimum bounds
+        self.setMinimumSize(420, 560)
+        self.resize(480, 780)
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
+
         self.setStyleSheet("""
             QWidget {
-                background-color: #0b0e14;
+                background-color: #07080b;
                 color: #e6edf3;
                 font-family: 'Segoe UI', Arial, sans-serif;
             }
-            QGroupBox {
-                border: 1px solid #1f2937;
-                border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 10px;
-                font-weight: bold;
-                color: #00f0ff;
-                font-size: 11px;
+            QScrollArea {
+                border: none;
+                background-color: transparent;
             }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
+            QScrollBar:vertical {
+                border: none;
+                background: #07080b;
+                width: 6px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #3d101c;
+                min-height: 24px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #ff003c;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
             QPushButton {
-                background-color: #161b22;
-                border: 1px solid #30363d;
-                color: #c9d1d9;
+                background-color: #0e0f17;
+                border: 1px solid #4a1521;
+                color: #ff3347;
                 padding: 6px 12px;
-                border-radius: 5px;
                 font-weight: bold;
                 font-size: 11px;
+                letter-spacing: 1px;
             }
             QPushButton:hover {
-                background-color: #21262d;
+                background-color: #1a1520;
                 border-color: #00f0ff;
                 color: #00f0ff;
             }
+            QPushButton:pressed {
+                background-color: #00f0ff;
+                color: #07080b;
+            }
             QPushButton#btnMoveTalia {
-                background-color: #238636;
-                color: #ffffff;
-                border: 1px solid #2ea043;
-                font-size: 12px;
-                padding: 8px;
+                background-color: #14080e;
+                color: #ff003c;
+                border: 1px solid #4a121e;
+                font-size: 11px;
+                padding: 8px 12px;
+                font-weight: bold;
+                letter-spacing: 1px;
             }
             QPushButton#btnAudioMode {
-                background-color: #161b22;
+                background-color: #14080e;
+                color: #ff003c;
+                border: 1px solid #4a121e;
+                font-size: 11px;
+                padding: 8px 12px;
+                font-weight: bold;
+                letter-spacing: 1px;
+            }
+            QPushButton#btnPlayPause {
+                background-color: #14080e;
+                color: #ff003c;
+                border: 1px solid #ff003c;
+                font-size: 12px;
+                padding: 7px 16px;
+                font-weight: bold;
+                letter-spacing: 1px;
+            }
+            QPushButton#btnPlayPause:hover {
+                background-color: #ff003c;
+                color: #07080b;
+            }
+            QPushButton#btnSaveSettings {
+                background-color: #14080e;
                 color: #00f0ff;
-                border: 1px solid #30363d;
+                border: 1px solid #00f0ff;
+                font-weight: bold;
+                padding: 7px;
+                letter-spacing: 1px;
+            }
+            QPushButton#btnSaveSettings:hover {
+                background-color: #00f0ff;
+                color: #07080b;
+            }
+            QPushButton#btnExitApp {
+                background-color: #16080b;
+                color: #ff3347;
+                border: 1px solid #541421;
                 font-size: 11px;
                 padding: 7px;
                 font-weight: bold;
+                letter-spacing: 1px;
             }
-            QPushButton#btnAudioMode:hover {
-                border-color: #00f0ff;
-                background-color: #1f2937;
-            }
-            QPushButton#btnPlayPause {
-                background-color: #ff0055;
+            QPushButton#btnExitApp:hover {
+                background-color: #ff003c;
                 color: #ffffff;
-                border: 1px solid #ff3377;
-                font-size: 13px;
-                padding: 7px 16px;
-            }
-            QPushButton#btnPlayPause:hover {
-                background-color: #e6004c;
-            }
-            QPushButton#btnSaveSettings {
-                background-color: #1f6feb;
-                color: #ffffff;
-                border: 1px solid #388bfd;
-            }
-            QPushButton#btnSaveSettings:hover {
-                background-color: #388bfd;
+                border-color: #ff003c;
             }
             QComboBox {
-                background-color: #161b22;
-                border: 1px solid #30363d;
-                color: #00f0ff;
-                padding: 4px 8px;
-                border-radius: 4px;
+                background-color: #0e0f17;
+                border: 1px solid #4a1521;
+                color: #ff3347;
+                padding: 5px 10px;
+                font-weight: bold;
                 font-size: 11px;
             }
+            QComboBox:hover {
+                border-color: #00f0ff;
+                color: #00f0ff;
+            }
             QComboBox QAbstractItemView {
-                background-color: #161b22;
+                background-color: #0a0b10;
+                border: 1px solid #ff003c;
                 color: #e6edf3;
-                selection-background-color: #00f0ff;
+                selection-background-color: #ff003c;
                 selection-color: #000000;
             }
             QListWidget {
-                background-color: #0e121a;
-                border: 1px solid #1f2937;
-                border-radius: 4px;
+                background-color: #07080c;
+                border: 1px solid #2d0b14;
                 color: #c9d1d9;
+                font-family: 'Consolas', monospace;
                 font-size: 11px;
+                padding: 4px;
             }
             QListWidget::item {
-                padding: 4px 8px;
-                border-bottom: 1px solid #161b22;
+                padding: 6px 10px;
+                border-bottom: 1px solid #14080e;
             }
             QListWidget::item:hover {
-                background-color: #161b22;
+                background-color: #1c0d16;
                 color: #00f0ff;
             }
             QListWidget::item:selected {
-                background-color: #1a2736;
+                background-color: #2b0c17;
                 color: #00f0ff;
                 font-weight: bold;
                 border-left: 3px solid #00f0ff;
             }
             QSlider::groove:horizontal {
-                height: 5px;
-                background: #1f2937;
-                border-radius: 2px;
+                height: 6px;
+                background: #12060c;
+                border: 1px solid #331018;
             }
             QSlider::sub-page:horizontal {
-                background: #00f0ff;
-                border-radius: 2px;
+                background: #ff003c;
             }
             QSlider::handle:horizontal {
-                background: #ffffff;
-                width: 12px;
-                margin-top: -4px;
-                margin-bottom: -4px;
-                border-radius: 6px;
+                background: #d43142;
+                border: 1px solid #ffffff;
+                width: 14px;
+                margin-top: -6px;
+                margin-bottom: -6px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #00f0ff;
+                border: 1px solid #ffffff;
             }
             QCheckBox {
                 spacing: 8px;
+                color: #c9d1d9;
                 font-size: 11px;
+                font-weight: bold;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #4a1521;
+                background: #12060c;
+            }
+            QCheckBox::indicator:checked {
+                background: #00f0ff;
+                border: 1px solid #00f0ff;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #00f0ff;
             }
             QLabel {
                 font-size: 11px;
@@ -182,150 +261,199 @@ class ControlPanel(QWidget):
         self.timeline_timer.start(200)
 
     def init_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        # 1. Move Talia Mode Button
-        self.btn_move_talia = QPushButton("🔒 MOVE TALIA: OFF (Click Talia to Play/Skip)")
+        # -------------------------------------------------------------
+        # TOP HUD BAR (Anchored)
+        # -------------------------------------------------------------
+        top_hud = QWidget()
+        top_hud.setStyleSheet("background-color: #0a0c12; border-bottom: 1px solid #3d101c; padding: 6px 12px;")
+        top_hud_layout = QVBoxLayout(top_hud)
+        top_hud_layout.setContentsMargins(8, 6, 8, 6)
+        top_hud_layout.setSpacing(4)
+
+        # Category tabs matching Cyberpunk 2077 HUD
+        hbox_tabs = QHBoxLayout()
+        lbl_bracket_l = QLabel("[ 1 ]")
+        lbl_bracket_l.setStyleSheet("color: #00f0ff; font-weight: bold; font-family: monospace;")
+        hbox_tabs.addWidget(lbl_bracket_l)
+
+        lbl_tab_active = QLabel("TALIA HUD")
+        lbl_tab_active.setStyleSheet("color: #00f0ff; font-weight: bold; font-size: 12px; letter-spacing: 2px;")
+        hbox_tabs.addWidget(lbl_tab_active)
+
+        lbl_tab_mid1 = QLabel("AUDIO")
+        lbl_tab_mid1.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
+        hbox_tabs.addWidget(lbl_tab_mid1)
+
+        lbl_tab_mid2 = QLabel("VISUALS")
+        lbl_tab_mid2.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
+        hbox_tabs.addWidget(lbl_tab_mid2)
+
+        lbl_tab_mid3 = QLabel("CALIBRATION")
+        lbl_tab_mid3.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
+        hbox_tabs.addWidget(lbl_tab_mid3)
+
+        hbox_tabs.addStretch()
+        lbl_bracket_r = QLabel("[ 3 ]")
+        lbl_bracket_r.setStyleSheet("color: #00f0ff; font-weight: bold; font-family: monospace;")
+        hbox_tabs.addWidget(lbl_bracket_r)
+
+        top_hud_layout.addLayout(hbox_tabs)
+
+        self.lbl_telemetry = QLabel("// WASAPI DIRECT LOOPBACK // ZERO-LATENCY FFT // 60 FPS")
+        self.lbl_telemetry.setStyleSheet("color: #00f0ff; font-size: 9px; font-family: 'Consolas', monospace; letter-spacing: 0.5px;")
+        top_hud_layout.addWidget(self.lbl_telemetry)
+
+        root_layout.addWidget(top_hud)
+
+        # -------------------------------------------------------------
+        # SCROLLABLE CONTENT BODY (Resizable)
+        # -------------------------------------------------------------
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(14, 12, 14, 14)
+        content_layout.setSpacing(10)
+
+        # --- PRIMARY TOGGLES ---
+        self.btn_move_talia = QPushButton("MOVE TALIA: LOCKED")
         self.btn_move_talia.setObjectName("btnMoveTalia")
         self.btn_move_talia.clicked.connect(self.toggle_move_talia)
-        layout.addWidget(self.btn_move_talia)
+        content_layout.addWidget(self.btn_move_talia)
 
-        # Audio Source Mode Toggle Button
-        self.btn_audio_mode = QPushButton("🎵 AUDIO SOURCE: BUILT-IN MUSIC PLAYER (Click to switch)")
+        self.btn_audio_mode = QPushButton("SOURCE: LOCAL PLAYER")
         self.btn_audio_mode.setObjectName("btnAudioMode")
         self.btn_audio_mode.clicked.connect(self.toggle_audio_mode)
-        layout.addWidget(self.btn_audio_mode)
+        content_layout.addWidget(self.btn_audio_mode)
 
-        lbl_hint = QLabel("💡 Hotkeys: [F8] Move Talia | [F9] Hide/Show Talia | [F10] Switch Desktop/Player")
-        lbl_hint.setStyleSheet("color: #8b949e; font-size: 10px;")
-        layout.addWidget(lbl_hint)
-
-        # ==========================================================
-        # 2. Cyberpunk Music Player Section
-        # ==========================================================
-        grp_player = QGroupBox("Cyberpunk Music Player")
-        vbox_player = QVBoxLayout()
-        vbox_player.setSpacing(5)
+        # --- SECTION: PLAYBACK & VOLUME ---
+        content_layout.addWidget(create_section_header("Playback & Volume"))
 
         # Track title banner
-        self.lbl_track_title = QLabel("🎵 Ready")
-        self.lbl_track_title.setStyleSheet("color: #00f0ff; font-weight: bold; font-size: 12px;")
-        vbox_player.addWidget(self.lbl_track_title)
+        self.lbl_track_title = QLabel("SYSTEM IDLE")
+        self.lbl_track_title.setStyleSheet("color: #00f0ff; font-weight: bold; font-size: 12px; font-family: 'Consolas', monospace;")
+        content_layout.addWidget(self.lbl_track_title)
 
-        # Time elapsed & Duration
+        # Timeline seeker
         hbox_time = QHBoxLayout()
         self.lbl_time_cur = QLabel("00:00")
-        self.lbl_time_cur.setStyleSheet("color: #8b949e; font-family: monospace;")
+        self.lbl_time_cur.setStyleSheet("color: #8b949e; font-family: 'Consolas', monospace;")
         self.slider_seek = QSlider(Qt.Orientation.Horizontal)
         self.slider_seek.setRange(0, 1000)
         self.slider_seek.setValue(0)
         self.slider_seek.sliderPressed.connect(self.on_seek_pressed)
         self.slider_seek.sliderReleased.connect(self.on_seek_released)
         self.lbl_time_dur = QLabel("00:00")
-        self.lbl_time_dur.setStyleSheet("color: #8b949e; font-family: monospace;")
+        self.lbl_time_dur.setStyleSheet("color: #8b949e; font-family: 'Consolas', monospace;")
 
         hbox_time.addWidget(self.lbl_time_cur)
         hbox_time.addWidget(self.slider_seek)
         hbox_time.addWidget(self.lbl_time_dur)
-        vbox_player.addLayout(hbox_time)
+        content_layout.addLayout(hbox_time)
 
         # Playback Transport Buttons
         hbox_controls = QHBoxLayout()
-        btn_prev = QPushButton("⏮ Prev")
+        btn_prev = QPushButton("PREV")
         btn_prev.clicked.connect(self.on_prev_clicked)
         hbox_controls.addWidget(btn_prev)
 
-        self.btn_play_pause = QPushButton("▶ Play")
+        self.btn_play_pause = QPushButton("PLAY")
         self.btn_play_pause.setObjectName("btnPlayPause")
         self.btn_play_pause.clicked.connect(self.on_play_pause_clicked)
         hbox_controls.addWidget(self.btn_play_pause)
 
-        btn_next = QPushButton("Next ⏭")
+        btn_next = QPushButton("NEXT")
         btn_next.clicked.connect(self.on_next_clicked)
         hbox_controls.addWidget(btn_next)
 
-        self.btn_shuffle = QPushButton("🔀 Shuffle: OFF")
+        self.btn_shuffle = QPushButton("SHUFFLE: OFF")
         self.btn_shuffle.clicked.connect(self.toggle_shuffle)
         hbox_controls.addWidget(self.btn_shuffle)
-        vbox_player.addLayout(hbox_controls)
+        content_layout.addLayout(hbox_controls)
 
         # Volume Slider
         hbox_vol = QHBoxLayout()
-        hbox_vol.addWidget(QLabel("Volume:"))
+        lbl_vol_title = QLabel("VOLUME:")
+        lbl_vol_title.setStyleSheet("color: #e62030; font-weight: bold;")
+        hbox_vol.addWidget(lbl_vol_title)
+
         self.slider_vol = QSlider(Qt.Orientation.Horizontal)
         self.slider_vol.setRange(0, 100)
         self.slider_vol.setValue(int(self.audio_engine.volume * 100))
         self.slider_vol.valueChanged.connect(self.on_volume_changed)
         hbox_vol.addWidget(self.slider_vol)
-        self.lbl_vol_val = QLabel(f"{int(self.audio_engine.volume * 100)}%")
-        self.lbl_vol_val.setFixedWidth(32)
-        hbox_vol.addWidget(self.lbl_vol_val)
-        vbox_player.addLayout(hbox_vol)
 
-        # Visualizer Style & Theme Selectors
+        self.lbl_vol_val = QLabel(f"{int(self.audio_engine.volume * 100)}%")
+        self.lbl_vol_val.setFixedWidth(36)
+        self.lbl_vol_val.setStyleSheet("color: #ffffff; font-family: 'Consolas', monospace; font-weight: bold;")
+        hbox_vol.addWidget(self.lbl_vol_val)
+        content_layout.addLayout(hbox_vol)
+
+        # --- SECTION: PLAYLIST & DIRECTORY ---
+        content_layout.addWidget(create_section_header("Playlist & Directory"))
+
+        self.lbl_folder_path = QLabel(f"{self.audio_engine.folder_path}")
+        self.lbl_folder_path.setStyleSheet("color: #8b949e; font-size: 10px; font-family: 'Consolas', monospace;")
+        content_layout.addWidget(self.lbl_folder_path)
+
+        hbox_folder_btns = QHBoxLayout()
+        btn_choose = QPushButton("LOAD FOLDER")
+        btn_choose.clicked.connect(self.choose_music_folder)
+        hbox_folder_btns.addWidget(btn_choose)
+
+        btn_open_exp = QPushButton("EXPLORER")
+        btn_open_exp.clicked.connect(self.open_music_folder_explorer)
+        hbox_folder_btns.addWidget(btn_open_exp)
+
+        btn_refresh = QPushButton("REFRESH")
+        btn_refresh.clicked.connect(self.refresh_tracklist)
+        hbox_folder_btns.addWidget(btn_refresh)
+        content_layout.addLayout(hbox_folder_btns)
+
+        self.list_tracks = QListWidget()
+        self.list_tracks.setFixedHeight(120)
+        self.list_tracks.itemDoubleClicked.connect(self.on_track_double_clicked)
+        content_layout.addWidget(self.list_tracks)
+
+        # --- SECTION: VISUALIZER CONFIGURATION ---
+        content_layout.addWidget(create_section_header("Visualizer Configuration"))
+
         hbox_style = QHBoxLayout()
-        hbox_style.addWidget(QLabel("Visualizer:"))
+        lbl_vis_mode = QLabel("STYLE:")
+        lbl_vis_mode.setStyleSheet("color: #e62030; font-weight: bold;")
+        hbox_style.addWidget(lbl_vis_mode)
+
         self.combo_mode = QComboBox()
         self.combo_mode.addItems(["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"])
         self.combo_mode.currentTextChanged.connect(self.on_vis_mode_changed)
         hbox_style.addWidget(self.combo_mode)
 
-        hbox_style.addWidget(QLabel("Palette:"))
+        lbl_vis_theme = QLabel("PALETTE:")
+        lbl_vis_theme.setStyleSheet("color: #e62030; font-weight: bold;")
+        hbox_style.addWidget(lbl_vis_theme)
+
         self.combo_theme = QComboBox()
         self.combo_theme.addItems(list(COLOR_THEMES.keys()))
         self.combo_theme.currentTextChanged.connect(self.on_vis_theme_changed)
         hbox_style.addWidget(self.combo_theme)
-        vbox_player.addLayout(hbox_style)
+        content_layout.addLayout(hbox_style)
 
-        grp_player.setLayout(vbox_player)
-        layout.addWidget(grp_player)
+        # --- SECTION: CALIBRATION & DISPLAY ---
+        content_layout.addWidget(create_section_header("Calibration & Display"))
 
-        # ==========================================================
-        # 3. Folder & Playlist Management Section
-        # ==========================================================
-        grp_playlist = QGroupBox("Playlist & Music Folder")
-        vbox_pl = QVBoxLayout()
-        vbox_pl.setSpacing(5)
-
-        # Folder Path Display
-        self.lbl_folder_path = QLabel(f"📂 {self.audio_engine.folder_path}")
-        self.lbl_folder_path.setStyleSheet("color: #8b949e; font-size: 10px;")
-        vbox_pl.addWidget(self.lbl_folder_path)
-
-        # Folder Actions
-        hbox_folder_btns = QHBoxLayout()
-        btn_choose = QPushButton("📁 Choose Folder")
-        btn_choose.clicked.connect(self.choose_music_folder)
-        hbox_folder_btns.addWidget(btn_choose)
-
-        btn_open_exp = QPushButton("📂 Open in Explorer")
-        btn_open_exp.clicked.connect(self.open_music_folder_explorer)
-        hbox_folder_btns.addWidget(btn_open_exp)
-
-        btn_refresh = QPushButton("🔄 Refresh")
-        btn_refresh.clicked.connect(self.refresh_tracklist)
-        hbox_folder_btns.addWidget(btn_refresh)
-        vbox_pl.addLayout(hbox_folder_btns)
-
-        # Tracklist ListWidget
-        self.list_tracks = QListWidget()
-        self.list_tracks.setFixedHeight(110)
-        self.list_tracks.itemDoubleClicked.connect(self.on_track_double_clicked)
-        vbox_pl.addWidget(self.list_tracks)
-
-        grp_playlist.setLayout(vbox_pl)
-        layout.addWidget(grp_playlist)
-
-        # ==========================================================
-        # 4. Interactive Eye Tracking Settings
-        # ==========================================================
-        grp_eyes = QGroupBox("Interactive Eye-Tracking")
-        vbox_eyes = QVBoxLayout()
-
+        # Eye sensitivity
         hbox_sens = QHBoxLayout()
-        hbox_sens.addWidget(QLabel("Eye Sensitivity:"))
+        lbl_sens = QLabel("EYE SENSITIVITY:")
+        lbl_sens.setStyleSheet("color: #e62030; font-weight: bold;")
+        hbox_sens.addWidget(lbl_sens)
+
         self.slider_eye_sens = QSlider(Qt.Orientation.Horizontal)
         self.slider_eye_sens.setRange(20, 300)
         self.slider_eye_sens.setValue(100)
@@ -334,106 +462,115 @@ class ControlPanel(QWidget):
 
         self.lbl_sens_val = QLabel("1.0x")
         self.lbl_sens_val.setFixedWidth(36)
+        self.lbl_sens_val.setStyleSheet("color: #ffffff; font-family: 'Consolas', monospace; font-weight: bold;")
         hbox_sens.addWidget(self.lbl_sens_val)
+        content_layout.addLayout(hbox_sens)
 
-        vbox_eyes.addLayout(hbox_sens)
-        grp_eyes.setLayout(vbox_eyes)
-        layout.addWidget(grp_eyes)
-
-        # ==========================================================
-        # 5. Display, Aesthetics & Settings Saving
-        # ==========================================================
-        grp_display = QGroupBox("Display & Settings")
-        vbox_disp = QVBoxLayout()
-        vbox_disp.setSpacing(5)
-
-        # Size slider (150px to 3840px)
+        # Character size
         hbox_sz = QHBoxLayout()
-        hbox_sz.addWidget(QLabel("Character Size:"))
+        lbl_sz = QLabel("CHARACTER SCALE:")
+        lbl_sz.setStyleSheet("color: #e62030; font-weight: bold;")
+        hbox_sz.addWidget(lbl_sz)
+
         self.slider_size = QSlider(Qt.Orientation.Horizontal)
         self.slider_size.setRange(MIN_CHAR_SIZE, MAX_CHAR_SIZE)
         self.slider_size.setValue(self.overlay.width())
         self.slider_size.valueChanged.connect(self.on_size_change)
         hbox_sz.addWidget(self.slider_size)
-        vbox_disp.addLayout(hbox_sz)
+        content_layout.addLayout(hbox_sz)
 
-        # Opacity slider
+        # Character opacity
         hbox_op = QHBoxLayout()
-        hbox_op.addWidget(QLabel("Character Opacity:"))
+        lbl_op = QLabel("OPACITY:")
+        lbl_op.setStyleSheet("color: #e62030; font-weight: bold;")
+        hbox_op.addWidget(lbl_op)
+
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
         self.slider_opacity.setRange(20, 100)
         self.slider_opacity.setValue(100)
         self.slider_opacity.valueChanged.connect(self.on_opacity_change)
         hbox_op.addWidget(self.slider_opacity)
-        vbox_disp.addLayout(hbox_op)
+        content_layout.addLayout(hbox_op)
 
-        # Scanlines, Bass Beat Pop & Widescreen
+        # Feature Toggles
         hbox_toggles = QHBoxLayout()
-        self.chk_scanlines = QCheckBox("CRT Scanlines")
+        self.chk_scanlines = QCheckBox("CRT SCANLINES")
         self.chk_scanlines.setChecked(True)
         self.chk_scanlines.toggled.connect(self.on_scanlines_toggled)
         hbox_toggles.addWidget(self.chk_scanlines)
 
-        self.chk_bass_pop = QCheckBox("🎵 Bass Beat Pop")
+        self.chk_bass_pop = QCheckBox("BASS BEAT REACT")
         self.chk_bass_pop.setChecked(True)
         self.chk_bass_pop.toggled.connect(self.on_bass_pop_toggled)
         hbox_toggles.addWidget(self.chk_bass_pop)
 
-        self.chk_widescreen = QCheckBox("16:9 Bezel")
+        self.chk_widescreen = QCheckBox("16:9 BEZEL")
         self.chk_widescreen.setChecked(False)
         self.chk_widescreen.toggled.connect(self.on_widescreen_toggled)
         hbox_toggles.addWidget(self.chk_widescreen)
-        vbox_disp.addLayout(hbox_toggles)
+        content_layout.addLayout(hbox_toggles)
 
-        # Actions: Save Settings & Reload Art
+        # --- SECTION: SYSTEM ACTIONS ---
+        content_layout.addWidget(create_section_header("System Actions"))
+
         hbox_actions = QHBoxLayout()
-        self.btn_save_settings = QPushButton("💾 Save Settings & Position")
+        self.btn_save_settings = QPushButton("SAVE CONFIG")
         self.btn_save_settings.setObjectName("btnSaveSettings")
         self.btn_save_settings.clicked.connect(self.save_settings_action)
         hbox_actions.addWidget(self.btn_save_settings)
 
-        btn_reload = QPushButton("🔄 Reload Art Files")
+        btn_reload = QPushButton("RELOAD ASSETS")
         btn_reload.clicked.connect(self.reload_art)
         hbox_actions.addWidget(btn_reload)
-        vbox_disp.addLayout(hbox_actions)
+        content_layout.addLayout(hbox_actions)
 
-        # Power Off / Exit Talia button
-        self.btn_exit_app = QPushButton("🛑 Power Off & Exit Talia")
-        self.btn_exit_app.setStyleSheet("""
-            QPushButton {
-                background-color: #2a1118;
-                color: #ff4d6d;
-                border: 1px solid #ff4d6d;
-                font-size: 11px;
-                padding: 6px;
-                font-weight: bold;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #ff0055;
-                color: #ffffff;
-            }
-        """)
+        self.btn_exit_app = QPushButton("POWER OFF TALIA")
+        self.btn_exit_app.setObjectName("btnExitApp")
         self.btn_exit_app.clicked.connect(self.overlay.close_application)
-        vbox_disp.addWidget(self.btn_exit_app)
+        content_layout.addWidget(self.btn_exit_app)
 
-        grp_display.setLayout(vbox_disp)
-        layout.addWidget(grp_display)
+        scroll_area.setWidget(content_widget)
+        root_layout.addWidget(scroll_area)
 
-        self.setLayout(layout)
+        # -------------------------------------------------------------
+        # BOTTOM TELEMETRY & HOTKEY BAR (Anchored)
+        # -------------------------------------------------------------
+        bottom_bar = QWidget()
+        bottom_bar.setStyleSheet("background-color: #08090e; border-top: 1px solid #3d101c; padding: 4px;")
+        bottom_layout = QHBoxLayout(bottom_bar)
+        bottom_layout.setContentsMargins(12, 6, 12, 6)
+
+        lbl_f8 = QLabel("[ F8 ] MOVE TALIA")
+        lbl_f8.setStyleSheet("color: #00f0ff; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
+        bottom_layout.addWidget(lbl_f8)
+
+        bottom_layout.addStretch()
+
+        lbl_f9 = QLabel("[ F9 ] HIDE / SHOW")
+        lbl_f9.setStyleSheet("color: #8b949e; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
+        bottom_layout.addWidget(lbl_f9)
+
+        bottom_layout.addStretch()
+
+        lbl_f10 = QLabel("[ F10 ] SOURCE")
+        lbl_f10.setStyleSheet("color: #ff3347; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
+        bottom_layout.addWidget(lbl_f10)
+
+        root_layout.addWidget(bottom_bar)
+
         self.populate_playlist_ui()
 
     def populate_playlist_ui(self):
         """Refreshes the tracklist widget items."""
         self.list_tracks.clear()
-        self.lbl_folder_path.setText(f"📂 {self.audio_engine.folder_path}")
+        self.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
         for i, path in enumerate(self.audio_engine.playlist):
             name = os.path.basename(path)
-            item = QListWidgetItem(f"{i+1:02d}. {name}")
+            item = QListWidgetItem(f"[{i+1:02d}] {name}")
             self.list_tracks.addItem(item)
         if 0 <= self.audio_engine.current_index < self.list_tracks.count():
             self.list_tracks.setCurrentRow(self.audio_engine.current_index)
-            self.lbl_track_title.setText(f"🎵 {self.audio_engine.get_current_track_title()}")
+            self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
 
     def toggle_audio_mode(self):
         """Toggles between Built-in Player and Desktop Audio WASAPI loopback."""
@@ -447,11 +584,11 @@ class ControlPanel(QWidget):
 
     def update_audio_mode_ui(self):
         if self.audio_engine.audio_mode == "desktop":
-            self.btn_audio_mode.setText("🎧 AUDIO SOURCE: DESKTOP AUDIO (Listening to osu!, Spotify...)")
-            self.btn_audio_mode.setStyleSheet("background-color: #7928ca; color: #ffffff; border: 1px solid #ff007f; font-size: 11px; padding: 7px; font-weight: bold;")
+            self.btn_audio_mode.setText("SOURCE: DESKTOP AUDIO")
+            self.btn_audio_mode.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff; font-weight: bold;")
         else:
-            self.btn_audio_mode.setText("🎵 AUDIO SOURCE: BUILT-IN MUSIC PLAYER (Click to switch)")
-            self.btn_audio_mode.setStyleSheet("background-color: #161b22; color: #00f0ff; border: 1px solid #30363d; font-size: 11px; padding: 7px; font-weight: bold;")
+            self.btn_audio_mode.setText("SOURCE: LOCAL PLAYER")
+            self.btn_audio_mode.setStyleSheet("background-color: #14080e; color: #ff003c; border: 1px solid #4a121e; font-weight: bold;")
 
     def on_play_pause_clicked(self):
         if self.audio_engine.audio_mode == "desktop":
@@ -467,19 +604,19 @@ class ControlPanel(QWidget):
 
     def sync_play_state(self):
         if self.audio_engine.audio_mode == "desktop":
-            self.btn_play_pause.setText("🎧 Live Loop")
-            self.btn_play_pause.setStyleSheet("background-color: #7928ca; border-color: #ff007f; color: white;")
-            self.lbl_track_title.setText("🎧 Desktop Audio (osu!, Spotify, Games)")
+            self.btn_play_pause.setText("LIVE INPUT")
+            self.btn_play_pause.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
+            self.lbl_track_title.setText("DESKTOP AUDIO (LIVE LOOPBACK)")
             return
 
         if self.audio_engine.is_playing:
-            self.btn_play_pause.setText("⏸ Pause")
-            self.btn_play_pause.setStyleSheet("background-color: #238636; border-color: #2ea043; color: white;")
-            self.lbl_track_title.setText(f"🎵 Playing: {self.audio_engine.get_current_track_title()}")
+            self.btn_play_pause.setText("PAUSE")
+            self.btn_play_pause.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
+            self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
         else:
-            self.btn_play_pause.setText("▶ Play")
-            self.btn_play_pause.setStyleSheet("background-color: #ff0055; border-color: #ff3377; color: white;")
-            self.lbl_track_title.setText(f"⏸ Paused: {self.audio_engine.get_current_track_title()}")
+            self.btn_play_pause.setText("PLAY")
+            self.btn_play_pause.setStyleSheet("background-color: #14080e; color: #ff003c; border: 1px solid #ff003c;")
+            self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
         if 0 <= self.audio_engine.current_index < self.list_tracks.count():
             self.list_tracks.setCurrentRow(self.audio_engine.current_index)
 
@@ -494,11 +631,11 @@ class ControlPanel(QWidget):
     def toggle_shuffle(self):
         self.audio_engine.shuffle = not self.audio_engine.shuffle
         if self.audio_engine.shuffle:
-            self.btn_shuffle.setText("🔀 Shuffle: ON")
-            self.btn_shuffle.setStyleSheet("color: #00f0ff; border-color: #00f0ff;")
+            self.btn_shuffle.setText("SHUFFLE: ON")
+            self.btn_shuffle.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
         else:
-            self.btn_shuffle.setText("🔀 Shuffle: OFF")
-            self.btn_shuffle.setStyleSheet("")
+            self.btn_shuffle.setText("SHUFFLE: OFF")
+            self.btn_shuffle.setStyleSheet("background-color: #0e0f17; color: #ff3347; border: 1px solid #4a1521;")
 
     def on_track_double_clicked(self, item):
         row = self.list_tracks.row(item)
@@ -641,11 +778,11 @@ class ControlPanel(QWidget):
     def update_move_talia_ui(self):
         """Refreshes the Move Talia toggle button appearance to match current overlay state."""
         if self.overlay.move_talia_mode:
-            self.btn_move_talia.setText("🖐️ MOVE TALIA: ON (Drag to Reposition)")
-            self.btn_move_talia.setStyleSheet("background-color: #00f0ff; color: #0b0e14; border: 1px solid #38d9a9; font-size: 12px; padding: 8px; font-weight: bold;")
+            self.btn_move_talia.setText("MOVE TALIA: ACTIVE")
+            self.btn_move_talia.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff; font-weight: bold;")
         else:
-            self.btn_move_talia.setText("🔒 MOVE TALIA: OFF (Click Talia to Play/Skip)")
-            self.btn_move_talia.setStyleSheet("background-color: #238636; color: #ffffff; border: 1px solid #2ea043; font-size: 12px; padding: 8px; font-weight: bold;")
+            self.btn_move_talia.setText("MOVE TALIA: LOCKED")
+            self.btn_move_talia.setStyleSheet("background-color: #14080e; color: #ff003c; border: 1px solid #4a121e; font-weight: bold;")
 
     def toggle_move_talia(self):
         new_state = not self.overlay.move_talia_mode
@@ -685,7 +822,6 @@ class ControlPanel(QWidget):
 
     def apply_settings(self, cfg: dict):
         """Applies loaded settings to the overlay and controls."""
-        # 1. Position and Size
         size = cfg.get("char_size", self.overlay.width())
         self.slider_size.setValue(size)
         self.overlay.resize(size, size)
@@ -695,21 +831,17 @@ class ControlPanel(QWidget):
         if pos_x >= 0 and pos_y >= 0:
             self.overlay.move(pos_x, pos_y)
 
-        # 2. Eye Sensitivity
         sens = cfg.get("eye_sensitivity", 1.0)
         self.slider_eye_sens.setValue(int(sens * 100))
 
-        # 3. Opacity
         opacity = cfg.get("opacity", 1.0)
         self.slider_opacity.setValue(int(opacity * 100))
 
-        # 4. Scanlines, Bass Beat Pop & Widescreen
         self.chk_scanlines.setChecked(cfg.get("scanlines", True))
         self.chk_bass_pop.setChecked(cfg.get("bass_pop", True))
         self.overlay.enable_bass_pop = cfg.get("bass_pop", True)
         self.chk_widescreen.setChecked(cfg.get("widescreen", False))
 
-        # 5. Visualizer Mode & Palette
         vis_mode = cfg.get("visualizer_mode", "Cyber Bars")
         if vis_mode in ["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"]:
             self.combo_mode.setCurrentText(vis_mode)
@@ -718,28 +850,30 @@ class ControlPanel(QWidget):
         if palette in COLOR_THEMES:
             self.combo_theme.setCurrentText(palette)
 
-        # 6. Volume
         vol = cfg.get("volume", 0.85)
         self.sync_volume(vol)
         self.overlay.set_volume(vol)
 
-        # 7. Audio Mode
         audio_mode = cfg.get("audio_mode", "player")
         if audio_mode in ("player", "desktop"):
             self.set_audio_mode(audio_mode)
 
-        # 8. Shuffle
         if cfg.get("shuffle", False) != self.audio_engine.shuffle:
             self.toggle_shuffle()
 
         self.overlay.update()
 
+    def _reset_save_btn(self):
+        self.btn_save_settings.setText("SAVE CONFIG")
+        self.btn_save_settings.setStyleSheet("")
+
     def save_settings_action(self):
         """Triggered by the Save Settings button."""
         cfg = self.get_current_settings_dict()
         if save_settings(cfg):
-            self.btn_save_settings.setText("✅ Settings Saved!")
-            QTimer.singleShot(1500, lambda: self.btn_save_settings.setText("💾 Save Settings & Position"))
+            self.btn_save_settings.setText("CONFIG SAVED")
+            self.btn_save_settings.setStyleSheet("background-color: #00f0ff; color: #07080b; border: 1px solid #00f0ff;")
+            QTimer.singleShot(1500, self._reset_save_btn)
 
     def closeEvent(self, event):
         # Auto-save settings on close/hide
@@ -749,4 +883,4 @@ class ControlPanel(QWidget):
         # Do NOT terminate overlay or stop timers - hide window cleanly!
         self.hide()
         event.ignore()
-        print("[CONTROLLER] Controller window closed/hidden. Click Talia 3x to reopen.")
+        print("[CONTROLLER] Controller window hidden. Click Talia 3x to reopen.")
