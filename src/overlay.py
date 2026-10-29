@@ -6,7 +6,7 @@ import os
 import math
 import time
 import numpy as np
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QPoint, QPointF, QTimer, QRect, QRectF, QUrl
@@ -98,7 +98,8 @@ class OverlayWindow(QWidget):
         # Feedback Satisfaction: Hover, Hold Rumbler, Tactile Button Punch, and Color Flashes
         self.is_hovered = False
         self.was_hovered = False
-        self.hover_glow = 0.0  # Smooth 0.0 to ~0.20 luminous highlight (osu! lazer style)
+        self.hover_glow = 0.0  # Smooth transient luminous pulse on hover entry
+        self.hover_outline_alpha = 0.0  # Smooth 0.0 to 1.0 subtle white outline on hover
         self.hover_scale = 1.0  # Subtle 1.0 to 1.012 breathing scale
 
         # Dynamic Rotation & Sway State (osu! lazer left-right rocking & tilt)
@@ -173,6 +174,8 @@ class OverlayWindow(QWidget):
         self._last_scaled_size = -1
         self._cached_scaled_talia = QPixmap()
         self._cached_scaled_talia_gray = QPixmap()
+        self._cached_scaled_talia_outline = QPixmap()
+        self.talia_outline = QPixmap()
         self._cached_scaled_whites = QPixmap()
         self._cached_scaled_pupil_l = QPixmap()
         self._cached_scaled_pupil_r = QPixmap()
@@ -217,6 +220,14 @@ class OverlayWindow(QWidget):
         gray_np = np.array(gray_rgba)
         qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
         self.talia_sprite_gray = QPixmap.fromImage(qimg_gray.copy())
+
+        # Subtle White Outline Mask for hover feedback (small, clean, 1px contour)
+        dilated_a = a.filter(ImageFilter.MaxFilter(3))
+        white_sil = Image.new("RGBA", (591, 591), (255, 255, 255, 255))
+        white_sil.putalpha(dilated_a)
+        white_sil_np = np.array(white_sil)
+        qimg_outline = QImage(white_sil_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
+        self.talia_outline = QPixmap.fromImage(qimg_outline.copy())
 
         # Layer 3: Eye Whites (Back)
         self.whites = QPixmap(p2_path)
@@ -374,6 +385,7 @@ class OverlayWindow(QWidget):
         self.impulse_rock_intensity = 1.8  # ~1.8 degrees smooth tilt
         self.impulse_sway_intensity = max(3.0, char_size * 0.007)  # ~6px sway
         self.impulse_timer = 0.22
+        self.hover_glow = 0.30  # 50% brighter transient tactile glow flash (decays back to original)
         if hasattr(self, "sound_pop") and self.sound_pop.isLoaded():
             self.sound_pop.play()
         self.update()
@@ -586,9 +598,15 @@ class OverlayWindow(QWidget):
         elif not is_hovering and self.was_hovered:
             self.was_hovered = False
 
-        # Smooth hover glow interpolation (noticeable ~20% luminous bloom)
-        target_glow = 0.20 if self.was_hovered else 0.0
-        self.hover_glow += (target_glow - self.hover_glow) * 0.22
+        # Transient hover impulse glow decay (glows on entry, then returns to 0.0, never stays on)
+        if self.hover_glow > 0.005:
+            self.hover_glow *= 0.84
+        else:
+            self.hover_glow = 0.0
+
+        # Subtle white outline alpha (smoothly fades in while hovering, fades out when leaving)
+        target_outline = 1.0 if self.was_hovered else 0.0
+        self.hover_outline_alpha += (target_outline - self.hover_outline_alpha) * 0.22
 
         # Subtle 1.2% breathing scale on hover
         target_hover_scale = 1.012 if self.was_hovered else 1.0
@@ -681,6 +699,11 @@ class OverlayWindow(QWidget):
             Qt.TransformationMode.SmoothTransformation
         )
         self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
+            char_size, char_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self._cached_scaled_talia_outline = self.talia_outline.scaled(
             char_size, char_size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
@@ -880,6 +903,12 @@ class OverlayWindow(QWidget):
         # ==========================================================
         # LAYER 1: TALIA MAIN SPRITE (Front Layer - Frames Mouth & Eyes)
         # ==========================================================
+        # Subtle White Outline on hover (small, not very noticeable, peeks 1px around silhouette)
+        if self.hover_outline_alpha > 0.005 and not self._cached_scaled_talia_outline.isNull():
+            painter.setOpacity(self.opacity_val * self.hover_outline_alpha * 0.65)
+            painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_outline)
+            painter.setOpacity(self.opacity_val)
+
         if self.hold_saturation < 1.0:
             # Powering down: Draw grayscale sprite base underneath, color sprite on top with fading opacity
             painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_gray)
@@ -908,10 +937,10 @@ class OverlayWindow(QWidget):
         # ==========================================================
         char_rect = QRect(char_x, char_y, char_size, char_size)
 
-        # 1. Noticeable osu! lazer luminous hover highlight (~20% luminous bloom)
+        # 1. Transient luminous hover impulse flash (50% brighter, decays back to original)
         if self.hover_glow > 0.005:
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
-            hover_alpha = int(255 * min(0.35, self.hover_glow))
+            hover_alpha = int(255 * min(0.40, self.hover_glow))
             painter.fillRect(char_rect, QColor(255, 255, 255, hover_alpha))
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
