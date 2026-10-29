@@ -128,6 +128,23 @@ namespace TaliaAppLauncher
     }}
 }}
 '''
+    manifest_code = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="Talia.App" type="win32"/>
+  <description>Talia Cyberpunk Audio Visualizer</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>
+'''
+    manifest_file = os.path.join(PROJECT_ROOT, "_temp_app.manifest")
+    with open(manifest_file, "w", encoding="utf-8") as f:
+        f.write(manifest_code)
+
     cs_file = os.path.join(PROJECT_ROOT, "_temp_launcher.cs")
     with open(cs_file, "w", encoding="utf-8") as f:
         f.write(cs_code)
@@ -136,6 +153,7 @@ namespace TaliaAppLauncher
         csc_exe,
         "/target:winexe",
         f"/win32icon:{ICON_PATH}",
+        f"/win32manifest:{manifest_file}",
         "/r:System.Windows.Forms.dll",
         f"/out:{EXE_PATH}",
         cs_file
@@ -145,6 +163,8 @@ namespace TaliaAppLauncher
         res = subprocess.run(cmd, capture_output=True, text=True)
         if os.path.exists(cs_file):
             os.remove(cs_file)
+        if os.path.exists(manifest_file):
+            os.remove(manifest_file)
         if res.returncode == 0 and os.path.exists(EXE_PATH):
             print(f"[+] Successfully compiled: {EXE_PATH}")
             return True
@@ -154,6 +174,8 @@ namespace TaliaAppLauncher
     except Exception as e:
         if os.path.exists(cs_file):
             os.remove(cs_file)
+        if os.path.exists(manifest_file):
+            os.remove(manifest_file)
         print(f"[!] Compilation error: {e}")
         return False
 

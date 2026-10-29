@@ -27,7 +27,7 @@ A transparent desktop audio visualizer with eye tracking, tactile controls, and 
    - Compiles native launcher (`Talia.exe`).
    - Creates Desktop and Start Menu shortcuts.
 3. **Launch**:
-   - Run `Talia.exe` or use the Desktop shortcut.
+   - Run `Talia.exe` (automatically runs as Administrator) or use the Desktop shortcut.
 
 ---
 
@@ -41,8 +41,8 @@ A transparent desktop audio visualizer with eye tracking, tactile controls, and 
 - **3 Clicks on Talia**: 
   - Opens the **Controller Settings Panel**.
 - **Holding Talia**:
-  - **Hold for 1s**: Tactile button press unlocks **Drag Mode** to reposition or resize.
-  - **Hold for 3s**: Initiates power-down sequence and closes the application cleanly.
+  - **Hold for 0.7s**: Tactile button press unlocks **Drag Mode** to reposition or resize.
+  - **Hold for 2.5s**: Initiates power-down sequence and closes the application cleanly.
 
 ---
 
@@ -67,7 +67,7 @@ Toggle modes anytime with **`[F10]`** or via the Controller panel:
 
 ---
 
-### 4. Move Talia Mode (`[F8]` or Hold 1s)
+### 4. Move Talia Mode (`[F8]` or Hold 0.7s)
 - **`MOVE TALIA: OFF`** *(Default)*: Talia is locked in place and clickable for controls.
 - **`MOVE TALIA: ON`**: Dashed border appears. Click and drag to reposition anywhere on your screens, or scroll the mouse wheel to resize (150px to 4K).
 

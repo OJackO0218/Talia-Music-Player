@@ -115,10 +115,12 @@ class OverlayWindow(QWidget):
         self.impulse_sway_intensity = 0.0
         self.impulse_timer = 0.0
 
-        # Tactile Button Press punch (at 1.0s drag hold mark)
+        # Tactile Button Press punch (at 0.7s drag hold mark)
         self.button_press_scale = 1.0
         self.button_press_delay = 0.0  # Bottom-out delay before delayed spring back
         self.drag_ready_triggered = False
+        self.has_dragged = False
+        self.is_holding = False
 
         # Click Color Flashes (1x White, 2x Red, 3x Yellow) with 0.24s solid hold
         self.flash_color = QColor(255, 255, 255)
@@ -323,8 +325,8 @@ class OverlayWindow(QWidget):
             return
 
         elapsed = time.time() - self.press_time
-        if elapsed >= 3.0:
-            # Full 3 seconds held: Initiate 0.6s dramatic sinking power-down sequence!
+        if elapsed >= 2.5:
+            # Full 2.5 seconds held: Initiate 0.6s dramatic sinking power-down sequence!
             self.is_shutting_down = True
             self.shutdown_start_time = time.time()
             self.shutdown_start_pos = self.pos()
@@ -335,8 +337,8 @@ class OverlayWindow(QWidget):
             if hasattr(self, "sound_shutdown") and self.sound_shutdown.isLoaded():
                 self.sound_shutdown.play()
             return
-        elif elapsed >= 1.0:
-            # At 1.0s mark: Trigger tactile button-press compression (50% more pressed in: 0.885 scale + delay)!
+        elif elapsed >= 0.7:
+            # At 0.7s mark: Trigger tactile button-press compression (0.885 scale + delay)!
             if not self.drag_ready_triggered:
                 self.drag_ready_triggered = True
                 self.button_press_scale = 0.885
@@ -344,9 +346,9 @@ class OverlayWindow(QWidget):
                 if hasattr(self, "sound_btn") and self.sound_btn.isLoaded():
                     self.sound_btn.play()
 
-            # Between 1s and 3s: Desaturate the entire character towards grayscale
-            # If user releases anytime between 1s and 3s, Move Talia (Drag Mode) is toggled!
-            progress = (elapsed - 1.0) / 2.0  # 0.0 to 1.0 across the 2-second transition (from 1.0s to 3.0s)
+            # Between 0.7s and 2.5s: Desaturate the entire character towards grayscale
+            # If user releases anytime between 0.7s and 2.5s, Move Talia (Drag Mode) is toggled!
+            progress = (elapsed - 0.7) / 1.8  # 0.0 to 1.0 across the 1.8-second transition (from 0.7s to 2.5s)
             self.hold_saturation = max(0.0, 1.0 - progress)
             self._apply_pupil_saturation()
             self.update()
@@ -396,7 +398,7 @@ class OverlayWindow(QWidget):
 
     def close_application(self):
         """Powers down Talia, auto-saves persistent settings, and terminates application instantly."""
-        print("[SHUTDOWN] Talia powered down after 4s hold. Saving settings and exiting instantly...")
+        print("[SHUTDOWN] Talia powered down after 2.5s hold. Saving settings and exiting instantly...")
         if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
             self.sound_hold.stop()
         try:
@@ -605,17 +607,17 @@ class OverlayWindow(QWidget):
         t = time.time()
         if self.is_holding and not self.has_dragged:
             elapsed = t - self.press_time
-            if elapsed < 2.0:
-                # 0.0s to 2.0s: Reduced by 50% at start! Gentle, subtle rocking (tilt +/- 0.7 to 1.4 deg, sway 2-4px)
-                progress = elapsed / 2.0
+            if elapsed < 1.6:
+                # 0.0s to 1.6s: Gentle, subtle rocking (tilt +/- 0.7 to 1.4 deg, sway 2-4px)
+                progress = elapsed / 1.6
                 rot_amp = (0.7 + progress * 0.7)
                 sway_amp = (2.0 + progress * 2.0) * (char_size / 850.0)
                 self.current_rotation = math.sin(t * 16.0) * rot_amp
                 self.current_shake_x = math.sin(t * 16.0 + 0.3) * sway_amp
                 self.current_shake_y = math.cos(t * 32.0) * (0.8 + progress * 0.8)
             else:
-                # 2.0s to 3.0s: "start going a bit harder after 2 seconds" towards 3.0s shutdown
-                progress_hard = min(1.0, elapsed - 2.0)
+                # 1.6s to 2.5s: Escalating rocking towards 2.5s shutdown
+                progress_hard = min(1.0, (elapsed - 1.6) / 0.9)
                 rot_amp = (1.4 + progress_hard * 4.0)
                 sway_amp = (4.0 + progress_hard * 12.0) * (char_size / 850.0)
                 self.current_rotation = math.sin(t * 26.0) * rot_amp
@@ -974,22 +976,22 @@ class OverlayWindow(QWidget):
                 event.accept()
                 return
 
-            if 1.0 <= elapsed < 3.0:
-                # User held for 1+ seconds and let go: TOGGLE DRAG MODE!
+            if 0.7 <= elapsed < 2.5:
+                # User held for 0.7+ seconds and let go: TOGGLE DRAG MODE!
                 self.hold_saturation = 1.0
                 self._apply_pupil_saturation()
                 self.update()
                 new_mode = not self.move_talia_mode
                 self.set_move_talia_mode(new_mode)
                 status = "ON (Drag to Move / Scroll to Resize)" if new_mode else "OFF (Locked & Clickable)"
-                print(f"[ACTION] Held for 1s: Move Talia Mode is now {status}!")
-            elif elapsed < 0.45:
+                print(f"[ACTION] Held for 0.7s: Move Talia Mode is now {status}!")
+            elif elapsed < 0.38:
                 # Short tap/click: count for 1x, 2x, 3x multi-click
                 if self.hold_saturation < 1.0:
                     self._start_restore_color_animation()
                 self._handle_click()
             else:
-                # Held between 0.45s and 1.0s: restore color if needed
+                # Held between 0.38s and 0.7s: restore color if needed
                 if self.hold_saturation < 1.0:
                     self._start_restore_color_animation()
 

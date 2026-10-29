@@ -27,6 +27,19 @@ except Exception:
 
 
 def main():
+    # 0. Automatically elevate and run as Administrator if not already elevated
+    if "--no-admin" not in sys.argv:
+        try:
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            is_admin = False
+
+        if not is_admin:
+            python_exe = sys.executable
+            script = os.path.abspath(__file__)
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, f'"{script}"', None, 1)
+            sys.exit(0)
+
     # Ensure only 1 instance of Talia runs at a time (prevents orphaned background instances)
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "AtharTaliaCyberpunkVisualizerMutex")
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
