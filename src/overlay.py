@@ -433,6 +433,7 @@ class OverlayWindow(QWidget):
         init_size = min(screen.height() - 60, 960)
         self.resize(init_size, init_size)
         self.move((screen.width() - init_size) // 2, (screen.height() - init_size) // 2)
+        self.raise_()
         self.enforce_topmost()
 
     def enforce_topmost(self):
@@ -443,6 +444,8 @@ class OverlayWindow(QWidget):
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
             )
+            user32.BringWindowToTop(hwnd)
+            self.raise_()
 
     def set_move_talia_mode(self, enabled: bool):
         self.move_talia_mode = enabled

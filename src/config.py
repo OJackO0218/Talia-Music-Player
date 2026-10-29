@@ -5,6 +5,7 @@ Configuration, Constants, Settings Storage, and Win32 Bindings for Talia Cyberpu
 import os
 import json
 import ctypes
+from ctypes import wintypes
 from PyQt6.QtGui import QColor
 
 # ==========================================================
@@ -101,9 +102,31 @@ user32 = ctypes.windll.user32
 try:
     GetWindowLong = user32.GetWindowLongPtrW
     SetWindowLong = user32.SetWindowLongPtrW
+    GetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int]
+    GetWindowLong.restype = ctypes.c_ssize_t
+    SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    SetWindowLong.restype = ctypes.c_ssize_t
 except AttributeError:
     GetWindowLong = user32.GetWindowLongW
     SetWindowLong = user32.SetWindowLongW
+    GetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int]
+    GetWindowLong.restype = ctypes.c_long
+    SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+    SetWindowLong.restype = ctypes.c_long
+
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND,
+    wintypes.HWND,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT
+]
+user32.SetWindowPos.restype = wintypes.BOOL
+
+user32.BringWindowToTop.argtypes = [wintypes.HWND]
+user32.BringWindowToTop.restype = wintypes.BOOL
 
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
