@@ -10,24 +10,22 @@ A transparent desktop audio visualizer with eye tracking, tactile controls, and 
 
 ---
 
-## Quick Install
+## 📥 Quick Download & Install
 
-### Prerequisites
-- **Windows 10 / 11** (64-bit)
-- **Python 3.10+** (Ensure **"Add python.exe to PATH"** is checked during installation)
+### Option A: 1-Click Portable App (Recommended - No Python or Git Needed)
+1. Download **[Talia-Windows-x64.zip](https://github.com/OJackO0218/Talia-Music-Player/releases/latest)** from the Releases page.
+2. Extract the folder anywhere.
+3. Double-click **`Talia.exe`** to launch immediately.
 
-### Setup
-1. **Clone or Download** this repository:
-   ```bash
-   git clone https://github.com/OJackO0218/Talia-Music-Player.git
-   cd Talia-Music-Player
-   ```
-2. **Double-click `install.bat`**:
-   - Installs dependencies (`requirements.txt`).
-   - Compiles native launcher (`Talia.exe`).
-   - Creates Desktop and Start Menu shortcuts.
-3. **Launch**:
-   - Run `Talia.exe` (automatically runs as Administrator) or use the Desktop shortcut.
+---
+
+### Option B: 1-Click Setup from ZIP / Source
+1. Click the green **Code** button at the top of this page -> **Download ZIP** (or `git clone`).
+2. Extract the ZIP and double-click **`install.bat`**:
+   - Automatically detects and installs official Python if not found.
+   - Installs required audio and graphics dependencies.
+   - Compiles native `Talia.exe` and creates Desktop and Start Menu shortcuts.
+3. Launch via Desktop shortcut or **`Talia.exe`**.
 
 ---
 

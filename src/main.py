@@ -35,9 +35,13 @@ def main():
             is_admin = False
 
         if not is_admin:
-            python_exe = sys.executable
-            script = os.path.abspath(__file__)
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, f'"{script}"', None, 1)
+            if getattr(sys, "frozen", False):
+                args = " ".join([f'"{a}"' for a in sys.argv[1:]])
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args, None, 1)
+            else:
+                python_exe = sys.executable
+                script = os.path.abspath(__file__)
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, f'"{script}"', None, 1)
             sys.exit(0)
 
     # Ensure only 1 instance of Talia runs at a time (prevents orphaned background instances)
@@ -89,8 +93,8 @@ def main():
     print("  - Click Talia 2x to Skip Song.")
     print("  - Click Talia 3x to Open / Show Controller Window.")
     print("  - Close Controller with [X] anytime (reopen with 3 clicks).")
-    print("  - Hold Talia for 1s & release to toggle Drag Mode.")
-    print("  - Hold Talia for 3s to Power Down & Exit (desaturates after 1s).")
+    print("  - Hold Talia for 0.7s & release to toggle Drag Mode.")
+    print("  - Hold Talia for 2s to Power Down & Exit.")
     print("  - Scroll wheel on Talia to adjust volume (eyes reflect saturation).")
     print("  - Press [F8] to toggle Move Talia mode (Lock / Reposition).")
     print("  - Press [F10] to toggle Desktop Audio (osu!, Spotify) vs Player.")

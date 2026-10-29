@@ -3,6 +3,7 @@ Configuration, Constants, Settings Storage, and Win32 Bindings for Talia Cyberpu
 """
 
 import os
+import sys
 import json
 import ctypes
 from ctypes import wintypes
@@ -11,11 +12,15 @@ from PyQt6.QtGui import QColor
 # ==========================================================
 # Paths & Directories (Resolves project root dynamically)
 # ==========================================================
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if os.path.basename(CURRENT_DIR).lower() in ("python code", "code", "src"):
-    PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(sys.executable))
+    CURRENT_DIR = PROJECT_ROOT
 else:
-    PROJECT_ROOT = CURRENT_DIR
+    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+    if os.path.basename(CURRENT_DIR).lower() in ("python code", "code", "src"):
+        PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+    else:
+        PROJECT_ROOT = CURRENT_DIR
 
 BASE_DIR = PROJECT_ROOT
 EYE_PARTS_DIR = os.path.join(PROJECT_ROOT, "assets", "eye_parts") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "eye_parts")) else os.path.join(PROJECT_ROOT, "eye_parts")
