@@ -28,6 +28,8 @@ DEFAULT_MUSIC_DIR = os.path.join(PROJECT_ROOT, "music")
 SETTINGS_FILE = os.path.join(PROJECT_ROOT, "settings.json")
 PNGS_DIR = os.path.join(PROJECT_ROOT, "assets", "icons") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons")) else os.path.join(PROJECT_ROOT, "PNGs")
 SOUNDS_DIR = os.path.join(PROJECT_ROOT, "assets", "sounds") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "sounds")) else os.path.join(PROJECT_ROOT, "sounds")
+LYRICS_CACHE_DIR = os.path.join(PROJECT_ROOT, "assets", "lyrics_cache")
+os.makedirs(LYRICS_CACHE_DIR, exist_ok=True)
 ICON_PATH = os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico")) else os.path.join(PROJECT_ROOT, "app_icon.ico")
 
 SUPPORTED_AUDIO_EXTS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus')
@@ -144,6 +146,7 @@ SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
 SWP_FRAMECHANGED = 0x0020
 
+VK_F7 = 0x76   # F7: Toggle Lyrics Overlay
 VK_F8 = 0x77   # F8: Toggle Move Talia mode
 VK_F9 = 0x78   # F9: Toggle Show/Hide overlay
 VK_F10 = 0x79  # F10: Toggle Audio Source Mode (Desktop vs Player)

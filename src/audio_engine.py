@@ -53,6 +53,7 @@ class CyberAudioEngine:
         self.desktop_thread = None
 
         # Playlist State
+        self.lyrics_manager = None
         self.folder_path = ""
         self.playlist = []
         self.current_index = -1
@@ -108,6 +109,9 @@ class CyberAudioEngine:
         finally:
             ctypes.windll.ole32.CoUninitialize()
 
+    def set_lyrics_manager(self, mgr):
+        self.lyrics_manager = mgr
+
     def set_folder(self, folder_path: str):
         """Sets the active playlist directory and refreshes tracks."""
         self.folder_path = folder_path
@@ -159,6 +163,9 @@ class CyberAudioEngine:
                 callback=self._audio_callback,
                 blocksize=1024
             )
+            if self.lyrics_manager:
+                self.lyrics_manager.load_track(file_path)
+
             if auto_play:
                 self.play()
             return True

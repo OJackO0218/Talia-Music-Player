@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 
 from config import (
-    user32, VK_F8, VK_F9, VK_F10, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
+    user32, VK_F7, VK_F8, VK_F9, VK_F10, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
     save_settings, PROJECT_ROOT, ICON_PATH
 )
 from audio_engine import CyberAudioEngine
@@ -43,12 +43,16 @@ def create_section_header(title: str) -> QWidget:
 class ControlPanel(QWidget):
     """The Cyberpunk HUD Controller with audio playback, tracklist, visualizer, and calibration."""
 
-    def __init__(self, overlay: OverlayWindow, audio_engine: CyberAudioEngine):
+    def __init__(self, overlay: OverlayWindow, audio_engine: CyberAudioEngine, lyrics_overlay=None):
         super().__init__()
         self.overlay = overlay
         self.overlay.panel = self
         self.audio_engine = audio_engine
+        self.lyrics_overlay = lyrics_overlay
+        if self.lyrics_overlay:
+            self.lyrics_overlay.panel = self
 
+        self.last_f7_state = False
         self.last_f8_state = False
         self.last_f9_state = False
         self.last_f10_state = False
@@ -293,6 +297,12 @@ class ControlPanel(QWidget):
         self.btn_audio_mode.clicked.connect(self.toggle_audio_mode)
         content_layout.addWidget(self.btn_audio_mode)
 
+        self.btn_lyrics = QPushButton("LYRICS: ACTIVE")
+        self.btn_lyrics.setObjectName("btnLyrics")
+        self.btn_lyrics.setStyleSheet("background-color: #2b1138; color: #e879f9; border: 1px solid #c084fc; font-weight: bold; font-size: 11px; padding: 8px 12px; letter-spacing: 0.8px;")
+        self.btn_lyrics.clicked.connect(self.toggle_lyrics)
+        content_layout.addWidget(self.btn_lyrics)
+
         # --- SECTION: PLAYBACK & VOLUME ---
         content_layout.addWidget(create_section_header("Playback & Volume"))
 
@@ -499,6 +509,12 @@ class ControlPanel(QWidget):
         bottom_bar.setStyleSheet("background-color: #10141e; border-top: 1px solid #2e3547; padding: 4px;")
         bottom_layout = QHBoxLayout(bottom_bar)
         bottom_layout.setContentsMargins(12, 6, 12, 6)
+
+        lbl_f7 = QLabel("[ F7 ] LYRICS")
+        lbl_f7.setStyleSheet("color: #e879f9; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
+        bottom_layout.addWidget(lbl_f7)
+
+        bottom_layout.addStretch()
 
         lbl_f8 = QLabel("[ F8 ] MOVE TALIA")
         lbl_f8.setStyleSheet("color: #38d9d9; font-weight: bold; font-size: 10px; font-family: 'Consolas', monospace;")
@@ -720,6 +736,11 @@ class ControlPanel(QWidget):
         print("[STATUS] Reloaded fresh images from eye_parts/ folder!")
 
     def check_hotkeys(self):
+        f7_down = bool(user32.GetAsyncKeyState(VK_F7) & 0x8000)
+        if f7_down and not self.last_f7_state:
+            self.toggle_lyrics()
+        self.last_f7_state = f7_down
+
         f8_down = bool(user32.GetAsyncKeyState(VK_F8) & 0x8000)
         if f8_down and not self.last_f8_state:
             self.toggle_move_talia()
@@ -735,6 +756,29 @@ class ControlPanel(QWidget):
             self.toggle_audio_mode()
         self.last_f10_state = f10_down
 
+    def toggle_lyrics(self):
+        if not self.lyrics_overlay:
+            return
+        self.lyrics_overlay.is_enabled = not self.lyrics_overlay.is_enabled
+        if self.lyrics_overlay.is_enabled:
+            self.lyrics_overlay.show()
+            self.lyrics_overlay.enforce_topmost()
+            print("[STATUS] Lyrics Overlay enabled.")
+        else:
+            self.lyrics_overlay.hide()
+            print("[STATUS] Lyrics Overlay disabled.")
+        self.update_lyrics_ui()
+
+    def update_lyrics_ui(self):
+        if not hasattr(self, "btn_lyrics") or not self.lyrics_overlay:
+            return
+        if self.lyrics_overlay.is_enabled:
+            self.btn_lyrics.setText("LYRICS: ACTIVE")
+            self.btn_lyrics.setStyleSheet("background-color: #2b1138; color: #e879f9; border: 1px solid #c084fc; font-weight: bold; font-size: 11px; padding: 8px 12px; letter-spacing: 0.8px;")
+        else:
+            self.btn_lyrics.setText("LYRICS: OFF")
+            self.btn_lyrics.setStyleSheet("background-color: #181318; color: #8b9cb3; border: 1px solid #33263a; font-weight: bold; font-size: 11px; padding: 8px 12px; letter-spacing: 0.8px;")
+
     def update_move_talia_ui(self):
         """Refreshes the Move Talia toggle button appearance to match current overlay state."""
         if self.overlay.move_talia_mode:
@@ -747,16 +791,23 @@ class ControlPanel(QWidget):
     def toggle_move_talia(self):
         new_state = not self.overlay.move_talia_mode
         self.overlay.set_move_talia_mode(new_state)
+        if self.lyrics_overlay:
+            self.lyrics_overlay.set_move_mode(new_state)
         self.update_move_talia_ui()
 
     def toggle_visibility(self):
         if self.overlay.isVisible():
             self.overlay.hide()
-            print("[STATUS] Overlay hidden.")
+            if self.lyrics_overlay:
+                self.lyrics_overlay.hide()
+            print("[STATUS] Overlay and lyrics hidden.")
         else:
             self.overlay.show()
             self.overlay.enforce_topmost()
-            print("[STATUS] Overlay visible.")
+            if self.lyrics_overlay and self.lyrics_overlay.is_enabled:
+                self.lyrics_overlay.show()
+                self.lyrics_overlay.enforce_topmost()
+            print("[STATUS] Overlay and lyrics visible.")
 
     # ==========================================================
     # Settings Persistence
@@ -777,7 +828,7 @@ class ControlPanel(QWidget):
         # NEVER save 0.0 opacity from an animated shutdown fade! Use slider value (clamped 0.20 to 1.0)
         user_opacity = max(0.20, min(1.0, self.slider_opacity.value() / 100.0))
 
-        return {
+        settings_dict = {
             "pos_x": pos_x,
             "pos_y": pos_y,
             "char_size": max(MIN_CHAR_SIZE, int(self.overlay.width())),
@@ -793,6 +844,11 @@ class ControlPanel(QWidget):
             "music_folder": str(self.audio_engine.folder_path),
             "shuffle": bool(self.audio_engine.shuffle)
         }
+        if self.lyrics_overlay:
+            settings_dict["lyrics_x"] = int(self.lyrics_overlay.pos().x())
+            settings_dict["lyrics_y"] = int(self.lyrics_overlay.pos().y())
+            settings_dict["show_lyrics"] = bool(self.lyrics_overlay.is_enabled)
+        return settings_dict
 
     def apply_settings(self, cfg: dict):
         """Applies loaded settings to the overlay and controls with generous boundary safety."""
@@ -855,6 +911,21 @@ class ControlPanel(QWidget):
         # 9. Shuffle
         if cfg.get("shuffle", False) != self.audio_engine.shuffle:
             self.toggle_shuffle()
+
+        # 10. Synced Lyrics Overlay Position & Visibility
+        if self.lyrics_overlay:
+            lx = int(cfg.get("lyrics_x", -1))
+            ly = int(cfg.get("lyrics_y", -1))
+            if 0 <= lx < screen.width() and 0 <= ly < screen.height():
+                self.lyrics_overlay.move(lx, ly)
+            show_lyrics = bool(cfg.get("show_lyrics", True))
+            self.lyrics_overlay.is_enabled = show_lyrics
+            if show_lyrics:
+                self.lyrics_overlay.show()
+                self.lyrics_overlay.enforce_topmost()
+            else:
+                self.lyrics_overlay.hide()
+            self.update_lyrics_ui()
 
         self.overlay.update()
 

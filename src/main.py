@@ -13,8 +13,10 @@ if CURRENT_DIR not in sys.path:
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
-from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH
+from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH, LYRICS_CACHE_DIR
 from audio_engine import CyberAudioEngine
+from lyrics_manager import LyricsManager
+from lyrics_overlay import LyricsOverlayWindow
 from overlay import OverlayWindow
 from controller import ControlPanel
 
@@ -61,19 +63,22 @@ def main():
     # Load persistent settings from settings.json
     saved_cfg = load_settings()
 
-    # Initialize audio playback engine
+    # Initialize audio playback engine and lyrics manager
     music_folder = saved_cfg.get("music_folder", DEFAULT_MUSIC_DIR)
+    lyrics_manager = LyricsManager(LYRICS_CACHE_DIR)
     audio_engine = CyberAudioEngine()
+    audio_engine.set_lyrics_manager(lyrics_manager)
     audio_engine.set_folder(music_folder)
 
-    # Initialize transparent Live2D character overlay
+    # Initialize transparent Live2D character overlay & synced lyrics overlay
     print("[2/4] Loading Talia character rig & visualizer surface...")
     overlay = OverlayWindow(audio_engine)
+    lyrics_overlay = LyricsOverlayWindow(audio_engine, lyrics_manager)
 
     # Initialize controller panel and apply saved layout/settings
     # Note: Controller panel starts closed/hidden as requested; open with 3 clicks on Talia!
     print("[3/4] Initializing Controller Panel & restoring saved settings...")
-    panel = ControlPanel(overlay, audio_engine)
+    panel = ControlPanel(overlay, audio_engine, lyrics_overlay)
     panel.apply_settings(saved_cfg)
 
     # Load first track into engine in paused state (no autoplay)
@@ -82,9 +87,12 @@ def main():
         audio_engine.load_file(audio_engine.playlist[0], auto_play=False)
         panel.sync_play_state()
 
-    # Show overlay and trigger snappy rise-up entrance from below with pop SFX
+    # Show overlays (Talia + Synced Lyrics)
     overlay.show()
     overlay.trigger_startup_entrance()
+    if lyrics_overlay.is_enabled:
+        lyrics_overlay.show()
+        lyrics_overlay.enforce_topmost()
 
     print("[4/4] Talia is ready!")
     print("\n=======================================================")
@@ -96,7 +104,8 @@ def main():
     print("  - Hold Talia for 0.7s & release to toggle Drag Mode.")
     print("  - Hold Talia for 2s to Power Down & Exit.")
     print("  - Scroll wheel on Talia to adjust volume (eyes reflect saturation).")
-    print("  - Press [F8] to toggle Move Talia mode (Lock / Reposition).")
+    print("  - Press [F7] to toggle Synced Lyrics Overlay.")
+    print("  - Press [F8] to toggle Move Mode (Reposition Talia & Lyrics).")
     print("  - Press [F10] to toggle Desktop Audio (osu!, Spotify) vs Player.")
     print("=======================================================\n")
 
