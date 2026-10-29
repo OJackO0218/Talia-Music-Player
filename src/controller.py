@@ -270,50 +270,6 @@ class ControlPanel(QWidget):
         root_layout.setSpacing(0)
 
         # -------------------------------------------------------------
-        # TOP HUD BAR (Anchored)
-        # -------------------------------------------------------------
-        top_hud = QWidget()
-        top_hud.setStyleSheet("background-color: #10141e; border-bottom: 1px solid #2e3547; padding: 6px 12px;")
-        top_hud_layout = QVBoxLayout(top_hud)
-        top_hud_layout.setContentsMargins(8, 6, 8, 6)
-        top_hud_layout.setSpacing(4)
-
-        # Category tabs matching Cyberpunk 2077 HUD
-        hbox_tabs = QHBoxLayout()
-        lbl_bracket_l = QLabel("[ 1 ]")
-        lbl_bracket_l.setStyleSheet("color: #38d9d9; font-weight: bold; font-family: monospace;")
-        hbox_tabs.addWidget(lbl_bracket_l)
-
-        lbl_tab_active = QLabel("TALIA HUD")
-        lbl_tab_active.setStyleSheet("color: #38d9d9; font-weight: bold; font-size: 12px; letter-spacing: 2px;")
-        hbox_tabs.addWidget(lbl_tab_active)
-
-        lbl_tab_mid1 = QLabel("AUDIO")
-        lbl_tab_mid1.setStyleSheet("color: #d94452; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
-        hbox_tabs.addWidget(lbl_tab_mid1)
-
-        lbl_tab_mid2 = QLabel("VISUALS")
-        lbl_tab_mid2.setStyleSheet("color: #d94452; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
-        hbox_tabs.addWidget(lbl_tab_mid2)
-
-        lbl_tab_mid3 = QLabel("CALIBRATION")
-        lbl_tab_mid3.setStyleSheet("color: #d94452; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
-        hbox_tabs.addWidget(lbl_tab_mid3)
-
-        hbox_tabs.addStretch()
-        lbl_bracket_r = QLabel("[ 3 ]")
-        lbl_bracket_r.setStyleSheet("color: #38d9d9; font-weight: bold; font-family: monospace;")
-        hbox_tabs.addWidget(lbl_bracket_r)
-
-        top_hud_layout.addLayout(hbox_tabs)
-
-        self.lbl_telemetry = QLabel("// WASAPI DIRECT LOOPBACK // ZERO-LATENCY FFT // 60 FPS")
-        self.lbl_telemetry.setStyleSheet("color: #72849c; font-size: 9px; font-family: 'Consolas', monospace; letter-spacing: 0.5px;")
-        top_hud_layout.addWidget(self.lbl_telemetry)
-
-        root_layout.addWidget(top_hud)
-
-        # -------------------------------------------------------------
         # SCROLLABLE CONTENT BODY (Resizable)
         # -------------------------------------------------------------
         scroll_area = QScrollArea()
