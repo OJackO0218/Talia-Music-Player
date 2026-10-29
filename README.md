@@ -42,12 +42,14 @@ A transparent desktop audio visualizer with eye tracking, tactile controls, and 
   - Opens the **Controller Settings Panel**.
 - **Holding Talia**:
   - **Hold for 0.7s**: Tactile button press unlocks **Drag Mode** to reposition or resize.
-  - **Hold for 2.5s**: Initiates power-down sequence and closes the application cleanly.
+  - **Hold for 2s**: Initiates power-down sequence and closes the application cleanly.
 
 ---
 
 ### 2. Volume & Eye Saturation
-- **Scroll Mouse Wheel on Talia (when Move Mode is OFF)**: Adjust volume in 5% increments:
+- **Scroll Mouse Wheel on Talia (when Move Mode is OFF)**:
+  - **Live / Desktop Audio Mode**: Adjusts laptop master system audio directly (native Windows volume HUD) while syncing eye saturation.
+  - **Built-in Player Mode**: Adjusts Talia local music playback volume.
   - **50% Volume**: Default eye saturation.
   - **Below 50%**: Eyes gradually desaturate toward grayscale (0% = mute).
   - **Above 50%**: Eyes hyper-saturate with a cyan neon glow.

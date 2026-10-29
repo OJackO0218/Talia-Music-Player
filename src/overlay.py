@@ -20,7 +20,7 @@ from config import (
     EYE_PARTS_DIR, SOUNDS_DIR, PNGS_DIR, CANVAS_BASE_SIZE, MOUTH_BOX_X, MOUTH_BOX_Y,
     MOUTH_BOX_W, MOUTH_BOX_H, DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY,
     DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW
+    user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW, VK_VOLUME_UP, VK_VOLUME_DOWN
 )
 from audio_engine import CyberAudioEngine
 from visualizer import CyberVisualizer
@@ -325,8 +325,8 @@ class OverlayWindow(QWidget):
             return
 
         elapsed = time.time() - self.press_time
-        if elapsed >= 2.5:
-            # Full 2.5 seconds held: Initiate 0.6s dramatic sinking power-down sequence!
+        if elapsed >= 2.0:
+            # Full 2.0 seconds held: Initiate 0.6s dramatic sinking power-down sequence!
             self.is_shutting_down = True
             self.shutdown_start_time = time.time()
             self.shutdown_start_pos = self.pos()
@@ -346,9 +346,9 @@ class OverlayWindow(QWidget):
                 if hasattr(self, "sound_btn") and self.sound_btn.isLoaded():
                     self.sound_btn.play()
 
-            # Between 0.7s and 2.5s: Desaturate the entire character towards grayscale
-            # If user releases anytime between 0.7s and 2.5s, Move Talia (Drag Mode) is toggled!
-            progress = (elapsed - 0.7) / 1.8  # 0.0 to 1.0 across the 1.8-second transition (from 0.7s to 2.5s)
+            # Between 0.7s and 2.0s: Desaturate the entire character towards grayscale
+            # If user releases anytime between 0.7s and 2.0s, Move Talia (Drag Mode) is toggled!
+            progress = (elapsed - 0.7) / 1.3  # 0.0 to 1.0 across the 1.3-second transition (from 0.7s to 2.0s)
             self.hold_saturation = max(0.0, 1.0 - progress)
             self._apply_pupil_saturation()
             self.update()
@@ -398,7 +398,7 @@ class OverlayWindow(QWidget):
 
     def close_application(self):
         """Powers down Talia, auto-saves persistent settings, and terminates application instantly."""
-        print("[SHUTDOWN] Talia powered down after 2.5s hold. Saving settings and exiting instantly...")
+        print("[SHUTDOWN] Talia powered down after 2.0s hold. Saving settings and exiting instantly...")
         if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
             self.sound_hold.stop()
         try:
@@ -610,17 +610,17 @@ class OverlayWindow(QWidget):
         t = time.time()
         if self.is_holding and not self.has_dragged:
             elapsed = t - self.press_time
-            if elapsed < 1.6:
+            if elapsed < 1.3:
                 # 0.0s to 1.6s: Gentle, subtle rocking (tilt +/- 0.7 to 1.4 deg, sway 2-4px)
-                progress = elapsed / 1.6
+                progress = elapsed / 1.3
                 rot_amp = (0.7 + progress * 0.7)
                 sway_amp = (2.0 + progress * 2.0) * (char_size / 850.0)
                 self.current_rotation = math.sin(t * 16.0) * rot_amp
                 self.current_shake_x = math.sin(t * 16.0 + 0.3) * sway_amp
                 self.current_shake_y = math.cos(t * 32.0) * (0.8 + progress * 0.8)
             else:
-                # 1.6s to 2.5s: Escalating rocking towards 2.5s shutdown
-                progress_hard = min(1.0, (elapsed - 1.6) / 0.9)
+                # 1.3s to 2.0s: Escalating rocking towards 2.0s shutdown
+                progress_hard = min(1.0, (elapsed - 1.3) / 0.7)
                 rot_amp = (1.4 + progress_hard * 4.0)
                 sway_amp = (4.0 + progress_hard * 12.0) * (char_size / 850.0)
                 self.current_rotation = math.sin(t * 26.0) * rot_amp
@@ -979,7 +979,7 @@ class OverlayWindow(QWidget):
                 event.accept()
                 return
 
-            if 0.7 <= elapsed < 2.5:
+            if 0.7 <= elapsed < 2.0:
                 # User held for 0.7+ seconds and let go: TOGGLE DRAG MODE!
                 self.hold_saturation = 1.0
                 self._apply_pupil_saturation()
@@ -1079,8 +1079,27 @@ class OverlayWindow(QWidget):
                 self.panel.slider_size.blockSignals(False)
             event.accept()
         else:
-            step = 0.05 if delta > 0 else -0.05
-            new_vol = max(0.0, min(1.0, round(self.current_volume + step, 2)))
-            self.set_volume(new_vol)
-            print(f"[ACTION] Volume adjusted: {int(new_vol * 100)}% (Eye saturation updated)")
-            event.accept()
+            if self.audio_engine.audio_mode == "desktop":
+                # Global / Live mode: scroll wheel changes laptop master audio!
+                vk = VK_VOLUME_UP if delta > 0 else VK_VOLUME_DOWN
+                user32.keybd_event(vk, 0, 0, 0)
+                user32.keybd_event(vk, 0, 2, 0)
+
+                # Step volume tracker for Talia pupil saturation & Controller panel UI
+                step = 0.04 if delta > 0 else -0.04
+                new_vol = max(0.0, min(1.0, round(self.current_volume + step, 2)))
+                self.current_volume = new_vol
+                self._apply_pupil_saturation()
+                if self.panel:
+                    self.panel.sync_volume(self.current_volume)
+                self.update()
+                dir_str = "UP (+)" if delta > 0 else "DOWN (-)"
+                print(f"[ACTION] Global Mode: Laptop audio {dir_str} (Talia eyes synced to {int(self.current_volume * 100)}%)")
+                event.accept()
+            else:
+                # Local player mode: scroll wheel changes Talia music playback volume
+                step = 0.05 if delta > 0 else -0.05
+                new_vol = max(0.0, min(1.0, round(self.current_volume + step, 2)))
+                self.set_volume(new_vol)
+                print(f"[ACTION] Player Mode: Talia volume adjusted: {int(new_vol * 100)}% (Eye saturation updated)")
+                event.accept()
