@@ -1,3 +1,4 @@
+import subprocess
 """
 Cyberpunk 2077 HUD Controller for Talia Music Player, Visualizer, and Calibration.
 Zero emojis, clean minimal typography, soft-contrast eye-friendly aesthetic, fully resizable.
@@ -991,12 +992,12 @@ class ControlPanel(QWidget):
 
     def on_vis_mode_changed(self, mode):
         self.overlay.visualizer.mode = mode
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.overlay._was_rendering = True
         self.overlay.update()
 
     def on_vis_theme_changed(self, theme):
         self.overlay.visualizer.current_theme_name = theme
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.overlay._was_rendering = True
         self.overlay.update()
 
     def on_eye_sens_changed(self, val):
@@ -1005,22 +1006,22 @@ class ControlPanel(QWidget):
 
     def on_size_change(self, val):
         self.overlay.resize(val, val)
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.overlay._was_rendering = True
         self.overlay.update()
 
     def on_opacity_change(self, val):
         self.overlay.opacity_val = val / 100.0
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.overlay._was_rendering = True
         self.overlay.update()
 
     def on_scanlines_toggled(self, checked):
         self.overlay.enable_scanlines = checked
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.overlay._was_rendering = True
         self.overlay.update()
 
     def on_bass_pop_toggled(self, checked):
         self.overlay.enable_bass_pop = checked
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.overlay._was_rendering = True
         self.overlay.update()
 
     def on_widescreen_toggled(self, checked):
@@ -1033,7 +1034,7 @@ class ControlPanel(QWidget):
         else:
             size = self.slider_size.value()
             self.overlay.resize(size, size)
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.overlay._was_rendering = True
         self.overlay.update()
 
     def reload_art(self):

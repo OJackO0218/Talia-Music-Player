@@ -212,9 +212,14 @@ class CyberVisualizer:
 
     def _draw_dual_mirror(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
         """Symmetrical dual-sided equalizer extending outward from the center."""
+        cx = rect.center().x()
+        # Center divider line (drawn in all states for HUD aesthetic)
+        painter.setPen(QPen(theme["bar_top"], 1))
+        painter.drawLine(cx, rect.top() + 8, cx, rect.bottom() - 8)
+
         if np.max(bars) < 0.002 and np.max(peaks) < 0.002:
             return
-        cx = rect.center().x()
+
         base_y = rect.bottom() - 10
         max_h = rect.height() - 28
         half_bars = len(bars) // 2
@@ -234,7 +239,3 @@ class CyberVisualizer:
             # Left side (mirrored)
             lx = cx - 8 - (i + 1) * (bar_w + gap)
             painter.fillRect(lx, base_y - h, bar_w, h, col)
-
-        # Center divider line
-        painter.setPen(QPen(theme["bar_top"], 1))
-        painter.drawLine(cx, rect.top() + 8, cx, rect.bottom() - 8)

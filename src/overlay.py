@@ -11,7 +11,7 @@ from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QPoint, QPointF, QTimer, QRect, QRectF, QUrl
 from PyQt6.QtGui import (
-    QPixmap, QPainter, QColor, QPen, QImage, QCursor, QRadialGradient
+    QPixmap, QPainter, QColor, QPen, QImage, QCursor, QRadialGradient, QBrush
 )
 from PyQt6.QtMultimedia import QSoundEffect
 
@@ -172,7 +172,6 @@ class OverlayWindow(QWidget):
         self._cached_scaled_mute = QPixmap()
 
         # Hardware-accelerated scanline pattern brush (single blit replaces 40+ drawLine calls)
-        from PyQt6.QtGui import QBrush
         scanline_pm = QPixmap(1, 3)
         scanline_pm.fill(QColor(0, 0, 0, 0))
         p_sl = QPainter(scanline_pm)
