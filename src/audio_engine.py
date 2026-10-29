@@ -59,6 +59,7 @@ class CyberAudioEngine:
         self.current_index = -1
         self.shuffle = False
         self.track_finished = False
+        self.queue = []
 
     def set_audio_mode(self, mode: str):
         """Switches between 'player' (local playlist files) and 'desktop' (Windows audio loopback)."""
@@ -117,19 +118,59 @@ class CyberAudioEngine:
         self.folder_path = folder_path
         self.refresh_playlist()
 
+    def add_to_queue(self, track_path: str) -> bool:
+        """Appends a track to the upcoming playback queue."""
+        if os.path.exists(track_path):
+            self.queue.append(os.path.normpath(track_path))
+            return True
+        return False
+
+    def add_to_queue_next(self, track_path: str) -> bool:
+        """Inserts a track at the front of the queue to play next."""
+        if os.path.exists(track_path):
+            self.queue.insert(0, os.path.normpath(track_path))
+            return True
+        return False
+
+    def remove_from_queue(self, index: int):
+        """Removes a queued track by its index and returns its path."""
+        if 0 <= index < len(self.queue):
+            return self.queue.pop(index)
+        return None
+
+    def clear_queue(self):
+        """Clears all upcoming queued songs."""
+        self.queue.clear()
+
     def refresh_playlist(self):
-        """Scans the folder for supported audio files and sorts alphabetically."""
-        if not os.path.exists(self.folder_path):
+        """Recursively scans the folder and all subfolders (Foobar2000 structure) for supported audio files."""
+        if not self.folder_path or not os.path.exists(self.folder_path):
             self.playlist = []
             return
+
+        current_track = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
+
         files = []
-        for f in os.listdir(self.folder_path):
-            if f.lower().endswith(SUPPORTED_AUDIO_EXTS):
-                files.append(os.path.join(self.folder_path, f))
-        files.sort()
+        for root, dirs, filenames in os.walk(self.folder_path):
+            dirs.sort()  # Natural alphabetical subfolder traversal
+            for f in sorted(filenames):
+                if f.lower().endswith(SUPPORTED_AUDIO_EXTS):
+                    files.append(os.path.normpath(os.path.join(root, f)))
+
+        # Group root files and subfolders neatly
+        try:
+            files.sort(key=lambda p: os.path.relpath(p, self.folder_path).lower())
+        except Exception:
+            files.sort()
+
         self.playlist = files
-        if self.playlist and self.current_index < 0:
-            self.current_index = 0
+        if current_track and current_track in files:
+            self.current_index = files.index(current_track)
+        elif self.playlist:
+            if self.current_index < 0 or self.current_index >= len(self.playlist):
+                self.current_index = 0
+        else:
+            self.current_index = -1
 
     def play_index(self, idx: int) -> bool:
         """Loads and plays the track at the specified index."""
@@ -227,6 +268,18 @@ class CyberAudioEngine:
             print("[DESKTOP AUDIO] Sent Next Track command to system.")
             return
 
+        if not self.playlist and not self.queue:
+            return
+
+        # 1. Spotify Queue Priority: If queue has items, play next in queue!
+        if self.queue:
+            next_path = self.queue.pop(0)
+            if next_path in self.playlist:
+                self.current_index = self.playlist.index(next_path)
+            self.load_file(next_path, auto_play=True)
+            return
+
+        # 2. Normal sequential / shuffle playback
         if not self.playlist:
             return
         if self.shuffle:
@@ -269,7 +322,7 @@ class CyberAudioEngine:
 
     def get_current_track_title(self) -> str:
         if self.audio_mode == "desktop":
-            return "Desktop Audio (osu!, Spotify, Games)"
+            return "Desktop Audio"
         if 0 <= self.current_index < len(self.playlist):
             return os.path.basename(self.playlist[self.current_index])
         return "No Track Loaded"

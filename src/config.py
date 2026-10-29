@@ -38,7 +38,7 @@ SUPPORTED_AUDIO_EXTS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus')
 # Window & Sizing Constants
 # ==========================================================
 CANVAS_BASE_SIZE = 591
-DEFAULT_OVERLAY_SIZE = 850
+DEFAULT_OVERLAY_SIZE = 260
 MIN_CHAR_SIZE = 150
 MAX_CHAR_SIZE = 3840
 
@@ -60,7 +60,7 @@ DEFAULT_ORIGIN_RY = 106
 DEFAULT_SETTINGS = {
     "pos_x": -1,
     "pos_y": -1,
-    "char_size": 850,
+    "char_size": DEFAULT_OVERLAY_SIZE,
     "eye_sensitivity": 1.0,
     "opacity": 1.0,
     "scanlines": True,
@@ -70,6 +70,10 @@ DEFAULT_SETTINGS = {
     "volume": 0.85,
     "music_folder": DEFAULT_MUSIC_DIR,
     "shuffle": False,
+    "lyrics_enabled": True,
+    "lyrics_color": "#e879f9",
+    "lyrics_word_glow": True,
+    "show_startup_guide": True,
     "bass_pop": True,
     "audio_mode": "player"  # "player" = Built-in Playlist, "desktop" = Desktop Audio (osu!, Spotify, Games)
 }
@@ -137,6 +141,7 @@ user32.BringWindowToTop.restype = wintypes.BOOL
 
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
+WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOPMOST = 0x00000008
 
 HWND_TOPMOST = -1

@@ -74,6 +74,7 @@ def main():
     print("[2/4] Loading Talia character rig & visualizer surface...")
     overlay = OverlayWindow(audio_engine)
     lyrics_overlay = LyricsOverlayWindow(audio_engine, lyrics_manager)
+    overlay.lyrics_overlay = lyrics_overlay
 
     # Initialize controller panel and apply saved layout/settings
     # Note: Controller panel starts closed/hidden as requested; open with 3 clicks on Talia!
@@ -94,19 +95,23 @@ def main():
         lyrics_overlay.show()
         lyrics_overlay.enforce_topmost()
 
+    # Show startup controls & shortcuts guide if enabled
+    if saved_cfg.get("show_startup_guide", True):
+        panel.show_guide_dialog()
+
     print("[4/4] Talia is ready!")
     print("\n=======================================================")
     print("  TALIA CYBERPUNK AUDIO VISUALIZER")
     print("  - Click Talia 1x to Play / Pause.")
-    print("  - Click Talia 2x to Skip Song.")
+    print("  - Click Talia 2x on Right to Skip / Left to Rewind.")
     print("  - Click Talia 3x to Open / Show Controller Window.")
     print("  - Close Controller with [X] anytime (reopen with 3 clicks).")
-    print("  - Hold Talia for 0.7s & release to toggle Drag Mode.")
+    print("  - Hold Talia for 0.7s & release to toggle Move Mode (Talia & Lyrics).")
     print("  - Hold Talia for 2s to Power Down & Exit.")
-    print("  - Scroll wheel on Talia to adjust volume (eyes reflect saturation).")
+    print("  - Scroll wheel on Talia to adjust volume (or resize in Move Mode).")
     print("  - Press [F7] to toggle Synced Lyrics Overlay.")
-    print("  - Press [F8] to toggle Move Mode (Reposition Talia & Lyrics).")
-    print("  - Press [F10] to toggle Desktop Audio (osu!, Spotify) vs Player.")
+    print("  - Press [F8] to toggle Move Mode.")
+    print("  - Press [F10] to switch Desktop Mode vs Local Player.")
     print("=======================================================\n")
 
     sys.exit(app.exec())

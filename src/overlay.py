@@ -16,6 +16,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtMultimedia import QSoundEffect
 
 from config import (
+    DEFAULT_OVERLAY_SIZE,
     EYE_PARTS_DIR, SOUNDS_DIR, PNGS_DIR, CANVAS_BASE_SIZE, MOUTH_BOX_X, MOUTH_BOX_Y,
     MOUTH_BOX_W, MOUTH_BOX_H, DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY,
     DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
@@ -448,9 +449,9 @@ class OverlayWindow(QWidget):
 
     def init_position(self):
         screen = QApplication.primaryScreen().geometry()
-        init_size = min(screen.height() - 60, 960)
+        init_size = min(DEFAULT_OVERLAY_SIZE, 300)
         self.resize(init_size, init_size)
-        self.move((screen.width() - init_size) // 2, (screen.height() - init_size) // 2)
+        self.move(screen.width() - init_size - 40, screen.height() - init_size - 80)
         self.raise_()
         self.enforce_topmost()
 
@@ -471,6 +472,10 @@ class OverlayWindow(QWidget):
         self.move_talia_mode = enabled
         if self.panel and hasattr(self.panel, "update_move_talia_ui"):
             self.panel.update_move_talia_ui()
+        if hasattr(self, "lyrics_overlay") and self.lyrics_overlay:
+            self.lyrics_overlay.set_move_mode(enabled)
+        elif self.panel and hasattr(self.panel, "lyrics_overlay") and self.panel.lyrics_overlay:
+            self.panel.lyrics_overlay.set_move_mode(enabled)
         self.update()
 
     def trigger_startup_entrance(self):
@@ -1069,6 +1074,7 @@ class OverlayWindow(QWidget):
                 # Short tap/click: count for 1x, 2x, 3x multi-click
                 if self.hold_saturation < 1.0:
                     self._start_restore_color_animation()
+                self.last_click_pos = event.position().toPoint()
                 self._handle_click()
             else:
                 # Held between 0.38s and 0.7s: restore color if needed
@@ -1086,8 +1092,12 @@ class OverlayWindow(QWidget):
             self._trigger_click_feedback(color=QColor(255, 255, 255), rot_degrees=-2.2, alpha=0.65)
             self.multi_click_timer.start(340)
         elif self.click_count == 2:
-            # 2 Clicks: Instant CRIMSON RED flash (holds 0.24s) + osu! lazer tilt bounce!
-            self._trigger_click_feedback(color=QColor(255, 30, 80), rot_degrees=2.5, alpha=0.68)
+            # 2 Clicks: Right side = Cyan flash (Skip), Left side = Crimson flash (Rewind)
+            click_x = getattr(self, "last_click_pos", QPoint(self.width() // 2, 0)).x()
+            is_right = click_x >= self.width() / 2.0
+            color = QColor(0, 240, 255) if is_right else QColor(255, 30, 80)
+            rot = 2.8 if is_right else -2.8
+            self._trigger_click_feedback(color=color, rot_degrees=rot, alpha=0.70)
             self.multi_click_timer.start(340)
         elif self.click_count >= 3:
             # 3 Clicks: Instant GOLDEN YELLOW flash (holds 0.24s) + osu! lazer tilt bounce & open Controller!
@@ -1121,16 +1131,30 @@ class OverlayWindow(QWidget):
         print("[ACTION] 1 Click on Talia: Play/Pause toggled.")
 
     def _trigger_double_click(self):
-        """2 Clicks on Talia: Skip to Next Track."""
-        if self.audio_engine.audio_mode == "desktop":
+        """2 Clicks on Talia: Double tap right side = Next track, left side = Rewind."""
+        click_x = getattr(self, "last_click_pos", QPoint(self.width() // 2, 0)).x()
+        is_right = click_x >= self.width() / 2.0
+
+        if is_right:
+            if self.audio_engine.audio_mode == "desktop":
+                self.audio_engine.next_track()
+                return
+            if not self.audio_engine.playlist:
+                return
             self.audio_engine.next_track()
-            return
-        if not self.audio_engine.playlist:
-            return
-        self.audio_engine.next_track()
-        if self.panel:
-            self.panel.sync_play_state()
-        print("[ACTION] 2 Clicks on Talia: Skipped to Next Song.")
+            if self.panel:
+                self.panel.sync_play_state()
+            print("[ACTION] Double Click RIGHT on Talia: Next Track.")
+        else:
+            if self.audio_engine.audio_mode == "desktop":
+                self.audio_engine.prev_track()
+                return
+            if not self.audio_engine.playlist:
+                return
+            self.audio_engine.prev_track()
+            if self.panel:
+                self.panel.sync_play_state()
+            print("[ACTION] Double Click LEFT on Talia: Previous Track.")
 
     def _trigger_triple_click(self):
         """3 Clicks on Talia: Open / Show Controller Panel."""

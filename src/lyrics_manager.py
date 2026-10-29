@@ -179,14 +179,14 @@ class LyricsManager:
                 if self.current_track_path == track_path:
                     self.is_loading = False
 
-    def get_current_line(self, current_time: float) -> Tuple[int, str, float]:
+    def get_current_line_info(self, current_time: float) -> Tuple[int, str, float, float]:
         """
-        Returns (line_index, text, time_since_line_start).
-        If before the first line or no lyrics, returns (-1, "", 0.0).
+        Returns (line_index, text, time_since_line_start, line_duration).
+        If before the first line or no lyrics, returns (-1, "", 0.0, 0.0).
         """
         with self.lock:
             if not self.lines:
-                return -1, "", 0.0
+                return -1, "", 0.0, 0.0
 
             # Find the active line index: largest timestamp <= current_time
             idx = -1
@@ -197,19 +197,28 @@ class LyricsManager:
                     break
 
             if idx == -1:
-                return -1, "", 0.0
+                return -1, "", 0.0, 0.0
 
             ts, text = self.lines[idx]
             time_into_line = current_time - ts
 
-            # Check if this line has ended (gap to next line > 6.5s or empty line)
+            # Calculate active duration to next line
             if idx + 1 < len(self.lines):
                 next_ts = self.lines[idx + 1][0]
-                if current_time >= next_ts:
-                    return idx, text, time_into_line
-                # If there is a long instrumental silence gap (> 5.5s), fade out after 4.5s
-                gap = next_ts - ts
+                gap = max(0.5, next_ts - ts)
+                # Vocal singing duration: typically 80% of gap or estimated by word count
+                word_count = max(1, len(text.split()))
+                est_dur = max(2.0, word_count * 0.42)
+                singing_dur = min(gap * 0.85, est_dur)
                 if gap > 5.5 and time_into_line > 4.5:
-                    return -1, "", 0.0
+                    return -1, "", 0.0, 0.0
+            else:
+                word_count = max(1, len(text.split()))
+                singing_dur = max(2.5, word_count * 0.45)
 
-            return idx, text, time_into_line
+            return idx, text, time_into_line, singing_dur
+
+    def get_current_line(self, current_time: float) -> Tuple[int, str, float]:
+        """Backwards-compatible helper returning (line_index, text, time_into_line)."""
+        idx, text, time_into, _ = self.get_current_line_info(current_time)
+        return idx, text, time_into
