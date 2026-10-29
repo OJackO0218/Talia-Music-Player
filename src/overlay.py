@@ -938,15 +938,15 @@ class OverlayWindow(QWidget):
             painter.fillRect(char_rect, fc)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
-        # 10px White Outline Outside Talia on Hover (crisp outer perimeter, zero outline on mouth)
+        # 5px White Outline Outside Talia on Hover (crisp outer perimeter, zero outline on mouth)
         if self.hover_outline_alpha > 0.005:
             painter.save()
             painter.setOpacity(self.opacity_val * self.hover_outline_alpha * 0.90)
-            pen = QPen(QColor(255, 255, 255, 255), 10.0)
+            pen = QPen(QColor(255, 255, 255, 255), 5.0)
             pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            outline_rect = QRectF(char_x - 5.0, char_y - 5.0, char_size + 10.0, char_size + 10.0)
+            outline_rect = QRectF(char_x - 2.5, char_y - 2.5, char_size + 5.0, char_size + 5.0)
             painter.drawRect(outline_rect)
             painter.restore()
 
