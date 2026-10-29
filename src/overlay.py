@@ -221,8 +221,8 @@ class OverlayWindow(QWidget):
         qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
         self.talia_sprite_gray = QPixmap.fromImage(qimg_gray.copy())
 
-        # Subtle White Outline Mask for hover feedback (small, clean, 1px contour)
-        dilated_a = a.filter(ImageFilter.MaxFilter(3))
+        # 10px White Outline Mask for hover feedback
+        dilated_a = a.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(0.8))
         white_sil = Image.new("RGBA", (591, 591), (255, 255, 255, 255))
         white_sil.putalpha(dilated_a)
         white_sil_np = np.array(white_sil)
@@ -903,9 +903,9 @@ class OverlayWindow(QWidget):
         # ==========================================================
         # LAYER 1: TALIA MAIN SPRITE (Front Layer - Frames Mouth & Eyes)
         # ==========================================================
-        # Subtle White Outline on hover (small, not very noticeable, peeks 1px around silhouette)
+        # 10px White Outline on hover
         if self.hover_outline_alpha > 0.005 and not self._cached_scaled_talia_outline.isNull():
-            painter.setOpacity(self.opacity_val * self.hover_outline_alpha * 0.65)
+            painter.setOpacity(self.opacity_val * self.hover_outline_alpha * 0.90)
             painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_outline)
             painter.setOpacity(self.opacity_val)
 
