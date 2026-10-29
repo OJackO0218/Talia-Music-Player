@@ -7,7 +7,7 @@ import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
     QCheckBox, QPushButton, QFileDialog, QComboBox,
-    QListWidget, QListWidgetItem, QScrollArea, QFrame
+    QListWidget, QListWidgetItem, QScrollArea, QFrame, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
@@ -802,13 +802,24 @@ class ControlPanel(QWidget):
     # Settings Persistence
     # ==========================================================
     def get_current_settings_dict(self) -> dict:
-        """Gathers all current configuration into a dictionary."""
+        """Gathers all current configuration into a dictionary, protecting against shutdown states."""
+        # Use pre-shutdown coordinates if currently in a sinking shutdown sequence
+        if getattr(self.overlay, "is_shutting_down", False) and hasattr(self.overlay, "shutdown_start_pos"):
+            pos_x = int(self.overlay.shutdown_start_pos.x())
+            pos_y = int(self.overlay.shutdown_start_pos.y())
+        else:
+            pos_x = int(self.overlay.pos().x())
+            pos_y = int(self.overlay.pos().y())
+
+        # NEVER save 0.0 opacity from an animated shutdown fade! Use slider value (clamped 0.20 to 1.0)
+        user_opacity = max(0.20, min(1.0, self.slider_opacity.value() / 100.0))
+
         return {
-            "pos_x": int(self.overlay.pos().x()),
-            "pos_y": int(self.overlay.pos().y()),
-            "char_size": int(self.overlay.width()),
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+            "char_size": max(MIN_CHAR_SIZE, int(self.overlay.width())),
             "eye_sensitivity": round(float(self.overlay.eye_sensitivity), 2),
-            "opacity": round(float(self.overlay.opacity_val), 2),
+            "opacity": round(float(user_opacity), 2),
             "scanlines": bool(self.overlay.enable_scanlines),
             "bass_pop": bool(self.overlay.enable_bass_pop),
             "widescreen": bool(self.overlay.use_widescreen),
@@ -821,27 +832,44 @@ class ControlPanel(QWidget):
         }
 
     def apply_settings(self, cfg: dict):
-        """Applies loaded settings to the overlay and controls."""
-        size = cfg.get("char_size", self.overlay.width())
+        """Applies loaded settings to the overlay and controls with screen-boundary safety."""
+        # 1. Size
+        size = int(cfg.get("char_size", self.overlay.width()))
+        if size < 200 or size > MAX_CHAR_SIZE:
+            size = min(960, max(450, size))
         self.slider_size.setValue(size)
         self.overlay.resize(size, size)
 
-        pos_x = cfg.get("pos_x", -1)
-        pos_y = cfg.get("pos_y", -1)
-        if pos_x >= 0 and pos_y >= 0:
+        # 2. Position (ensure it is within visible screen bounds, never sunk below taskbar)
+        screen = QApplication.primaryScreen().geometry()
+        pos_x = int(cfg.get("pos_x", -1))
+        pos_y = int(cfg.get("pos_y", -1))
+        if 0 <= pos_x <= (screen.width() - 80) and 0 <= pos_y <= (screen.height() - 120):
             self.overlay.move(pos_x, pos_y)
+        else:
+            # Fallback to visible position at lower-right above taskbar
+            def_x = max(20, screen.width() - size - 40)
+            def_y = max(20, screen.height() - size - 80)
+            self.overlay.move(def_x, def_y)
 
+        # 3. Eye Sensitivity
         sens = cfg.get("eye_sensitivity", 1.0)
         self.slider_eye_sens.setValue(int(sens * 100))
 
-        opacity = cfg.get("opacity", 1.0)
-        self.slider_opacity.setValue(int(opacity * 100))
+        # 4. Opacity (GUARANTEE >= 0.20 so Talia can NEVER be invisible)
+        raw_op = float(cfg.get("opacity", 1.0))
+        if raw_op < 0.20:
+            raw_op = 1.0
+        self.slider_opacity.setValue(int(raw_op * 100))
+        self.overlay.opacity_val = raw_op
 
+        # 5. Features
         self.chk_scanlines.setChecked(cfg.get("scanlines", True))
         self.chk_bass_pop.setChecked(cfg.get("bass_pop", True))
         self.overlay.enable_bass_pop = cfg.get("bass_pop", True)
         self.chk_widescreen.setChecked(cfg.get("widescreen", False))
 
+        # 6. Visualizer
         vis_mode = cfg.get("visualizer_mode", "Cyber Bars")
         if vis_mode in ["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"]:
             self.combo_mode.setCurrentText(vis_mode)
@@ -850,14 +878,17 @@ class ControlPanel(QWidget):
         if palette in COLOR_THEMES:
             self.combo_theme.setCurrentText(palette)
 
+        # 7. Volume
         vol = cfg.get("volume", 0.85)
         self.sync_volume(vol)
         self.overlay.set_volume(vol)
 
+        # 8. Audio Mode
         audio_mode = cfg.get("audio_mode", "player")
         if audio_mode in ("player", "desktop"):
             self.set_audio_mode(audio_mode)
 
+        # 9. Shuffle
         if cfg.get("shuffle", False) != self.audio_engine.shuffle:
             self.toggle_shuffle()
 
