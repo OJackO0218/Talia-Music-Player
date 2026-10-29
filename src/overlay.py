@@ -174,8 +174,6 @@ class OverlayWindow(QWidget):
         self._last_scaled_size = -1
         self._cached_scaled_talia = QPixmap()
         self._cached_scaled_talia_gray = QPixmap()
-        self._cached_scaled_talia_outline = QPixmap()
-        self.talia_outline = QPixmap()
         self._cached_scaled_whites = QPixmap()
         self._cached_scaled_pupil_l = QPixmap()
         self._cached_scaled_pupil_r = QPixmap()
@@ -221,13 +219,7 @@ class OverlayWindow(QWidget):
         qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
         self.talia_sprite_gray = QPixmap.fromImage(qimg_gray.copy())
 
-        # 10px White Outline Mask for hover feedback
-        dilated_a = a.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(0.8))
-        white_sil = Image.new("RGBA", (591, 591), (255, 255, 255, 255))
-        white_sil.putalpha(dilated_a)
-        white_sil_np = np.array(white_sil)
-        qimg_outline = QImage(white_sil_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
-        self.talia_outline = QPixmap.fromImage(qimg_outline.copy())
+
 
         # Layer 3: Eye Whites (Back)
         self.whites = QPixmap(p2_path)
@@ -532,12 +524,13 @@ class OverlayWindow(QWidget):
         cursor_pt = QCursor.pos()
         win_pos = self.mapToGlobal(QPoint(0, 0))
 
+        MARGIN = 16
         if self.use_widescreen:
-            char_size = self.height()
+            char_size = self.height() - 2 * MARGIN
             char_offset_x = (self.width() - char_size) // 2
-            char_offset_y = 0
+            char_offset_y = MARGIN
         else:
-            char_size = min(self.width(), self.height())
+            char_size = min(self.width(), self.height()) - 2 * MARGIN
             char_offset_x = (self.width() - char_size) // 2
             char_offset_y = (self.height() - char_size) // 2
 
@@ -703,11 +696,7 @@ class OverlayWindow(QWidget):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
-        self._cached_scaled_talia_outline = self.talia_outline.scaled(
-            char_size, char_size,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
+
 
         w_l = max(1, int(self.pupil_l.width() * scale))
         h_l = max(1, int(self.pupil_l.height() * scale))
@@ -731,10 +720,11 @@ class OverlayWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.setOpacity(self.opacity_val)
 
+        MARGIN = 16
         if self.use_widescreen:
-            char_size = self.height()
+            char_size = self.height() - 2 * MARGIN
             char_x = (self.width() - char_size) // 2
-            char_y = 0
+            char_y = MARGIN
             scaled_wide = self.talia_wide.scaled(
                 self.width(), self.height(),
                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
@@ -742,7 +732,7 @@ class OverlayWindow(QWidget):
             )
             painter.drawPixmap(0, 0, scaled_wide)
         else:
-            char_size = min(self.width(), self.height())
+            char_size = min(self.width(), self.height()) - 2 * MARGIN
             char_x = (self.width() - char_size) // 2
             char_y = (self.height() - char_size) // 2
 
@@ -903,11 +893,7 @@ class OverlayWindow(QWidget):
         # ==========================================================
         # LAYER 1: TALIA MAIN SPRITE (Front Layer - Frames Mouth & Eyes)
         # ==========================================================
-        # 10px White Outline on hover
-        if self.hover_outline_alpha > 0.005 and not self._cached_scaled_talia_outline.isNull():
-            painter.setOpacity(self.opacity_val * self.hover_outline_alpha * 0.90)
-            painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_outline)
-            painter.setOpacity(self.opacity_val)
+
 
         if self.hold_saturation < 1.0:
             # Powering down: Draw grayscale sprite base underneath, color sprite on top with fading opacity
@@ -952,6 +938,18 @@ class OverlayWindow(QWidget):
             painter.fillRect(char_rect, fc)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
+        # 10px White Outline Outside Talia on Hover (crisp outer perimeter, zero outline on mouth)
+        if self.hover_outline_alpha > 0.005:
+            painter.save()
+            painter.setOpacity(self.opacity_val * self.hover_outline_alpha * 0.90)
+            pen = QPen(QColor(255, 255, 255, 255), 10.0)
+            pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            outline_rect = QRectF(char_x - 5.0, char_y - 5.0, char_size + 10.0, char_size + 10.0)
+            painter.drawRect(outline_rect)
+            painter.restore()
+
         # Restore painter matrix transform
         painter.restore()
 
@@ -962,7 +960,7 @@ class OverlayWindow(QWidget):
             painter.setOpacity(0.85)
             border_pen = QPen(QColor(0, 240, 255, 200), 2, Qt.PenStyle.DashLine)
             painter.setPen(border_pen)
-            painter.drawRect(1, 1, self.width() - 2, self.height() - 2)
+            painter.drawRect(char_x - 1, char_y - 1, char_size + 2, char_size + 2)
 
     def mousePressEvent(self, event):
         if self.is_shutting_down:
