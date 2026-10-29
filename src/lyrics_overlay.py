@@ -70,6 +70,11 @@ class LyricsOverlayWindow(QWidget):
         # By default, lyrics are 100% click-through so they never block games or apps
         self.set_click_through(True)
 
+        # Dynamic sleep dirty-check & font metric layout cache
+        self._was_rendering = False
+        self._cached_layout_key = None
+        self._cached_layout_data = None
+
         # 60 FPS animation & sync tick timer
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._sync_and_animate_tick)
@@ -208,12 +213,26 @@ class LyricsOverlayWindow(QWidget):
         else:
             self.glow_flash = 0.0
 
-        # Target opacity
+        # Target opacity with snap-to-settle
         has_text = bool(self.displayed_text)
         target_opacity = 1.0 if has_text else 0.0
+        opacity_diff = abs(target_opacity - self.line_opacity)
         self.line_opacity += (target_opacity - self.line_opacity) * 0.18
+        if opacity_diff < 0.005:
+            self.line_opacity = target_opacity
 
-        self.update()
+        # Dynamic sleep dirty-check: do NOT call self.update() when nothing is visible or changing
+        is_fading = opacity_diff > 0.005
+        is_animating = (self.pop_progress < 1.0) or (self.glow_flash > 0.005) or is_fading
+        is_singing = getattr(self, "word_glow", True) and has_text and (self.line_opacity > 0.01) and (self.audio_engine.audio_mode == "player" and self.audio_engine.is_playing)
+        needs_update = self.move_mode or is_animating or is_singing or (has_text and self.line_opacity > 0.01 and is_fading)
+
+        if needs_update:
+            self.update()
+            self._was_rendering = True
+        elif getattr(self, "_was_rendering", False):
+            self.update()  # One final settle update
+            self._was_rendering = False
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -287,18 +306,24 @@ class LyricsOverlayWindow(QWidget):
         # Render Spotify-style progressive word-by-word lighting OR full-line mode
         if getattr(self, "word_glow", True) and not self.move_mode:
             try:
-                words = [w for w in text_to_draw.split() if w]
-                if not words:
-                    words = [text_to_draw]
-                num_words = len(words)
-                space_w = metrics.horizontalAdvance(" ")
-                word_widths = [metrics.horizontalAdvance(w) for w in words]
-                total_w = sum(word_widths) + space_w * max(0, num_words - 1)
-                start_x = (self.width() - total_w) / 2.0
-                baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
+                cache_key = (text_to_draw, self.width(), self.height(), font.pointSize())
+                if getattr(self, "_cached_layout_key", None) != cache_key:
+                    words = [w for w in text_to_draw.split() if w]
+                    if not words:
+                        words = [text_to_draw]
+                    num_words = len(words)
+                    space_w = metrics.horizontalAdvance(" ")
+                    word_widths = [metrics.horizontalAdvance(w) for w in words]
+                    total_w = sum(word_widths) + space_w * max(0, num_words - 1)
+                    start_x = (self.width() - total_w) / 2.0
+                    baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
+                    weights = [max(2, len(w.strip(',.!?\"\''))) for w in words]
+                    total_weight = max(1.0, float(sum(weights)))
+                    self._cached_layout_key = cache_key
+                    self._cached_layout_data = (words, word_widths, space_w, total_w, start_x, baseline_y, weights, total_weight)
+                else:
+                    words, word_widths, space_w, total_w, start_x, baseline_y, weights, total_weight = self._cached_layout_data
 
-                weights = [max(2, len(w.strip(',.!?\"\''))) for w in words]
-                total_weight = max(1.0, float(sum(weights)))
                 cum_weight = 0.0
                 current_x = start_x
 

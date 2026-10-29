@@ -46,6 +46,7 @@ class CyberAudioEngine:
         self.indices = np.logspace(np.log10(1), np.log10(512), num_bars + 1).astype(int)
         # High-frequency pink noise compensation curve
         self.boost_weights = (1.0 + (np.arange(num_bars, dtype=np.float32) / float(num_bars)) * 2.2).astype(np.float32)
+        self.raw_bars = np.zeros(num_bars, dtype=np.float32)
 
         # Audio Input Source Mode: 'player' (Local Playlist) or 'desktop' (Desktop Loopback)
         self.audio_mode = "player"
@@ -351,13 +352,19 @@ class CyberAudioEngine:
         self.latest_buffer = mono.copy()
 
     def update_spectrum(self):
-        """Vectorized FFT spectral analysis and bass beat energy computation."""
+        """Vectorized FFT spectral analysis and bass beat energy computation (zero-allocation)."""
         buf = self.latest_buffer
-        if (self.audio_mode == "player" and not self.is_playing) or np.max(np.abs(buf)) < 0.001:
-            # Smooth decay when silent or paused
-            self.smoothed_bars *= 0.85
-            self.peak_bars *= 0.90
-            self.beat_energy *= 0.85
+        is_idle = (self.audio_mode == "player" and not self.is_playing) or np.max(np.abs(buf)) < 0.001
+        if is_idle:
+            if self.beat_energy > 0.002 or np.max(self.smoothed_bars) > 0.002:
+                # Fast exponential decay towards zero
+                self.smoothed_bars *= 0.82
+                self.peak_bars *= 0.88
+                self.beat_energy *= 0.80
+            else:
+                self.smoothed_bars.fill(0)
+                self.peak_bars.fill(0)
+                self.beat_energy = 0.0
             return self.smoothed_bars, self.peak_bars, self.beat_energy
 
         # 1. Apply pre-computed Hanning window & Real FFT
@@ -369,22 +376,22 @@ class CyberAudioEngine:
         target_beat = min(1.0, bass_mag / 20.0)
         self.beat_energy = max(target_beat, self.beat_energy * 0.82)
 
-        # 3. Logarithmic band grouping
-        raw_bars = np.zeros(self.num_bars, dtype=np.float32)
+        # 3. Logarithmic band grouping (reusing preallocated buffer, 0 bytes allocated)
+        self.raw_bars.fill(0)
         for i in range(self.num_bars):
             start = self.indices[i]
             end = max(start + 1, self.indices[i + 1])
-            raw_bars[i] = np.mean(fft[start:end])
+            self.raw_bars[i] = np.mean(fft[start:end])
 
-        # Apply high-frequency boost and normalize to [0.0, 1.0]
-        raw_bars = np.clip((raw_bars * self.boost_weights) / 28.0, 0.0, 1.0)
+        # Apply high-frequency boost and normalize to [0.0, 1.0] in-place
+        np.clip((self.raw_bars * self.boost_weights) / 28.0, 0.0, 1.0, out=self.raw_bars)
 
         # 4. Vectorized attack & release smoothing
-        rising = raw_bars > self.smoothed_bars
+        rising = self.raw_bars > self.smoothed_bars
         self.smoothed_bars = np.where(
             rising,
-            self.smoothed_bars + (raw_bars - self.smoothed_bars) * 0.65,  # Fast attack
-            self.smoothed_bars + (raw_bars - self.smoothed_bars) * 0.16   # Smooth release
+            self.smoothed_bars + (self.raw_bars - self.smoothed_bars) * 0.65,  # Fast attack
+            self.smoothed_bars + (self.raw_bars - self.smoothed_bars) * 0.16   # Smooth release
         )
 
         # 5. Vectorized peak hold with gravity acceleration

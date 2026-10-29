@@ -171,6 +171,20 @@ class OverlayWindow(QWidget):
         self._cached_scaled_mute_size = -1
         self._cached_scaled_mute = QPixmap()
 
+        # Hardware-accelerated scanline pattern brush (single blit replaces 40+ drawLine calls)
+        from PyQt6.QtGui import QBrush
+        scanline_pm = QPixmap(1, 3)
+        scanline_pm.fill(QColor(0, 0, 0, 0))
+        p_sl = QPainter(scanline_pm)
+        p_sl.setPen(QColor(0, 0, 0, 220))
+        p_sl.drawPoint(0, 0)
+        p_sl.end()
+        self._scanline_brush = QBrush(scanline_pm)
+
+        # Dynamic sleep dirty-check state
+        self._was_rendering = True
+        self._last_cursor_pt = None
+
         # Caching optimization: store pre-scaled pixmaps to avoid re-scaling on every 16ms frame
         self._last_scaled_size = -1
         self._cached_scaled_talia = QPixmap()
@@ -527,6 +541,9 @@ class OverlayWindow(QWidget):
 
         # 1. Update eye tracking relative to Talia's true screen coordinates
         cursor_pt = QCursor.pos()
+        cursor_moved = (cursor_pt != self._last_cursor_pt)
+        self._last_cursor_pt = cursor_pt
+
         win_pos = self.mapToGlobal(QPoint(0, 0))
 
         MARGIN = 16
@@ -577,10 +594,22 @@ class OverlayWindow(QWidget):
             self.target_offset_ry = 0.0
 
         # Smooth interpolation (lerp)
+        delta_lx = abs(self.target_offset_lx - self.current_offset_lx)
+        delta_ly = abs(self.target_offset_ly - self.current_offset_ly)
+        delta_rx = abs(self.target_offset_rx - self.current_offset_rx)
+        delta_ry = abs(self.target_offset_ry - self.current_offset_ry)
+        eye_moving = (delta_lx > 0.05 or delta_ly > 0.05 or delta_rx > 0.05 or delta_ry > 0.05)
+
         self.current_offset_lx += (self.target_offset_lx - self.current_offset_lx) * 0.25
         self.current_offset_ly += (self.target_offset_ly - self.current_offset_ly) * 0.25
         self.current_offset_rx += (self.target_offset_rx - self.current_offset_rx) * 0.25
         self.current_offset_ry += (self.target_offset_ry - self.current_offset_ry) * 0.25
+
+        if not eye_moving:
+            self.current_offset_lx = self.target_offset_lx
+            self.current_offset_ly = self.target_offset_ly
+            self.current_offset_rx = self.target_offset_rx
+            self.current_offset_ry = self.target_offset_ry
 
         # 2. Hover hit-testing & smooth osu! lazer luminous lighting (~20% highlight)
         global_char_x = win_pos.x() + char_offset_x
@@ -602,15 +631,22 @@ class OverlayWindow(QWidget):
         else:
             self.hover_glow = 0.0
 
-        # Subtle white outline alpha (smoothly fades in while hovering, fades out when leaving)
+        # Subtle white outline alpha with settle snap
         target_outline = 1.0 if self.was_hovered else 0.0
+        outline_changing = abs(target_outline - self.hover_outline_alpha) > 0.01
         self.hover_outline_alpha += (target_outline - self.hover_outline_alpha) * 0.22
+        if not outline_changing:
+            self.hover_outline_alpha = target_outline
 
-        # Subtle 1.2% breathing scale on hover
+        # Subtle 1.2% breathing scale on hover with settle snap
         target_hover_scale = 1.012 if self.was_hovered else 1.0
+        scale_changing = abs(target_hover_scale - self.hover_scale) > 0.001
         self.hover_scale += (target_hover_scale - self.hover_scale) * 0.20
+        if not scale_changing:
+            self.hover_scale = target_hover_scale
 
-        # 3. Button press tactile spring bounce back to 1.0 (with bottom-out delay & 25% delayed recovery rate)
+        # 3. Button press tactile spring bounce back
+        button_changing = (self.button_press_delay > 0.0) or (abs(self.button_press_scale - 1.0) > 0.001)
         if self.button_press_delay > 0.0:
             self.button_press_delay -= 0.016
         elif abs(self.button_press_scale - 1.0) > 0.001:
@@ -618,14 +654,24 @@ class OverlayWindow(QWidget):
         else:
             self.button_press_scale = 1.0
 
+        # Check audio active state
+        is_audio_active = (self.audio_engine.audio_mode == "player" and self.audio_engine.is_playing)
+        if self.audio_engine.audio_mode == "desktop":
+            is_audio_active = (getattr(self.audio_engine, "beat_energy", 0.0) > 0.002 or np.max(getattr(self.audio_engine, "smoothed_bars", [0])) > 0.002)
+
         # 3.5. Beat Pop effect (Talia pulses with the music bass kick)
-        if self.enable_bass_pop:
+        if self.enable_bass_pop and is_audio_active:
             target_pop = 1.0 + float(getattr(self.audio_engine, "beat_energy", 0.0)) * 0.038
+            bass_changing = abs(target_pop - self.bass_pop_scale) > 0.002
             self.bass_pop_scale += (target_pop - self.bass_pop_scale) * 0.35
         else:
+            bass_changing = abs(1.0 - self.bass_pop_scale) > 0.002
             self.bass_pop_scale += (1.0 - self.bass_pop_scale) * 0.35
+            if not bass_changing:
+                self.bass_pop_scale = 1.0
 
         # 4. Click tactile flash: 0.24s solid hold, followed by smooth exponential fade-out
+        flash_changing = (self.flash_hold_timer > 0.0) or (self.flash_alpha > 0.005)
         if self.flash_hold_timer > 0.0:
             self.flash_hold_timer -= 0.016
         elif self.flash_alpha > 0.005:
@@ -633,10 +679,12 @@ class OverlayWindow(QWidget):
         else:
             self.flash_alpha = 0.0
 
-        # 4.5. Cyber Mute Indicator Interpolation (Smooth fade in when paused, fade out when playing)
-        is_paused = not getattr(self.audio_engine, "is_active", self.audio_engine.is_playing)
-        target_mute = 1.0 if is_paused else 0.0
+        # 4.5. Cyber Mute Indicator Interpolation
+        target_mute = 1.0 if not is_audio_active else 0.0
+        mute_changing = abs(target_mute - self.mute_alpha) > 0.01
         self.mute_alpha += (target_mute - self.mute_alpha) * 0.22
+        if not mute_changing:
+            self.mute_alpha = target_mute
 
         # 5. Dynamic Rotation & Sway computation (osu! lazer left-right rocking & tilt)
         t = time.time()
@@ -676,8 +724,31 @@ class OverlayWindow(QWidget):
             if abs(self.current_shake_y) < 0.05:
                 self.current_shake_y = 0.0
 
-        # Trigger redraw
-        self.update()
+        # Dynamic sleep dirty-check: do NOT call self.update() when at rest
+        sway_active = self.is_holding or (self.impulse_timer > 0.0) or (abs(self.current_rotation) > 0.02) or (abs(self.current_shake_x) > 0.05) or (abs(self.current_shake_y) > 0.05)
+        fx_active = self.is_starting_up or self.is_shutting_down or (self.hover_glow > 0.005)
+
+        needs_render = (
+            self.move_talia_mode or
+            is_audio_active or
+            cursor_moved or
+            eye_moving or
+            outline_changing or
+            scale_changing or
+            button_changing or
+            bass_changing or
+            flash_changing or
+            mute_changing or
+            sway_active or
+            fx_active
+        )
+
+        if needs_render:
+            self.update()
+            self._was_rendering = True
+        elif getattr(self, "_was_rendering", False):
+            self.update()  # Final clean frame at rest
+            self._was_rendering = False
 
     def _ensure_scaled_pixmaps(self, char_size: int, scale: float):
         """Optimized caching: rescales pixmaps only when character size or eye volume saturation changes."""
@@ -786,9 +857,8 @@ class OverlayWindow(QWidget):
         # LAYER 0.5: CYBER MUTE INDICATOR (Inside Mouth Cavity on Pause)
         # ==========================================================
         if self.mute_alpha > 0.005 and not self.mute_icon.isNull() and self.hold_saturation > 0.05:
-            t = time.time()
-            pulse = 0.88 + 0.12 * math.sin(t * 3.5)
-            eff_alpha = min(1.0, max(0.0, self.mute_alpha * pulse))
+            # Steady crisp cyber HUD glow when paused (zero CPU waste at rest)
+            eff_alpha = min(1.0, max(0.0, self.mute_alpha))
             cx = mouth_x + mouth_w // 2
             cy = mouth_y + mouth_h // 2
             icon_dim = max(18, int(mouth_h * 0.56))
@@ -912,16 +982,9 @@ class OverlayWindow(QWidget):
         # ==========================================================
         # LAYER 4: CRT MONITOR SCANLINES (Across Mouth Opening)
         # ==========================================================
-        if self.enable_scanlines:
+        if self.enable_scanlines and self.hold_saturation > 0.05:
             painter.setOpacity(0.20 * self.hold_saturation)
-            pen = QPen(QColor(0, 0, 0, 220), 1)
-            painter.setPen(pen)
-            y_start = char_y + int(MOUTH_BOX_Y * scale)
-            y_end = char_y + int((MOUTH_BOX_Y + MOUTH_BOX_H) * scale)
-            x_start = char_x + int(MOUTH_BOX_X * scale)
-            x_end = char_x + int((MOUTH_BOX_X + MOUTH_BOX_W) * scale)
-            for line_y in range(y_start, y_end, 3):
-                painter.drawLine(x_start, line_y, x_end, line_y)
+            painter.fillRect(mouth_rect, self._scanline_brush)
 
         # ==========================================================
         # FEEDBACK SATISFACTION: HOVER LIGHTING & CLICK TACTILE FLASH

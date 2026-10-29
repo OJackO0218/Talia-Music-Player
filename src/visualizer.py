@@ -6,7 +6,7 @@ import math
 import numpy as np
 from PyQt6.QtCore import Qt, QRect, QRectF, QPointF
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QRadialGradient, QPolygonF
+    QPainter, QColor, QPen, QBrush, QRadialGradient, QPolygonF, QPixmap
 )
 
 from config import COLOR_THEMES
@@ -20,6 +20,8 @@ class CyberVisualizer:
         self.mode = "Cyber Bars"  # "Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"
         self.current_theme_name = "Cyberpunk Neon"
         self.rotation_angle = 0.0
+        self._cached_grid_pixmap = None
+        self._cached_grid_key = None
 
     def draw(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine):
         """Draws the selected visualizer inside the target bounding rect."""
@@ -28,17 +30,24 @@ class CyberVisualizer:
 
         theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
 
-        # 1. Dark Cyber Background
-        painter.fillRect(rect, theme["bg"])
+        # 1 & 2. Hardware-accelerated Cached Background & Grid (single blit)
+        key = (rect.width(), rect.height(), self.current_theme_name)
+        if self._cached_grid_key != key or self._cached_grid_pixmap is None:
+            self._cached_grid_key = key
+            pm = QPixmap(rect.width(), rect.height())
+            pm.fill(theme["bg"])
+            p_grid = QPainter(pm)
+            p_grid.setPen(QPen(theme["grid"], 1))
+            step_x = 24
+            step_y = 20
+            for x in range(0, rect.width(), step_x):
+                p_grid.drawLine(x, 0, x, rect.height())
+            for y in range(0, rect.height(), step_y):
+                p_grid.drawLine(0, y, rect.width(), y)
+            p_grid.end()
+            self._cached_grid_pixmap = pm
 
-        # 2. Subtle Background Cyber Grid
-        painter.setPen(QPen(theme["grid"], 1))
-        step_x = 24
-        step_y = 20
-        for x in range(rect.left(), rect.right(), step_x):
-            painter.drawLine(x, rect.top(), x, rect.bottom())
-        for y in range(rect.top(), rect.bottom(), step_y):
-            painter.drawLine(rect.left(), y, rect.right(), y)
+        painter.drawPixmap(rect.topLeft(), self._cached_grid_pixmap)
 
         # 3. Ambient Beat Glow Pulse (Lights up Talia's inner jaw on heavy bass)
         bars, peaks, beat = engine.update_spectrum()
@@ -67,6 +76,8 @@ class CyberVisualizer:
 
     def _draw_cyber_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
         """Segmented LED equalizer bars with falling peak hold caps."""
+        if np.max(bars) < 0.002 and np.max(peaks) < 0.002:
+            return  # Zero-cost early exit when silent
         num = len(bars)
         pad_x = max(2, int(rect.width() * 0.03))
         usable_w = rect.width() - (pad_x * 2)
@@ -126,6 +137,12 @@ class CyberVisualizer:
             return
 
         cy = float(rect.center().y())
+        if np.max(np.abs(wave)) < 0.002:
+            # Silent guide line early return (zero-cost when paused)
+            painter.setPen(QPen(QColor(theme["grid"].red(), theme["grid"].green(), theme["grid"].blue(), 45), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(rect.left(), int(cy), rect.right(), int(cy))
+            return
+
         max_amp = float(rect.height() * 0.42)
 
         poly_glow = QPolygonF()
@@ -195,6 +212,8 @@ class CyberVisualizer:
 
     def _draw_dual_mirror(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
         """Symmetrical dual-sided equalizer extending outward from the center."""
+        if np.max(bars) < 0.002 and np.max(peaks) < 0.002:
+            return
         cx = rect.center().x()
         base_y = rect.bottom() - 10
         max_h = rect.height() - 28
