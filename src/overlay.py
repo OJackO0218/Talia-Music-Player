@@ -19,7 +19,8 @@ from config import (
     EYE_PARTS_DIR, SOUNDS_DIR, PNGS_DIR, CANVAS_BASE_SIZE, MOUTH_BOX_X, MOUTH_BOX_Y,
     MOUTH_BOX_W, MOUTH_BOX_H, DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY,
     DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW, VK_VOLUME_UP, VK_VOLUME_DOWN
+    user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW, VK_VOLUME_UP, VK_VOLUME_DOWN,
+    save_settings
 )
 from audio_engine import CyberAudioEngine
 from visualizer import CyberVisualizer
@@ -322,7 +323,24 @@ class OverlayWindow(QWidget):
 
         elapsed = time.time() - self.press_time
         if elapsed >= 2.0:
-            # Full 2.0 seconds held: Initiate 0.6s dramatic sinking power-down sequence!
+            # If move_talia_mode is currently ON: do NOT shut down! Instead, exit Move Mode!
+            if self.move_talia_mode:
+                self.set_move_talia_mode(False)
+                self.hold_saturation = 1.0
+                self._apply_pupil_saturation()
+                self.update()
+                self.hold_timer.stop()
+                if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
+                    self.sound_hold.stop()
+                if self.panel:
+                    try:
+                        cfg = self.panel.get_current_settings_dict()
+                        save_settings(cfg)
+                    except Exception:
+                        pass
+                print("[ACTION] Held while in Move Mode: Talia locked and position saved!")
+                return
+            # Full 2.0 seconds held in locked mode: Initiate 0.6s dramatic sinking power-down sequence!
             self.is_shutting_down = True
             self.shutdown_start_time = time.time()
             self.shutdown_start_pos = self.pos()
@@ -977,8 +995,11 @@ class OverlayWindow(QWidget):
                 self.is_right_dragging = False
                 # Auto-save new position immediately after right-click drag!
                 if self.panel:
-                    cfg = self.panel.get_current_settings_dict()
-                    save_settings(cfg)
+                    try:
+                        cfg = self.panel.get_current_settings_dict()
+                        save_settings(cfg)
+                    except Exception as e:
+                        print(f"[ERROR] Could not auto-save: {e}")
                 event.accept()
                 return
         if event.button() == Qt.MouseButton.LeftButton:
@@ -994,8 +1015,11 @@ class OverlayWindow(QWidget):
                 self.is_dragging = False
                 # Auto-save new position immediately after left-click drag!
                 if self.panel:
-                    cfg = self.panel.get_current_settings_dict()
-                    save_settings(cfg)
+                    try:
+                        cfg = self.panel.get_current_settings_dict()
+                        save_settings(cfg)
+                    except Exception as e:
+                        print(f"[ERROR] Could not auto-save: {e}")
                 event.accept()
                 return
 
@@ -1006,6 +1030,12 @@ class OverlayWindow(QWidget):
                 self.update()
                 new_mode = not self.move_talia_mode
                 self.set_move_talia_mode(new_mode)
+                if self.panel:
+                    try:
+                        cfg = self.panel.get_current_settings_dict()
+                        save_settings(cfg)
+                    except Exception as e:
+                        print(f"[ERROR] Could not auto-save: {e}")
                 status = "ON (Drag to Move / Scroll to Resize)" if new_mode else "OFF (Locked & Clickable)"
                 print(f"[ACTION] Held for 0.7s: Move Talia Mode is now {status}!")
             elif elapsed < 0.38:
