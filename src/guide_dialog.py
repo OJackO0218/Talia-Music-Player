@@ -97,20 +97,15 @@ class GuideDialog(QDialog):
         content_layout.setSpacing(14)
 
         guide_items = [
-            ("Press 'P' or click Talia once to play/pause", [
-                "Single tap on keyboard or mascot toggles audio playback immediately."
-            ]),
-            ("Double-press 'P' or double-click Talia on the right to skip song", [
-                "Two quick taps of 'P' or a double-click on the right side of Talia advances to the next track.",
-                "Double-click on the left side of Talia backtracks to the previous song."
-            ]),
+            ("Press Talia once to play/pause", []),
+            ("Press Talia twice on the right to skip song and twice on the left to backtrack", []),
             ("Hold Talia to enter Move Mode", [
                 "Scroll mouse wheel to resize Talia",
                 "Drag to reposition anywhere on your desktop",
                 "Hold again to lock in place"
             ]),
             ("Click Talia 3 times to open Controller", [
-                "Opens the control panel where you can browse library files, search and download songs, adjust lyrics, and customize visuals."
+                "Opens the control panel where you can browse library files, search and download songs, adjust lyrics, customize fonts, and tweak visuals."
             ]),
             ("Hold Talia for 2 seconds to close the app", []),
         ]

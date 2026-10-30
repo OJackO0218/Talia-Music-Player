@@ -30,6 +30,8 @@ PNGS_DIR = os.path.join(PROJECT_ROOT, "assets", "icons") if os.path.exists(os.pa
 SOUNDS_DIR = os.path.join(PROJECT_ROOT, "assets", "sounds") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "sounds")) else os.path.join(PROJECT_ROOT, "sounds")
 LYRICS_CACHE_DIR = os.path.join(PROJECT_ROOT, "assets", "lyrics_cache")
 os.makedirs(LYRICS_CACHE_DIR, exist_ok=True)
+FONTS_DIR = os.path.join(PROJECT_ROOT, "assets", "fonts")
+os.makedirs(FONTS_DIR, exist_ok=True)
 ICON_PATH = os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico")) else os.path.join(PROJECT_ROOT, "app_icon.ico")
 
 SUPPORTED_AUDIO_EXTS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus')

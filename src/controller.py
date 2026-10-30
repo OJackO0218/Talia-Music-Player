@@ -11,7 +11,7 @@ from PyQt6.QtGui import QIcon, QColor, QAction
 
 from config import (
     user32, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_CONTROL, VK_OEM_4, VK_OEM_6, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    save_settings, PROJECT_ROOT, ICON_PATH
+    save_settings, PROJECT_ROOT, ICON_PATH, FONTS_DIR
 )
 from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
@@ -58,7 +58,6 @@ class ControlPanel(QWidget):
         self.last_f9_state = False
         self.last_f10_state = False
         self.last_f11_state = False
-        self.last_p_state = False
         self.is_user_scrubbing = False
 
         self.setWindowTitle("Talia Controller")
@@ -563,6 +562,30 @@ class ControlPanel(QWidget):
         self.chk_word_glow.toggled.connect(self.on_word_glow_toggled)
         content_layout.addWidget(self.chk_word_glow)
 
+        # Custom Font selector / folder row
+        hbox_font = QHBoxLayout()
+        lbl_font_title = QLabel("Font:")
+        lbl_font_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_font.addWidget(lbl_font_title)
+
+        font_name = getattr(self.lyrics_overlay, "custom_font_family", None) if self.lyrics_overlay else None
+        self.lbl_font_val = QLabel(font_name if font_name else "Default (Segoe UI / Inter)")
+        self.lbl_font_val.setStyleSheet("color: #f4f4f5; font-size: 11px;")
+        hbox_font.addWidget(self.lbl_font_val)
+
+        hbox_font.addStretch()
+
+        btn_open_fonts = QPushButton("Open Fonts Folder")
+        btn_open_fonts.setToolTip("Drop any .ttf or .otf file into this folder to customize the lyric font")
+        btn_open_fonts.clicked.connect(self.open_fonts_folder)
+        hbox_font.addWidget(btn_open_fonts)
+
+        btn_reload_fonts = QPushButton("Reload Font")
+        btn_reload_fonts.setToolTip("Re-scans assets/fonts/ folder for new font files")
+        btn_reload_fonts.clicked.connect(self.reload_custom_fonts)
+        hbox_font.addWidget(btn_reload_fonts)
+        content_layout.addLayout(hbox_font)
+
         # Sync offset controls
         hbox_sync = QHBoxLayout()
         lbl_sync_title = QLabel("Sync:")
@@ -730,7 +753,6 @@ class ControlPanel(QWidget):
             ("F9", "Toggle"),
             ("F10", "Source"),
             ("F11", "Eco"),
-            ("P", "Play / Skip"),
         ]
         for i, (key, desc) in enumerate(shortcuts):
             lbl = QLabel(f"<span style='color: #a1a1aa; font-weight: 600;'>{key}:</span> <span style='color: #71717a;'>{desc}</span>")
@@ -1194,19 +1216,6 @@ class ControlPanel(QWidget):
             self.toggle_eco_mode()
         self.last_f11_state = f11_down
 
-        # Key 'P': Play/Pause (1 press) and Skip (2 presses), exactly like clicking Talia directly
-        alt_down = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
-        win_down = bool(user32.GetAsyncKeyState(0x5B) & 0x8000) or bool(user32.GetAsyncKeyState(0x5C) & 0x8000)
-        p_down = bool(user32.GetAsyncKeyState(0x50) & 0x8000)
-        if p_down and not self.last_p_state:
-            focused = QApplication.focusWidget()
-            is_typing = focused is not None and isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit))
-            if not (ctrl_down or alt_down or win_down or is_typing):
-                # Trigger click dispatch on Talia overlay with right-side position (for skip on double-click)
-                self.overlay.last_click_pos = QPoint(self.overlay.width(), 0)
-                self.overlay._handle_click()
-        self.last_p_state = p_down
-
     def toggle_eco_mode(self):
         """Toggles Eco Mode (< 1% CPU target) and persists preference."""
         self.set_eco_mode(not self.eco_mode)
@@ -1354,6 +1363,20 @@ class ControlPanel(QWidget):
             self.btn_pick_color.setStyleSheet(
                 f"background-color: #27272a; color: {hex_code}; border: 1px solid {hex_code}; font-weight: 500;"
             )
+
+    def open_fonts_folder(self):
+        os.makedirs(FONTS_DIR, exist_ok=True)
+        subprocess.run(["explorer", os.path.normpath(FONTS_DIR)])
+
+    def reload_custom_fonts(self):
+        if self.lyrics_overlay:
+            self.lyrics_overlay.load_custom_font()
+            self.lyrics_overlay._cached_layout_key = None
+            self.lyrics_overlay.update()
+            name = getattr(self.lyrics_overlay, "custom_font_family", None)
+            if hasattr(self, "lbl_font_val"):
+                self.lbl_font_val.setText(name if name else "Default (Segoe UI / Inter)")
+            print(f"[FONTS] Reloaded lyric fonts. Active: {name or 'Default'}")
 
     def show_guide_dialog(self):
         cfg = self.get_current_settings_dict()

@@ -3,18 +3,19 @@ Transparent Desktop Lyrics Overlay: Spotify-style synchronized kinetic lyrics
 with customizable neon colors, smooth pop-up animations, and click-through background passthrough.
 """
 
+import os
 import time
 import math
 import ctypes
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QTimer
 from PyQt6.QtGui import (
-    QPainter, QColor, QFont, QFontMetrics, QPen
+    QPainter, QColor, QFont, QFontMetrics, QPen, QFontDatabase
 )
 
 from config import (
     user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    WS_EX_LAYERED, WS_EX_TRANSPARENT, GWL_EXSTYLE, save_settings
+    WS_EX_LAYERED, WS_EX_TRANSPARENT, GWL_EXSTYLE, save_settings, FONTS_DIR
 )
 from audio_engine import CyberAudioEngine
 from lyrics_manager import LyricsManager
@@ -75,6 +76,8 @@ class LyricsOverlayWindow(QWidget):
         self._was_rendering = False
         self._cached_layout_key = None
         self._cached_layout_data = None
+        self.custom_font_family = None
+        self.load_custom_font()
 
         # 60 FPS animation & sync tick timer
         self.anim_timer = QTimer(self)
@@ -85,6 +88,21 @@ class LyricsOverlayWindow(QWidget):
         self.topmost_timer = QTimer(self)
         self.topmost_timer.timeout.connect(self.enforce_topmost)
         self.topmost_timer.start(1000)
+
+    def load_custom_font(self):
+        """Scans assets/fonts for any user-supplied .ttf or .otf file and registers it."""
+        self.custom_font_family = None
+        if os.path.exists(FONTS_DIR):
+            for f in sorted(os.listdir(FONTS_DIR)):
+                if f.lower().endswith(('.ttf', '.otf', '.woff', '.woff2')):
+                    font_path = os.path.join(FONTS_DIR, f)
+                    font_id = QFontDatabase.addApplicationFont(font_path)
+                    if font_id != -1:
+                        families = QFontDatabase.applicationFontFamilies(font_id)
+                        if families:
+                            self.custom_font_family = families[0]
+                            print(f"[FONTS] Loaded custom lyrics font: {self.custom_font_family} ({f})")
+                            break
 
     def set_eco_mode(self, enabled: bool):
         """Toggles power-saving Eco Mode: drops animation timer to 12.5 FPS (80ms)."""
@@ -292,7 +310,11 @@ class LyricsOverlayWindow(QWidget):
         # Spotify-style sleek bold typography
         base_pt = 25
         font = QFont()
-        font.setFamilies(["Inter", "Circular Std", "Segoe UI Variable Display", "Segoe UI", "Helvetica Neue", "Arial"])
+        families = []
+        if getattr(self, "custom_font_family", None):
+            families.append(self.custom_font_family)
+        families.extend(["Inter", "Circular Std", "Segoe UI Variable Display", "Segoe UI", "Helvetica Neue", "Arial"])
+        font.setFamilies(families)
         font.setPointSize(base_pt)
         font.setWeight(QFont.Weight.Bold)
 
