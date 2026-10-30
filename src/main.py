@@ -65,6 +65,8 @@ def main():
 
     # Initialize audio playback engine and lyrics manager
     music_folder = saved_cfg.get("music_folder", DEFAULT_MUSIC_DIR)
+    if not music_folder or not os.path.exists(music_folder):
+        music_folder = DEFAULT_MUSIC_DIR
     lyrics_manager = LyricsManager(LYRICS_CACHE_DIR)
     audio_engine = CyberAudioEngine()
     audio_engine.set_lyrics_manager(lyrics_manager)
