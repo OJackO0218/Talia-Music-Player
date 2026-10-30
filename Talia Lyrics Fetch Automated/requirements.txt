@@ -1,0 +1,4 @@
+syncedlyrics>=1.0.0
+mutagen>=1.48.0
+requests>=2.31.0
+PyQt6>=6.5.0
