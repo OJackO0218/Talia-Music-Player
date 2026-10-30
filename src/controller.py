@@ -341,6 +341,7 @@ class ControlPanel(QWidget):
         self.slider_seek.setValue(0)
         self.slider_seek.sliderPressed.connect(self.on_seek_pressed)
         self.slider_seek.sliderReleased.connect(self.on_seek_released)
+        self.slider_seek.sliderMoved.connect(self.on_seek_moved)
         self.lbl_time_dur = QLabel("00:00")
         self.lbl_time_dur.setStyleSheet("color: #8b9cb3; font-family: 'Consolas', monospace;")
 
@@ -990,6 +991,12 @@ class ControlPanel(QWidget):
 
     def on_seek_pressed(self):
         self.is_user_scrubbing = True
+
+    def on_seek_moved(self, val: int):
+        duration = self.audio_engine.get_duration()
+        if duration > 0:
+            target_sec = (val / 1000.0) * duration
+            self.lbl_time_cur.setText(f"{int(target_sec // 60):02d}:{int(target_sec % 60):02d}")
 
     def on_seek_released(self):
         self.is_user_scrubbing = False

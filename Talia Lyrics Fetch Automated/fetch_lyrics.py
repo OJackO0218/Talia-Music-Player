@@ -204,22 +204,22 @@ def clean_unwanted_lrc_headers(lrc_text: str) -> str:
 
 
 def validate_lyrics_match(lrc_text: str, expected_duration: float = 0.0) -> bool:
-    """Sanity checks the lyrics text: has lines, has timestamps, and matches song length."""
+    """High-precision sanity check: enforces line count, timestamps, and strict duration bounds."""
     if not lrc_text or "[" not in lrc_text:
         return False
 
     lines = [line.strip() for line in lrc_text.splitlines() if line.strip()]
-    # Must have at least 3 lyric lines
     if len(lines) < 3:
         return False
 
-    # Duration tolerance check (if audio length is known)
     if expected_duration > 15.0:
         last_ts = parse_last_timestamp(lrc_text)
         if last_ts > 0.0:
             diff = abs(expected_duration - last_ts)
-            # If the lyrics stop 45s before the song ends or continue 45s after, it's likely a wrong song
-            if diff > 45.0 and last_ts < expected_duration * 0.60:
+            # Refuse lyrics that extend beyond song length or cut off prematurely
+            if last_ts > expected_duration + 3.0:
+                return False
+            if diff > 30.0 and last_ts < expected_duration * 0.70:
                 return False
 
     return True
@@ -239,7 +239,9 @@ def fetch_from_lrclib_direct(title: str, artist: str = "", duration: float = 0.0
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if data.get("syncedLyrics"):
-                    return clean_unwanted_lrc_headers(data["syncedLyrics"])
+                    cleaned = clean_unwanted_lrc_headers(data["syncedLyrics"])
+                    if validate_lyrics_match(cleaned, duration):
+                        return cleaned
     except Exception:
         pass
 
@@ -256,19 +258,23 @@ def fetch_from_lrclib_direct(title: str, artist: str = "", duration: float = 0.0
                     synced = item.get("syncedLyrics")
                     if not synced:
                         continue
-                    cleaned = clean_unwanted_lrc_headers(synced)
-                    if not validate_lyrics_match(cleaned, duration):
-                        continue
                     cand_dur = float(item.get("duration") or 0.0)
                     if duration > 10.0 and cand_dur > 10.0:
                         diff = abs(cand_dur - duration)
-                        if diff < best_diff:
-                            best_diff = diff
-                            best_synced = cleaned
-                            if diff < 2.0:
-                                break
-                    elif best_synced is None:
+                        if diff > 2.0:
+                            continue
+                    else:
+                        diff = 0.0
+
+                    cleaned = clean_unwanted_lrc_headers(synced)
+                    if not validate_lyrics_match(cleaned, duration):
+                        continue
+
+                    if diff < best_diff:
+                        best_diff = diff
                         best_synced = cleaned
+                        if diff <= 1.0:
+                            break
                 if best_synced:
                     return best_synced
     except Exception:

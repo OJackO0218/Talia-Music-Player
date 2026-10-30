@@ -382,22 +382,26 @@ class LyricsFetcherWindow(QWidget):
         hbox_tele.addWidget(self.lbl_cal_status)
         layout.addWidget(telemetry_frame)
 
-        # 4. Alternative Candidates Selector Row
+        # 4. High-Precision Lyrics & Calibration Action Row
         hbox_cands = QHBoxLayout()
-        lbl_cands = QLabel("ONLINE CANDIDATES:")
-        lbl_cands.setStyleSheet("color: #cbd5e1; font-size: 11px; font-weight: bold;")
-        hbox_cands.addWidget(lbl_cands)
+        btn_fetch_verified = QPushButton("FETCH VERIFIED LRC")
+        btn_fetch_verified.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9; font-weight: bold; padding: 5px 12px;")
+        btn_fetch_verified.setToolTip("Fetches verified synced lyrics with strict duration proximity (+/-2.0s) to prevent desync")
+        btn_fetch_verified.clicked.connect(self._fetch_verified_lrc)
+        hbox_cands.addWidget(btn_fetch_verified)
 
-        self.combo_cands = QComboBox()
-        self.combo_cands.setStyleSheet("background-color: #12151f; border: 1px solid #23293a; color: #e2e8f0; padding: 4px;")
-        self.combo_cands.currentIndexChanged.connect(self._on_cand_selected)
-        hbox_cands.addWidget(self.combo_cands)
+        btn_auto_cal = QPushButton("AUTO CALIBRATE (VOCALS)")
+        btn_auto_cal.setStyleSheet("background-color: #142838; color: #00f0ff; border: 1px solid #00f0ff; font-weight: bold; padding: 5px 12px;")
+        btn_auto_cal.setToolTip("Aligns timestamps automatically based on singing frequency formant detection")
+        btn_auto_cal.clicked.connect(self._auto_calibrate_active_file)
+        hbox_cands.addWidget(btn_auto_cal)
 
-        btn_find_cands = QPushButton("SEARCH CANDIDATES")
-        btn_find_cands.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9; padding: 4px 10px;")
-        btn_find_cands.setToolTip("Queries online database for all alternate synced submissions for this song")
-        btn_find_cands.clicked.connect(self._search_alternative_candidates)
-        hbox_cands.addWidget(btn_find_cands)
+        self.btn_tap_sync = QPushButton("TAP TO SYNC [SPACE]")
+        self.btn_tap_sync.setStyleSheet("background-color: #2b1138; color: #e879f9; border: 1px solid #c084fc; font-weight: bold; padding: 5px 12px;")
+        self.btn_tap_sync.setToolTip("Press Space or click when you hear the first vocal to sync the entire song")
+        self.btn_tap_sync.clicked.connect(self._tap_to_sync)
+        hbox_cands.addWidget(self.btn_tap_sync)
+
         layout.addLayout(hbox_cands)
 
         # 5. Quick Offset Tuning Buttons + Direct Offset Input
@@ -503,13 +507,10 @@ class LyricsFetcherWindow(QWidget):
                 self.lbl_cal_lyric.setText("FIRST LYRIC: N/A")
                 self.lbl_cal_diff.setText("DISCREPANCY: N/A")
         else:
-            self.txt_cal_preview.setText("// No companion .lrc file found for this track.\n// Click 'SEARCH CANDIDATES' above to download one.")
+            self.txt_cal_preview.setText("// No companion .lrc file found for this track.\n// Click 'FETCH VERIFIED LRC' above to download exact synced lyrics.")
             self.lbl_cal_lyric.setText("FIRST LYRIC: MISSING")
             self.lbl_cal_diff.setText("DISCREPANCY: MISSING")
             self.lbl_cal_status.setText("STATUS: NO LRC")
-
-        # Automatically query online candidates
-        self._search_alternative_candidates()
 
     def _toggle_audio_playback(self):
         if self.cal_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -584,9 +585,10 @@ class LyricsFetcherWindow(QWidget):
                 return
         super().keyPressEvent(event)
 
-    def _search_alternative_candidates(self):
+    def _fetch_verified_lrc(self):
         audio_path = self.edit_cal_file.text().strip()
         if not os.path.exists(audio_path):
+            self.lbl_cal_status.setText("STATUS: NO FILE LOADED")
             return
 
         meta = extract_metadata(audio_path)
@@ -594,25 +596,37 @@ class LyricsFetcherWindow(QWidget):
         artist = meta.get("artist") or ""
         duration = meta.get("duration") or 0.0
 
-        self.combo_cands.clear()
-        cands = search_all_lrc_candidates(title, artist, duration)
-        if not cands:
-            self.combo_cands.addItem("// No alternative candidates found online", None)
-            return
+        self.lbl_cal_status.setText("STATUS: QUERYING VERIFIED LYRICS...")
+        self.lbl_cal_status.setStyleSheet("color: #38d9d9; font-weight: bold;")
+        QApplication.processEvents()
 
-        for idx, c in enumerate(cands):
-            tag = "[BEST MATCH]" if c["is_match"] else f"[diff: {c['duration_diff']}s]"
-            label = f"#{c['id']} | {c['duration']:.0f}s ({c['line_count']} lines) {tag} - {c['artist']} - {c['track']}"
-            self.combo_cands.addItem(label, c["synced"])
-
-    def _on_cand_selected(self, index: int):
-        if index < 0:
-            return
-        synced = self.combo_cands.itemData(index)
-        if synced and isinstance(synced, str):
-            self.txt_cal_preview.setText(synced)
-            self.lbl_cal_status.setText("STATUS: CANDIDATE LOADED")
-            self.lbl_cal_status.setStyleSheet("color: #38d9d9; font-weight: bold;")
+        lrc_text = fetch_synced_lyrics(title, artist, duration)
+        if lrc_text:
+            self.txt_cal_preview.setText(lrc_text)
+            self.lbl_cal_status.setText("STATUS: VERIFIED LRC LOADED (EXACT DURATION)")
+            self.lbl_cal_status.setStyleSheet("color: #00ff66; font-weight: bold;")
+            entry, peak, method = detect_vocal_entry(audio_path)
+            import re
+            pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]')
+            first_ts = None
+            for line in lrc_text.splitlines():
+                m = pattern.search(line)
+                if m:
+                    text = pattern.sub('', line).strip()
+                    if len(text) >= 2 and not text.startswith(('by:', 'ar:', 'ti:', 'al:')):
+                        mins = int(m.group(1))
+                        secs = int(m.group(2))
+                        ms = float("0." + m.group(3)) if m.group(3) else 0.0
+                        first_ts = mins * 60.0 + secs + ms
+                        break
+            if first_ts is not None:
+                self.lbl_cal_lyric.setText(f"FIRST LYRIC: {first_ts:.2f}s")
+                if entry > 0:
+                    diff = round(entry - first_ts, 2)
+                    self.lbl_cal_diff.setText(f"DISCREPANCY: {diff:+.2f}s")
+        else:
+            self.lbl_cal_status.setText("STATUS: NO VERIFIED MATCH (PREVENTED MISMATCH)")
+            self.lbl_cal_status.setStyleSheet("color: #ff2a85; font-weight: bold;")
 
     def _shift_active_lrc(self, delta: float):
         text = self.txt_cal_preview.toPlainText()

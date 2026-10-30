@@ -103,6 +103,40 @@ if os.path.exists(ASSETS_DIR):
 if os.path.exists(MUSIC_DIR):
     shutil.copytree(MUSIC_DIR, dest_music, dirs_exist_ok=True)
 
+# Copy automated lyrics fetcher
+fetcher_dir = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
+dest_fetcher = os.path.join(APP_STAGE, "Talia Lyrics Fetch Automated")
+if os.path.exists(fetcher_dir):
+    shutil.copytree(fetcher_dir, dest_fetcher, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+# Write clean default settings (Eco Mode OFF by default)
+import json
+default_release_settings = {
+    "pos_x": -1,
+    "pos_y": -1,
+    "char_size": 260,
+    "eye_sensitivity": 1.0,
+    "opacity": 1.0,
+    "scanlines": True,
+    "bass_pop": True,
+    "widescreen": False,
+    "visualizer_mode": "Cyber Bars",
+    "visualizer_palette": "Cyberpunk Neon",
+    "volume": 0.85,
+    "audio_mode": "player",
+    "music_folder": "",
+    "shuffle": False,
+    "eco_mode": False,
+    "show_startup_guide": True,
+    "lyrics_x": -1,
+    "lyrics_y": -1,
+    "show_lyrics": True,
+    "lyrics_color": "#e879f9",
+    "lyrics_word_glow": True
+}
+with open(os.path.join(APP_STAGE, "settings.json"), "w", encoding="utf-8") as f:
+    json.dump(default_release_settings, f, indent=4)
+
 readme_txt = """=======================================================
   TALIA CYBERPUNK MUSIC PLAYER & DESKTOP VISUALIZER
 =======================================================

@@ -23,6 +23,9 @@ class CyberAudioEngine:
     def __init__(self, num_bars: int = 28):
         self.stream = None
         self.data = None
+        self.active_sf = None
+        self.head_buffer = None
+        self.head_frames = 0
         self.sr = 44100
         self.channels = 2
         self.current_frame = 0
@@ -200,92 +203,77 @@ class CyberAudioEngine:
         return self.load_file(path, auto_play=True)
 
     def load_file(self, file_path: str, auto_play: bool = True, blocking: bool = False) -> bool:
-        """Reads audio into memory and initializes / reuses the sounddevice OutputStream."""
+        """Loads audio with 15s head instant switch and block-streaming to guarantee < 200 MB RAM."""
         try:
-            # 1. Instant Cache Hit (0.005 ms track switch)
-            if file_path in self._preload_cache:
-                audio, sr = self._preload_cache.pop(file_path)
-                self._apply_loaded_audio(file_path, audio, sr, auto_play)
-                return True
+            with self._audio_lock:
+                if self.active_sf is not None:
+                    try:
+                        self.active_sf.close()
+                    except Exception:
+                        pass
+                    self.active_sf = None
 
-            # 2. Cache Miss: Read audio data
-            if blocking:
-                audio, sr = sf.read(file_path, dtype='float32')
-                if len(audio.shape) == 1:
-                    audio = np.column_stack((audio, audio))
-                self._apply_loaded_audio(file_path, audio, sr, auto_play)
-                return True
+                # 1. Check preload cache (strictly 1 track, 15s head buffer)
+                cached = self._preload_cache.pop(file_path, None)
+                if cached is not None:
+                    head_data, sr, total_frames, channels = cached
+                    self.head_buffer = head_data
+                    self.head_frames = len(head_data)
+                else:
+                    self.head_buffer = None
+                    self.head_frames = 0
+
+                new_sf = sf.SoundFile(file_path, 'r')
+                self.active_sf = new_sf
+                self.sr = new_sf.samplerate
+                self.channels = new_sf.channels
+                self.total_frames = new_sf.frames
+                self.current_frame = 0
+                self.data = True  # Signal that track is loaded
+                self.track_finished = False
+
+            needs_new_stream = (
+                self.stream is None or
+                self.stream.samplerate != self.sr or
+                self.stream.channels != self.channels
+            )
+
+            if needs_new_stream:
+                if self.stream is not None:
+                    try:
+                        self.stream.stop()
+                        self.stream.close()
+                    except Exception:
+                        pass
+                    self.stream = None
+
+                self.stream = sd.OutputStream(
+                    samplerate=self.sr,
+                    channels=self.channels,
+                    callback=self._audio_callback,
+                    blocksize=1024
+                )
+
+            if self.lyrics_manager:
+                self.lyrics_manager.load_track(file_path)
+
+            if auto_play:
+                self.play()
             else:
-                self._load_seq = getattr(self, "_load_seq", 0) + 1
-                seq = self._load_seq
-                threading.Thread(
-                    target=self._async_load_worker,
-                    args=(file_path, auto_play, seq),
-                    daemon=True
-                ).start()
-                return True
+                self.is_playing = False
+                self.is_paused = True
+
+            # Trigger background preload for next track (max 1 track, 15s head)
+            self._trigger_preload_next()
+            import gc
+            gc.collect()
+            return True
         except Exception as e:
             print(f"[AUDIO ERROR] Could not open {file_path}: {e}")
             return False
 
-    def _async_load_worker(self, file_path: str, auto_play: bool, seq: int):
-        """Worker thread for decoding un-cached tracks without freezing Qt event loop."""
-        try:
-            audio, sr = sf.read(file_path, dtype='float32')
-            if len(audio.shape) == 1:
-                audio = np.column_stack((audio, audio))
-            if seq != getattr(self, "_load_seq", 0):
-                return
-            self._apply_loaded_audio(file_path, audio, sr, auto_play)
-        except Exception as e:
-            print(f"[AUDIO ERROR] Background decode failed for {file_path}: {e}")
-
-    def _apply_loaded_audio(self, file_path: str, audio: np.ndarray, sr: int, auto_play: bool = True):
-        """Applies decoded audio buffer, reusing existing stream if sample rate matches to eliminate PortAudio teardown delay."""
-        needs_new_stream = (
-            self.stream is None or
-            self.sr != sr or
-            self.channels != audio.shape[1]
-        )
-
-        with self._audio_lock:
-            self.data = audio
-            self.sr = sr
-            self.channels = audio.shape[1]
-            self.total_frames = len(audio)
-            self.current_frame = 0
-            self.track_finished = False
-
-        if needs_new_stream:
-            if self.stream is not None:
-                try:
-                    self.stream.stop()
-                    self.stream.close()
-                except Exception:
-                    pass
-                self.stream = None
-
-            self.stream = sd.OutputStream(
-                samplerate=self.sr,
-                channels=self.channels,
-                callback=self._audio_callback,
-                blocksize=1024
-            )
-
-        if self.lyrics_manager:
-            self.lyrics_manager.load_track(file_path)
-
-        if auto_play:
-            self.play()
-        else:
-            self.is_playing = False
-            self.is_paused = True
-
-        # Preload next track in background so future skips are instantaneous
-        self._trigger_preload_next()
-
     def _trigger_preload_next(self):
-        """Asynchronously pre-decodes the upcoming track in a background thread."""
+        """Asynchronously pre-decodes the first 15s of the upcoming track in a background thread."""
         if not self.playlist:
             return
         next_track_path = None
@@ -304,17 +292,19 @@ class CyberAudioEngine:
             threading.Thread(target=self._preload_worker, args=(next_track_path,), daemon=True).start()
 
     def _preload_worker(self, path: str):
-        """Background worker that pre-decodes audio into memory."""
+        """Background worker that pre-decodes ONLY the first 15 seconds (max ~5.5 MB RAM)."""
         if not path or not os.path.exists(path) or path in self._preload_cache:
             return
         try:
-            audio, sr = sf.read(path, dtype='float32')
+            info = sf.info(path)
+            sr = info.samplerate
+            frames_to_read = min(info.frames, int(sr * 15.0))
+            audio, _ = sf.read(path, frames=frames_to_read, dtype='float32')
             if len(audio.shape) == 1:
                 audio = np.column_stack((audio, audio))
-            # Cache at most 2 tracks to preserve lightweight memory footprint
-            while len(self._preload_cache) >= 2:
-                self._preload_cache.pop(next(iter(self._preload_cache)))
-            self._preload_cache[path] = (audio, sr)
+            # Cache strictly 1 track maximum
+            self._preload_cache.clear()
+            self._preload_cache[path] = (audio, sr, info.frames, audio.shape[1])
         except Exception:
             pass
 
@@ -335,7 +325,15 @@ class CyberAudioEngine:
         self.is_playing = False
         self.is_paused = False
         self._preload_cache.clear()
+        self.head_buffer = None
         self._stop_desktop_capture()
+        with self._audio_lock:
+            if self.active_sf is not None:
+                try:
+                    self.active_sf.close()
+                except Exception:
+                    pass
+                self.active_sf = None
         try:
             if self.stream is not None:
                 self.stream.abort()
@@ -416,10 +414,16 @@ class CyberAudioEngine:
             self.play_index(idx)
 
     def seek(self, seconds: float):
-        if self.sr > 0 and self.data is not None:
+        if self.sr > 0 and self.active_sf is not None:
             with self._audio_lock:
                 target_frame = int(seconds * self.sr)
-                self.current_frame = max(0, min(target_frame, self.total_frames))
+                target_frame = max(0, min(target_frame, self.total_frames))
+                try:
+                    self.active_sf.seek(target_frame)
+                    self.current_frame = target_frame
+                    self.head_buffer = None
+                except Exception as e:
+                    print(f"[AUDIO ERROR] Seek failed: {e}")
 
     def get_position(self) -> float:
         if self.sr > 0:
@@ -442,29 +446,72 @@ class CyberAudioEngine:
         return "No Track Loaded"
 
     def _audio_callback(self, outdata, frames, time_info, status):
-        """High-priority audio streaming thread callback."""
-        if not self.is_playing or self.data is None:
+        """High-priority audio streaming thread callback with zero-memory block streaming."""
+        if not self.is_playing or self.active_sf is None:
             outdata.fill(0)
             return
 
         with self._audio_lock:
-            data = self.data
-            if data is None:
+            if self.active_sf is None:
                 outdata.fill(0)
                 return
-            pos = self.current_frame
-            total = self.total_frames
-            chunk = data[pos : pos + frames]
-            actual_frames = len(chunk)
 
-            if actual_frames < frames:
-                outdata[:actual_frames] = chunk * self.volume
-                outdata[actual_frames:] = 0
-                self.current_frame = total
-                self.track_finished = True
+            # If head buffer is available and current_frame < head_frames, read from head
+            if self.head_buffer is not None and self.current_frame < self.head_frames:
+                avail = min(frames, self.head_frames - self.current_frame)
+                slice_data = self.head_buffer[self.current_frame : self.current_frame + avail]
+                if avail < frames:
+                    outdata[:avail] = slice_data * self.volume
+                    self.current_frame += avail
+                    try:
+                        self.active_sf.seek(self.current_frame)
+                    except Exception:
+                        pass
+                    rem = frames - avail
+                    try:
+                        rem_data = self.active_sf.read(rem, dtype='float32')
+                    except Exception:
+                        rem_data = np.zeros((0, self.channels), dtype=np.float32)
+                    l = len(rem_data)
+                    if l > 0:
+                        if len(rem_data.shape) == 1:
+                            outdata[avail:avail+l, 0] = rem_data * self.volume
+                            outdata[avail:avail+l, 1] = rem_data * self.volume
+                        else:
+                            outdata[avail:avail+l] = rem_data * self.volume
+                    if l < rem:
+                        outdata[avail+l:] = 0
+                        self.track_finished = True
+                        self.is_playing = False
+                    self.current_frame += l
+                    self.head_buffer = None
+                else:
+                    outdata[:] = slice_data * self.volume
+                    self.current_frame += frames
             else:
-                outdata[:] = chunk * self.volume
-                self.current_frame += frames
+                try:
+                    data = self.active_sf.read(frames, dtype='float32')
+                except Exception:
+                    data = np.zeros((0, self.channels), dtype=np.float32)
+                l = len(data)
+                if l < frames:
+                    if l > 0:
+                        if len(data.shape) == 1:
+                            outdata[:l, 0] = data * self.volume
+                            outdata[:l, 1] = data * self.volume
+                        else:
+                            outdata[:l] = data * self.volume
+                    outdata[l:] = 0
+                    self.current_frame = self.total_frames
+                    self.track_finished = True
+                    self.is_playing = False
+                else:
+                    if len(data.shape) == 1:
+                        outdata[:, 0] = data * self.volume
+                        outdata[:, 1] = data * self.volume
+                    else:
+                        outdata[:] = data * self.volume
+                    self.current_frame += frames
 
         # Extract mono buffer for FFT visualizer (zero-allocation single channel slice)
         n = min(1024, frames)
