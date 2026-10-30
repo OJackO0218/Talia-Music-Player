@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
     QCheckBox, QPushButton, QFileDialog, QComboBox,
     QListWidget, QListWidgetItem, QScrollArea, QFrame, QApplication, QColorDialog,
-    QLineEdit, QMenu, QTextEdit, QPlainTextEdit
+    QLineEdit, QMenu, QTextEdit, QPlainTextEdit, QDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtGui import QIcon, QColor, QAction
@@ -17,6 +17,164 @@ from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
 from guide_dialog import GuideDialog
 from song_downloader import SongDownloaderService
+
+SHARED_PANEL_STYLE = """
+    QWidget {
+        background-color: #18181b;
+        color: #f4f4f5;
+        font-family: 'Segoe UI', Arial, sans-serif;
+    }
+    QScrollArea {
+        border: none;
+        background-color: transparent;
+    }
+    QScrollBar:vertical {
+        border: none;
+        background: #18181b;
+        width: 6px;
+        margin: 0px;
+    }
+    QScrollBar::handle:vertical {
+        background: #3f3f46;
+        min-height: 24px;
+        border-radius: 3px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: #52525b;
+    }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
+    QPushButton {
+        background-color: #27272a;
+        border: 1px solid #3f3f46;
+        color: #f4f4f5;
+        border-radius: 4px;
+        padding: 6px 12px;
+        font-weight: 500;
+        font-size: 11px;
+    }
+    QPushButton:hover {
+        background-color: #3f3f46;
+        border-color: #52525b;
+        color: #ffffff;
+    }
+    QPushButton:pressed {
+        background-color: #202024;
+    }
+    QPushButton:disabled {
+        background-color: #202024;
+        border-color: #27272a;
+        color: #52525b;
+    }
+    QPushButton#btnPrimary {
+        background-color: #2563eb;
+        border: 1px solid #3b82f6;
+        color: #ffffff;
+    }
+    QPushButton#btnPrimary:hover {
+        background-color: #1d4ed8;
+    }
+    QPushButton#btnExitApp {
+        background-color: #27272a;
+        color: #f87171;
+        border: 1px solid #451a1a;
+        border-radius: 4px;
+        padding: 7px;
+        font-size: 11px;
+        font-weight: 500;
+    }
+    QPushButton#btnExitApp:hover {
+        background-color: #7f1d1d;
+        color: #ffffff;
+        border-color: #b91c1c;
+    }
+    QComboBox {
+        background-color: #202024;
+        border: 1px solid #3f3f46;
+        border-radius: 4px;
+        color: #f4f4f5;
+        padding: 5px 10px;
+        font-size: 11px;
+    }
+    QComboBox:hover {
+        border-color: #3b82f6;
+    }
+    QComboBox QAbstractItemView {
+        background-color: #202024;
+        border: 1px solid #3f3f46;
+        color: #f4f4f5;
+        selection-background-color: #3b82f6;
+        selection-color: #ffffff;
+    }
+    QListWidget {
+        background-color: #202024;
+        border: 1px solid #3f3f46;
+        border-radius: 4px;
+        color: #e4e4e7;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 11px;
+        padding: 4px;
+    }
+    QListWidget::item {
+        padding: 5px 8px;
+        border-radius: 3px;
+        border-bottom: 1px solid #27272a;
+    }
+    QListWidget::item:hover {
+        background-color: #27272a;
+        color: #ffffff;
+    }
+    QListWidget::item:selected {
+        background-color: #2e3547;
+        color: #ffffff;
+        border-left: 3px solid #3b82f6;
+    }
+    QSlider::groove:horizontal {
+        height: 4px;
+        background: #3f3f46;
+        border-radius: 2px;
+    }
+    QSlider::sub-page:horizontal {
+        background: #3b82f6;
+        border-radius: 2px;
+    }
+    QSlider::handle:horizontal {
+        background: #ffffff;
+        border: 1px solid #71717a;
+        width: 14px;
+        height: 14px;
+        margin-top: -5px;
+        margin-bottom: -5px;
+        border-radius: 7px;
+    }
+    QSlider::handle:horizontal:hover {
+        background: #ffffff;
+        border: 1px solid #3b82f6;
+    }
+    QCheckBox {
+        spacing: 8px;
+        color: #d4d4d8;
+        font-size: 11px;
+    }
+    QCheckBox::indicator {
+        width: 14px;
+        height: 14px;
+        border: 1px solid #3f3f46;
+        border-radius: 3px;
+        background: #202024;
+    }
+    QCheckBox::indicator:checked {
+        background: #3b82f6;
+        border: 1px solid #3b82f6;
+    }
+    QCheckBox::indicator:hover {
+        border-color: #3b82f6;
+    }
+    QLabel {
+        font-size: 11px;
+    }
+"""
 
 
 def create_section_header(title: str) -> QWidget:
@@ -39,6 +197,269 @@ def create_section_header(title: str) -> QWidget:
     return container
 
 
+class SettingsDialog(QDialog):
+    """Clean, dedicated settings dialog for advanced lyrics, visualizer, and character configuration."""
+
+    def __init__(self, panel: "ControlPanel"):
+        super().__init__()
+        self.panel = panel
+        self.setWindowTitle("Talia Settings")
+        if os.path.exists(ICON_PATH):
+            self.setWindowIcon(QIcon(ICON_PATH))
+
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
+        self.setMinimumSize(420, 500)
+        self.resize(440, 620)
+        self.setStyleSheet(SHARED_PANEL_STYLE)
+        self.init_ui()
+
+    def init_ui(self):
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(14, 14, 14, 14)
+        content_layout.setSpacing(10)
+
+        # --- SECTION: LYRICS ---
+        content_layout.addWidget(create_section_header("Lyrics"))
+
+        self.lbl_lyric_disclaimer = QLabel("Note: Some songs may not have available or synchronized lyrics.")
+        self.lbl_lyric_disclaimer.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic; margin-top: 2px; margin-bottom: 4px;")
+        self.lbl_lyric_disclaimer.setWordWrap(True)
+        content_layout.addWidget(self.lbl_lyric_disclaimer)
+
+        # Font dropdown row
+        hbox_font = QHBoxLayout()
+        lbl_font_title = QLabel("Font:")
+        lbl_font_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_font.addWidget(lbl_font_title)
+
+        self.combo_font = QComboBox()
+        self.combo_font.currentTextChanged.connect(self.panel.on_font_changed)
+        hbox_font.addWidget(self.combo_font, 1)
+
+        self.btn_open_fonts = QPushButton("Open Folder")
+        self.btn_open_fonts.setToolTip("Open assets/fonts/ folder to add .ttf/.otf fonts")
+        self.btn_open_fonts.clicked.connect(self.panel.open_fonts_folder)
+        hbox_font.addWidget(self.btn_open_fonts)
+
+        self.btn_reload_fonts = QPushButton("Reload")
+        self.btn_reload_fonts.setToolTip("Re-scan fonts folder")
+        self.btn_reload_fonts.clicked.connect(self.panel.reload_custom_fonts)
+        hbox_font.addWidget(self.btn_reload_fonts)
+        content_layout.addLayout(hbox_font)
+
+        # Color row
+        hbox_lyric_color = QHBoxLayout()
+        lbl_lyric_col = QLabel("Color:")
+        lbl_lyric_col.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_lyric_color.addWidget(lbl_lyric_col)
+
+        self.combo_lyric_color = QComboBox()
+        for name in self.panel.lyric_presets.keys():
+            self.combo_lyric_color.addItem(name)
+        self.combo_lyric_color.addItem("Custom...")
+        self.combo_lyric_color.currentTextChanged.connect(self.panel.on_lyric_preset_changed)
+        hbox_lyric_color.addWidget(self.combo_lyric_color, 1)
+
+        self.btn_pick_color = QPushButton("Custom Color")
+        self.btn_pick_color.clicked.connect(self.panel.choose_custom_lyric_color)
+        hbox_lyric_color.addWidget(self.btn_pick_color)
+        content_layout.addLayout(hbox_lyric_color)
+
+        self.chk_word_glow = QCheckBox("Word highlight animation")
+        self.chk_word_glow.setChecked(True)
+        self.chk_word_glow.toggled.connect(self.panel.on_word_glow_toggled)
+        content_layout.addWidget(self.chk_word_glow)
+
+        # Sync offset controls
+        hbox_sync = QHBoxLayout()
+        lbl_sync_title = QLabel("Sync:")
+        lbl_sync_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_sync.addWidget(lbl_sync_title)
+
+        btn_minus_half = QPushButton("-0.5s")
+        btn_minus_half.setToolTip("Shift lyrics 0.5s earlier (Hotkeys: Ctrl+[ / Ctrl+])")
+        btn_minus_half.clicked.connect(lambda: self.panel.adjust_lyrics_offset(-0.5))
+        hbox_sync.addWidget(btn_minus_half)
+
+        btn_minus_tenth = QPushButton("-0.1s")
+        btn_minus_tenth.clicked.connect(lambda: self.panel.adjust_lyrics_offset(-0.1))
+        hbox_sync.addWidget(btn_minus_tenth)
+
+        self.lbl_sync_offset = QLabel("+0.00s")
+        self.lbl_sync_offset.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_sync_offset.setStyleSheet("color: #f4f4f5; font-weight: 600; min-width: 50px;")
+        hbox_sync.addWidget(self.lbl_sync_offset)
+
+        btn_plus_tenth = QPushButton("+0.1s")
+        btn_plus_tenth.clicked.connect(lambda: self.panel.adjust_lyrics_offset(0.1))
+        hbox_sync.addWidget(btn_plus_tenth)
+
+        btn_plus_half = QPushButton("+0.5s")
+        btn_plus_half.clicked.connect(lambda: self.panel.adjust_lyrics_offset(0.5))
+        hbox_sync.addWidget(btn_plus_half)
+
+        btn_sync_reset = QPushButton("Reset")
+        btn_sync_reset.clicked.connect(self.panel.reset_lyrics_offset)
+        hbox_sync.addWidget(btn_sync_reset)
+
+        btn_auto_sync = QPushButton("Auto-Sync")
+        btn_auto_sync.setToolTip("Automatically align audio start with lyrics timestamp")
+        btn_auto_sync.clicked.connect(self.panel.auto_sync_lyrics)
+        hbox_sync.addWidget(btn_auto_sync)
+        content_layout.addLayout(hbox_sync)
+
+        # --- SECTION: VISUALIZER CONFIGURATION ---
+        content_layout.addWidget(create_section_header("Visualizer"))
+
+        hbox_style = QHBoxLayout()
+        lbl_vis_mode = QLabel("Style:")
+        lbl_vis_mode.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_style.addWidget(lbl_vis_mode)
+
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItems(["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"])
+        self.combo_mode.currentTextChanged.connect(self.panel.on_vis_mode_changed)
+        hbox_style.addWidget(self.combo_mode)
+
+        lbl_vis_theme = QLabel("Palette:")
+        lbl_vis_theme.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_style.addWidget(lbl_vis_theme)
+
+        self.combo_theme = QComboBox()
+        self.combo_theme.addItems(list(COLOR_THEMES.keys()))
+        self.combo_theme.currentTextChanged.connect(self.panel.on_vis_theme_changed)
+        hbox_style.addWidget(self.combo_theme)
+        content_layout.addLayout(hbox_style)
+
+        # --- SECTION: CHARACTER & DISPLAY ---
+        content_layout.addWidget(create_section_header("Character"))
+
+        # Eye sensitivity
+        hbox_sens = QHBoxLayout()
+        lbl_sens = QLabel("Eye Sensitivity:")
+        lbl_sens.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_sens.addWidget(lbl_sens)
+
+        self.slider_eye_sens = QSlider(Qt.Orientation.Horizontal)
+        self.slider_eye_sens.setRange(20, 300)
+        self.slider_eye_sens.setValue(100)
+        self.slider_eye_sens.valueChanged.connect(self.panel.on_eye_sens_changed)
+        hbox_sens.addWidget(self.slider_eye_sens)
+
+        self.lbl_sens_val = QLabel("1.0x")
+        self.lbl_sens_val.setFixedWidth(36)
+        self.lbl_sens_val.setStyleSheet("color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600;")
+        hbox_sens.addWidget(self.lbl_sens_val)
+        content_layout.addLayout(hbox_sens)
+
+        # Character size
+        hbox_sz = QHBoxLayout()
+        lbl_sz = QLabel("Character Scale:")
+        lbl_sz.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_sz.addWidget(lbl_sz)
+
+        self.slider_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_size.setRange(MIN_CHAR_SIZE, MAX_CHAR_SIZE)
+        self.slider_size.setValue(self.panel.overlay.width())
+        self.slider_size.valueChanged.connect(self.panel.on_size_change)
+        hbox_sz.addWidget(self.slider_size)
+        content_layout.addLayout(hbox_sz)
+
+        # Character opacity
+        hbox_op = QHBoxLayout()
+        lbl_op = QLabel("Opacity:")
+        lbl_op.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_op.addWidget(lbl_op)
+
+        self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.slider_opacity.setRange(20, 100)
+        self.slider_opacity.setValue(100)
+        self.slider_opacity.valueChanged.connect(self.panel.on_opacity_change)
+        hbox_op.addWidget(self.slider_opacity)
+        content_layout.addLayout(hbox_op)
+
+        # Feature Toggles
+        hbox_toggles = QHBoxLayout()
+        self.chk_scanlines = QCheckBox("Scanlines")
+        self.chk_scanlines.setChecked(True)
+        self.chk_scanlines.toggled.connect(self.panel.on_scanlines_toggled)
+        hbox_toggles.addWidget(self.chk_scanlines)
+
+        self.chk_bass_pop = QCheckBox("Bass Reaction")
+        self.chk_bass_pop.setChecked(True)
+        self.chk_bass_pop.toggled.connect(self.panel.on_bass_pop_toggled)
+        hbox_toggles.addWidget(self.chk_bass_pop)
+
+        self.chk_widescreen = QCheckBox("Widescreen")
+        self.chk_widescreen.setChecked(False)
+        self.chk_widescreen.toggled.connect(self.panel.on_widescreen_toggled)
+        hbox_toggles.addWidget(self.chk_widescreen)
+        content_layout.addLayout(hbox_toggles)
+
+        # --- SECTION: SETTINGS & ACTIONS ---
+        content_layout.addWidget(create_section_header("Actions"))
+
+        hbox_actions = QHBoxLayout()
+        self.btn_save_settings = QPushButton("Save Settings")
+        self.btn_save_settings.setObjectName("btnSaveSettings")
+        self.btn_save_settings.clicked.connect(self.panel.save_settings_action)
+        hbox_actions.addWidget(self.btn_save_settings)
+
+        self.btn_show_guide = QPushButton("Controls Guide")
+        self.btn_show_guide.clicked.connect(self.panel.show_guide_dialog)
+        hbox_actions.addWidget(self.btn_show_guide)
+
+        btn_reload = QPushButton("Reload Assets")
+        btn_reload.clicked.connect(self.panel.reload_art)
+        hbox_actions.addWidget(btn_reload)
+        content_layout.addLayout(hbox_actions)
+
+        self.btn_exit_app = QPushButton("Exit Talia")
+        self.btn_exit_app.setObjectName("btnExitApp")
+        self.btn_exit_app.clicked.connect(self.panel.overlay.close_application)
+        content_layout.addWidget(self.btn_exit_app)
+
+        scroll_area.setWidget(content_widget)
+        root_layout.addWidget(scroll_area)
+
+        self.populate_fonts()
+
+    def populate_fonts(self):
+        self.combo_font.blockSignals(True)
+        curr = self.combo_font.currentText()
+        self.combo_font.clear()
+
+        available = ["Default (Segoe UI / Inter)"]
+        if self.panel.lyrics_overlay and hasattr(self.panel.lyrics_overlay, "get_available_fonts"):
+            available = self.panel.lyrics_overlay.get_available_fonts()
+
+        for name in available:
+            self.combo_font.addItem(name)
+
+        active = getattr(self.panel.lyrics_overlay, "custom_font_family", None) if self.panel.lyrics_overlay else None
+        if active and active in available:
+            self.combo_font.setCurrentText(active)
+        elif curr and curr in available:
+            self.combo_font.setCurrentText(curr)
+        else:
+            self.combo_font.setCurrentIndex(0)
+        self.combo_font.blockSignals(False)
+
+    def closeEvent(self, event):
+        self.hide()
+        event.ignore()
+
+
 class ControlPanel(QWidget):
     """Clean, modern controller for Talia Music Player, Visualizer, and Settings."""
 
@@ -50,6 +471,16 @@ class ControlPanel(QWidget):
         self.lyrics_overlay = lyrics_overlay
         if self.lyrics_overlay:
             self.lyrics_overlay.panel = self
+
+        self.lyric_presets = {
+            "Pure White": "#ffffff",
+            "Soft Blue": "#60a5fa",
+            "Soft Cyan": "#38bdf8",
+            "Soft Pink": "#f472b6",
+            "Soft Purple": "#c084fc",
+            "Soft Yellow": "#fde047",
+            "Mint Green": "#4ade80",
+        }
 
         self.last_f7_state = False
         self.last_bracket_left_state = False
@@ -64,171 +495,33 @@ class ControlPanel(QWidget):
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
 
-        # Resizable window with sensible minimum bounds
-        self.setMinimumSize(420, 560)
-        self.resize(480, 780)
+        # Resizable window with compact default bounds
+        self.setMinimumSize(420, 520)
+        self.resize(440, 580)
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
-
-        # Clean neutral dark palette (Zinc / Slate, no harsh neon or garish tints)
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #18181b;
-                color: #f4f4f5;
-                font-family: 'Segoe UI', Arial, sans-serif;
-            }
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: #18181b;
-                width: 6px;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: #3f3f46;
-                min-height: 24px;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #52525b;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-            QPushButton {
-                background-color: #27272a;
-                border: 1px solid #3f3f46;
-                color: #f4f4f5;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: 500;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #3f3f46;
-                border-color: #52525b;
-                color: #ffffff;
-            }
-            QPushButton:pressed {
-                background-color: #202024;
-            }
-            QPushButton:disabled {
-                background-color: #202024;
-                border-color: #27272a;
-                color: #52525b;
-            }
-            QPushButton#btnPrimary {
-                background-color: #2563eb;
-                border: 1px solid #3b82f6;
-                color: #ffffff;
-            }
-            QPushButton#btnPrimary:hover {
-                background-color: #1d4ed8;
-            }
-            QPushButton#btnExitApp {
-                background-color: #27272a;
-                color: #f87171;
-                border: 1px solid #451a1a;
-                border-radius: 4px;
-                padding: 7px;
-                font-size: 11px;
-                font-weight: 500;
-            }
-            QPushButton#btnExitApp:hover {
-                background-color: #7f1d1d;
-                color: #ffffff;
-                border-color: #b91c1c;
-            }
-            QComboBox {
-                background-color: #202024;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                color: #f4f4f5;
-                padding: 5px 10px;
-                font-size: 11px;
-            }
-            QComboBox:hover {
-                border-color: #3b82f6;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #202024;
-                border: 1px solid #3f3f46;
-                color: #f4f4f5;
-                selection-background-color: #3b82f6;
-                selection-color: #ffffff;
-            }
-            QListWidget {
-                background-color: #202024;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                color: #e4e4e7;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 11px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                padding: 5px 8px;
-                border-radius: 3px;
-                border-bottom: 1px solid #27272a;
-            }
-            QListWidget::item:hover {
-                background-color: #27272a;
-                color: #ffffff;
-            }
-            QListWidget::item:selected {
-                background-color: #2e3547;
-                color: #ffffff;
-                border-left: 3px solid #3b82f6;
-            }
-            QSlider::groove:horizontal {
-                height: 4px;
-                background: #3f3f46;
-                border-radius: 2px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #3b82f6;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #ffffff;
-                border: 1px solid #71717a;
-                width: 14px;
-                height: 14px;
-                margin-top: -5px;
-                margin-bottom: -5px;
-                border-radius: 7px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #ffffff;
-                border: 1px solid #3b82f6;
-            }
-            QCheckBox {
-                spacing: 8px;
-                color: #d4d4d8;
-                font-size: 11px;
-            }
-            QCheckBox::indicator {
-                width: 14px;
-                height: 14px;
-                border: 1px solid #3f3f46;
-                border-radius: 3px;
-                background: #202024;
-            }
-            QCheckBox::indicator:checked {
-                background: #3b82f6;
-                border: 1px solid #3b82f6;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #3b82f6;
-            }
-            QLabel {
-                font-size: 11px;
-            }
-        """)
+        self.setStyleSheet(SHARED_PANEL_STYLE)
 
         self.init_ui()
+
+        # Dedicated Settings Dialog
+        self.settings_dialog = SettingsDialog(self)
+
+        # Direct attribute proxies for seamless backwards compatibility
+        self.slider_size = self.settings_dialog.slider_size
+        self.slider_opacity = self.settings_dialog.slider_opacity
+        self.slider_eye_sens = self.settings_dialog.slider_eye_sens
+        self.lbl_sens_val = self.settings_dialog.lbl_sens_val
+        self.chk_scanlines = self.settings_dialog.chk_scanlines
+        self.chk_bass_pop = self.settings_dialog.chk_bass_pop
+        self.chk_widescreen = self.settings_dialog.chk_widescreen
+        self.combo_mode = self.settings_dialog.combo_mode
+        self.combo_theme = self.settings_dialog.combo_theme
+        self.combo_lyric_color = self.settings_dialog.combo_lyric_color
+        self.combo_font = self.settings_dialog.combo_font
+        self.btn_pick_color = self.settings_dialog.btn_pick_color
+        self.chk_word_glow = self.settings_dialog.chk_word_glow
+        self.lbl_sync_offset = self.settings_dialog.lbl_sync_offset
+        self.btn_save_settings = self.settings_dialog.btn_save_settings
 
         # Song Downloader & Auto-Sync Service (YouTube search -> Opus 160k -> Synced LRC)
         self.downloader = SongDownloaderService(self)
@@ -268,9 +561,18 @@ class ControlPanel(QWidget):
         content_layout.setContentsMargins(14, 12, 14, 14)
         content_layout.setSpacing(10)
 
-        # --- PRIMARY TOGGLES (Move, Mode, Lyrics, Eco) ---
+        # --- PRIMARY TOGGLES (Settings, Move, Mode, Lyrics, Eco) ---
         hbox_top_toggles = QHBoxLayout()
         hbox_top_toggles.setSpacing(6)
+
+        self.btn_open_settings = QPushButton("⚙ Settings")
+        self.btn_open_settings.setObjectName("btnOpenSettings")
+        self.btn_open_settings.setToolTip("Open Advanced Settings")
+        self.btn_open_settings.setStyleSheet(
+            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; font-weight: 600; font-size: 11px; padding: 6px 10px;"
+        )
+        self.btn_open_settings.clicked.connect(self.open_settings_window)
+        hbox_top_toggles.addWidget(self.btn_open_settings)
 
         self.btn_move_talia = QPushButton("Lock Window")
         self.btn_move_talia.setObjectName("btnMoveTalia")
@@ -521,220 +823,6 @@ class ControlPanel(QWidget):
         self.lbl_dl_status.setWordWrap(True)
         self.lbl_dl_status.setVisible(False)
         content_layout.addWidget(self.lbl_dl_status)
-
-        # --- SECTION: LYRICS SETTINGS ---
-        content_layout.addWidget(create_section_header("Lyrics"))
-
-        # Lyrics Disclaimer (Subtle and informative)
-        self.lbl_lyric_disclaimer = QLabel("Note: Some songs may not have available or synchronized lyrics.")
-        self.lbl_lyric_disclaimer.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic; margin-top: 2px; margin-bottom: 4px;")
-        self.lbl_lyric_disclaimer.setWordWrap(True)
-        content_layout.addWidget(self.lbl_lyric_disclaimer)
-
-        hbox_lyric_color = QHBoxLayout()
-        lbl_lyric_col = QLabel("Color:")
-        lbl_lyric_col.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_lyric_color.addWidget(lbl_lyric_col)
-
-        self.combo_lyric_color = QComboBox()
-        self.lyric_presets = {
-            "Pure White": "#ffffff",
-            "Soft Blue": "#60a5fa",
-            "Soft Cyan": "#38bdf8",
-            "Soft Pink": "#f472b6",
-            "Soft Purple": "#c084fc",
-            "Soft Yellow": "#fde047",
-            "Mint Green": "#4ade80",
-        }
-        for name in self.lyric_presets.keys():
-            self.combo_lyric_color.addItem(name)
-        self.combo_lyric_color.addItem("Custom...")
-        self.combo_lyric_color.currentTextChanged.connect(self.on_lyric_preset_changed)
-        hbox_lyric_color.addWidget(self.combo_lyric_color)
-
-        self.btn_pick_color = QPushButton("Custom Color")
-        self.btn_pick_color.clicked.connect(self.choose_custom_lyric_color)
-        hbox_lyric_color.addWidget(self.btn_pick_color)
-        content_layout.addLayout(hbox_lyric_color)
-
-        self.chk_word_glow = QCheckBox("Word highlight animation")
-        self.chk_word_glow.setChecked(True)
-        self.chk_word_glow.toggled.connect(self.on_word_glow_toggled)
-        content_layout.addWidget(self.chk_word_glow)
-
-        # Custom Font selector / folder row
-        hbox_font = QHBoxLayout()
-        lbl_font_title = QLabel("Font:")
-        lbl_font_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_font.addWidget(lbl_font_title)
-
-        font_name = getattr(self.lyrics_overlay, "custom_font_family", None) if self.lyrics_overlay else None
-        self.lbl_font_val = QLabel(font_name if font_name else "Default (Segoe UI / Inter)")
-        self.lbl_font_val.setStyleSheet("color: #f4f4f5; font-size: 11px;")
-        hbox_font.addWidget(self.lbl_font_val)
-
-        hbox_font.addStretch()
-
-        btn_open_fonts = QPushButton("Open Fonts Folder")
-        btn_open_fonts.setToolTip("Drop any .ttf or .otf file into this folder to customize the lyric font")
-        btn_open_fonts.clicked.connect(self.open_fonts_folder)
-        hbox_font.addWidget(btn_open_fonts)
-
-        btn_reload_fonts = QPushButton("Reload Font")
-        btn_reload_fonts.setToolTip("Re-scans assets/fonts/ folder for new font files")
-        btn_reload_fonts.clicked.connect(self.reload_custom_fonts)
-        hbox_font.addWidget(btn_reload_fonts)
-        content_layout.addLayout(hbox_font)
-
-        # Sync offset controls
-        hbox_sync = QHBoxLayout()
-        lbl_sync_title = QLabel("Sync:")
-        lbl_sync_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_sync.addWidget(lbl_sync_title)
-
-        btn_minus_half = QPushButton("-0.5s")
-        btn_minus_half.setToolTip("Shift lyrics 0.5s earlier (Hotkeys: Ctrl+[ / Ctrl+])")
-        btn_minus_half.clicked.connect(lambda: self.adjust_lyrics_offset(-0.5))
-        hbox_sync.addWidget(btn_minus_half)
-
-        btn_minus_tenth = QPushButton("-0.1s")
-        btn_minus_tenth.clicked.connect(lambda: self.adjust_lyrics_offset(-0.1))
-        hbox_sync.addWidget(btn_minus_tenth)
-
-        self.lbl_sync_offset = QLabel("+0.00s")
-        self.lbl_sync_offset.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_sync_offset.setStyleSheet("color: #f4f4f5; font-weight: 600; min-width: 50px;")
-        hbox_sync.addWidget(self.lbl_sync_offset)
-
-        btn_plus_tenth = QPushButton("+0.1s")
-        btn_plus_tenth.clicked.connect(lambda: self.adjust_lyrics_offset(0.1))
-        hbox_sync.addWidget(btn_plus_tenth)
-
-        btn_plus_half = QPushButton("+0.5s")
-        btn_plus_half.clicked.connect(lambda: self.adjust_lyrics_offset(0.5))
-        hbox_sync.addWidget(btn_plus_half)
-
-        btn_sync_reset = QPushButton("Reset")
-        btn_sync_reset.clicked.connect(self.reset_lyrics_offset)
-        hbox_sync.addWidget(btn_sync_reset)
-
-        btn_auto_sync = QPushButton("Auto-Sync")
-        btn_auto_sync.setToolTip("Automatically align audio start with lyrics timestamp")
-        btn_auto_sync.clicked.connect(self.auto_sync_lyrics)
-        hbox_sync.addWidget(btn_auto_sync)
-
-        content_layout.addLayout(hbox_sync)
-
-        # --- SECTION: VISUALIZER CONFIGURATION ---
-        content_layout.addWidget(create_section_header("Visualizer"))
-
-        hbox_style = QHBoxLayout()
-        lbl_vis_mode = QLabel("Style:")
-        lbl_vis_mode.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_style.addWidget(lbl_vis_mode)
-
-        self.combo_mode = QComboBox()
-        self.combo_mode.addItems(["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"])
-        self.combo_mode.currentTextChanged.connect(self.on_vis_mode_changed)
-        hbox_style.addWidget(self.combo_mode)
-
-        lbl_vis_theme = QLabel("Palette:")
-        lbl_vis_theme.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_style.addWidget(lbl_vis_theme)
-
-        self.combo_theme = QComboBox()
-        self.combo_theme.addItems(list(COLOR_THEMES.keys()))
-        self.combo_theme.currentTextChanged.connect(self.on_vis_theme_changed)
-        hbox_style.addWidget(self.combo_theme)
-        content_layout.addLayout(hbox_style)
-
-        # --- SECTION: CHARACTER & DISPLAY ---
-        content_layout.addWidget(create_section_header("Character"))
-
-        # Eye sensitivity
-        hbox_sens = QHBoxLayout()
-        lbl_sens = QLabel("Eye Sensitivity:")
-        lbl_sens.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_sens.addWidget(lbl_sens)
-
-        self.slider_eye_sens = QSlider(Qt.Orientation.Horizontal)
-        self.slider_eye_sens.setRange(20, 300)
-        self.slider_eye_sens.setValue(100)
-        self.slider_eye_sens.valueChanged.connect(self.on_eye_sens_changed)
-        hbox_sens.addWidget(self.slider_eye_sens)
-
-        self.lbl_sens_val = QLabel("1.0x")
-        self.lbl_sens_val.setFixedWidth(36)
-        self.lbl_sens_val.setStyleSheet("color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600;")
-        hbox_sens.addWidget(self.lbl_sens_val)
-        content_layout.addLayout(hbox_sens)
-
-        # Character size
-        hbox_sz = QHBoxLayout()
-        lbl_sz = QLabel("Character Scale:")
-        lbl_sz.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_sz.addWidget(lbl_sz)
-
-        self.slider_size = QSlider(Qt.Orientation.Horizontal)
-        self.slider_size.setRange(MIN_CHAR_SIZE, MAX_CHAR_SIZE)
-        self.slider_size.setValue(self.overlay.width())
-        self.slider_size.valueChanged.connect(self.on_size_change)
-        hbox_sz.addWidget(self.slider_size)
-        content_layout.addLayout(hbox_sz)
-
-        # Character opacity
-        hbox_op = QHBoxLayout()
-        lbl_op = QLabel("Opacity:")
-        lbl_op.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_op.addWidget(lbl_op)
-
-        self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
-        self.slider_opacity.setRange(20, 100)
-        self.slider_opacity.setValue(100)
-        self.slider_opacity.valueChanged.connect(self.on_opacity_change)
-        hbox_op.addWidget(self.slider_opacity)
-        content_layout.addLayout(hbox_op)
-
-        # Feature Toggles
-        hbox_toggles = QHBoxLayout()
-        self.chk_scanlines = QCheckBox("Scanlines")
-        self.chk_scanlines.setChecked(True)
-        self.chk_scanlines.toggled.connect(self.on_scanlines_toggled)
-        hbox_toggles.addWidget(self.chk_scanlines)
-
-        self.chk_bass_pop = QCheckBox("Bass Reaction")
-        self.chk_bass_pop.setChecked(True)
-        self.chk_bass_pop.toggled.connect(self.on_bass_pop_toggled)
-        hbox_toggles.addWidget(self.chk_bass_pop)
-
-        self.chk_widescreen = QCheckBox("Widescreen")
-        self.chk_widescreen.setChecked(False)
-        self.chk_widescreen.toggled.connect(self.on_widescreen_toggled)
-        hbox_toggles.addWidget(self.chk_widescreen)
-        content_layout.addLayout(hbox_toggles)
-
-        # --- SECTION: SETTINGS & ACTIONS ---
-        content_layout.addWidget(create_section_header("Settings"))
-
-        hbox_actions = QHBoxLayout()
-        self.btn_save_settings = QPushButton("Save Settings")
-        self.btn_save_settings.setObjectName("btnSaveSettings")
-        self.btn_save_settings.clicked.connect(self.save_settings_action)
-        hbox_actions.addWidget(self.btn_save_settings)
-
-        self.btn_show_guide = QPushButton("Controls Guide")
-        self.btn_show_guide.clicked.connect(self.show_guide_dialog)
-        hbox_actions.addWidget(self.btn_show_guide)
-
-        btn_reload = QPushButton("Reload Assets")
-        btn_reload.clicked.connect(self.reload_art)
-        hbox_actions.addWidget(btn_reload)
-        content_layout.addLayout(hbox_actions)
-
-        self.btn_exit_app = QPushButton("Exit Talia")
-        self.btn_exit_app.setObjectName("btnExitApp")
-        self.btn_exit_app.clicked.connect(self.overlay.close_application)
-        content_layout.addWidget(self.btn_exit_app)
 
         scroll_area.setWidget(content_widget)
         root_layout.addWidget(scroll_area)
@@ -1066,7 +1154,12 @@ class ControlPanel(QWidget):
     def on_seek_released(self):
         self.is_user_scrubbing = False
         val = self.slider_seek.value()
-        self.audio_engine.seek(val / 1000.0)
+        dur = self.audio_engine.get_duration()
+        if dur > 0:
+            target_sec = (val / 1000.0) * dur
+            self.audio_engine.seek(target_sec)
+        else:
+            self.audio_engine.seek(0.0)
 
     def update_timeline(self):
         if self.is_user_scrubbing:
@@ -1093,7 +1186,8 @@ class ControlPanel(QWidget):
         self.lbl_time_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
 
         # Auto-advance to next track when song finishes
-        if self.audio_engine.track_finished:
+        is_finished = self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.08)
+        if is_finished:
             self.audio_engine.track_finished = False
             self.audio_engine.next_track()
             self.sync_play_state()
@@ -1364,19 +1458,43 @@ class ControlPanel(QWidget):
                 f"background-color: #27272a; color: {hex_code}; border: 1px solid {hex_code}; font-weight: 500;"
             )
 
+    def open_settings_window(self):
+        if hasattr(self, "settings_dialog"):
+            self.settings_dialog.show()
+            self.settings_dialog.raise_()
+            self.settings_dialog.activateWindow()
+
+    def on_font_changed(self, text: str):
+        if getattr(self, "is_loading_settings", False):
+            return
+        if not text or "Default" in text:
+            if self.lyrics_overlay:
+                self.lyrics_overlay.set_custom_font(None)
+        else:
+            if self.lyrics_overlay:
+                self.lyrics_overlay.set_custom_font(text)
+        try:
+            cfg = self.get_current_settings_dict()
+            cfg["lyrics_font"] = text
+            save_settings(cfg)
+        except Exception as e:
+            print(f"[ERROR] Auto-saving lyrics font: {e}")
+
     def open_fonts_folder(self):
         os.makedirs(FONTS_DIR, exist_ok=True)
         subprocess.run(["explorer", os.path.normpath(FONTS_DIR)])
 
     def reload_custom_fonts(self):
+        if hasattr(self, "settings_dialog"):
+            self.settings_dialog.populate_fonts()
+        active = self.combo_font.currentText() if hasattr(self, "combo_font") else ""
         if self.lyrics_overlay:
-            self.lyrics_overlay.load_custom_font()
-            self.lyrics_overlay._cached_layout_key = None
+            if not active or "Default" in active:
+                self.lyrics_overlay.set_custom_font(None)
+            else:
+                self.lyrics_overlay.set_custom_font(active)
             self.lyrics_overlay.update()
-            name = getattr(self.lyrics_overlay, "custom_font_family", None)
-            if hasattr(self, "lbl_font_val"):
-                self.lbl_font_val.setText(name if name else "Default (Segoe UI / Inter)")
-            print(f"[FONTS] Reloaded lyric fonts. Active: {name or 'Default'}")
+        print(f"[FONTS] Reloaded lyric fonts. Active: {active or 'Default'}")
 
     def show_guide_dialog(self):
         cfg = self.get_current_settings_dict()
@@ -1447,6 +1565,8 @@ class ControlPanel(QWidget):
             settings_dict["show_lyrics"] = bool(self.lyrics_overlay.is_enabled)
             settings_dict["lyrics_color"] = str(getattr(self.lyrics_overlay, "color_hex", "#ffffff"))
             settings_dict["lyrics_word_glow"] = bool(getattr(self.lyrics_overlay, "word_glow", True))
+            font_val = self.combo_font.currentText() if hasattr(self, "combo_font") else "Default (Segoe UI / Inter)"
+            settings_dict["lyrics_font"] = font_val
         return settings_dict
 
     def apply_settings(self, cfg: dict):
@@ -1550,6 +1670,21 @@ class ControlPanel(QWidget):
                 self.chk_word_glow.setChecked(word_glow)
                 self.chk_word_glow.blockSignals(False)
 
+            # Lyrics Font
+            lyrics_font = cfg.get("lyrics_font", "Default (Segoe UI / Inter)")
+            if hasattr(self, "settings_dialog"):
+                self.settings_dialog.populate_fonts()
+                if hasattr(self, "combo_font"):
+                    idx = self.combo_font.findText(lyrics_font)
+                    if idx >= 0:
+                        self.combo_font.blockSignals(True)
+                        self.combo_font.setCurrentIndex(idx)
+                        self.combo_font.blockSignals(False)
+                    if "Default" in lyrics_font:
+                        self.lyrics_overlay.set_custom_font(None)
+                    else:
+                        self.lyrics_overlay.set_custom_font(lyrics_font)
+
         eco = bool(cfg.get("eco_mode", False))
         self.set_eco_mode(eco)
 
@@ -1571,6 +1706,8 @@ class ControlPanel(QWidget):
     def closeEvent(self, event):
         cfg = self.get_current_settings_dict()
         save_settings(cfg)
+        if hasattr(self, "settings_dialog") and self.settings_dialog.isVisible():
+            self.settings_dialog.hide()
         self.hide()
         event.ignore()
 

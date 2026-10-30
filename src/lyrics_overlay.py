@@ -89,20 +89,32 @@ class LyricsOverlayWindow(QWidget):
         self.topmost_timer.timeout.connect(self.enforce_topmost)
         self.topmost_timer.start(1000)
 
-    def load_custom_font(self):
-        """Scans assets/fonts for any user-supplied .ttf or .otf file and registers it."""
-        self.custom_font_family = None
+    def get_available_fonts(self) -> list:
+        """Scans assets/fonts for any user-supplied .ttf or .otf files and returns list of family names."""
+        families_list = ["Default (Segoe UI / Inter)"]
         if os.path.exists(FONTS_DIR):
             for f in sorted(os.listdir(FONTS_DIR)):
                 if f.lower().endswith(('.ttf', '.otf', '.woff', '.woff2')):
                     font_path = os.path.join(FONTS_DIR, f)
                     font_id = QFontDatabase.addApplicationFont(font_path)
                     if font_id != -1:
-                        families = QFontDatabase.applicationFontFamilies(font_id)
-                        if families:
-                            self.custom_font_family = families[0]
-                            print(f"[FONTS] Loaded custom lyrics font: {self.custom_font_family} ({f})")
-                            break
+                        fam = QFontDatabase.applicationFontFamilies(font_id)
+                        for name in fam:
+                            if name not in families_list:
+                                families_list.append(name)
+        return families_list
+
+    def set_custom_font(self, family_name: str):
+        if not family_name or "Default" in family_name:
+            self.custom_font_family = None
+        else:
+            self.custom_font_family = family_name
+        self._cached_layout_key = None
+        self.update()
+
+    def load_custom_font(self):
+        """Scans assets/fonts for any user-supplied .ttf or .otf files and registers them."""
+        self.get_available_fonts()
 
     def set_eco_mode(self, enabled: bool):
         """Toggles power-saving Eco Mode: drops animation timer to 12.5 FPS (80ms)."""

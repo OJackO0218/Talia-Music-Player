@@ -75,6 +75,7 @@ DEFAULT_SETTINGS = {
     "lyrics_enabled": True,
     "lyrics_color": "#e879f9",
     "lyrics_word_glow": True,
+    "lyrics_font": "Default (Segoe UI / Inter)",
     "lyrics_offsets": {},
     "show_startup_guide": True,
     "bass_pop": True,

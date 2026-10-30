@@ -309,16 +309,23 @@ class CyberAudioEngine:
             pass
 
     def play(self):
-        if self.stream and not self.stream.active:
-            self.is_playing = True
-            self.is_paused = False
-            self.stream.start()
+        self.is_playing = True
+        self.is_paused = False
+        if self.stream is not None:
+            if not self.stream.active:
+                try:
+                    self.stream.start()
+                except Exception as e:
+                    print(f"[AUDIO ERROR] stream.start() failed: {e}")
 
     def pause(self):
-        if self.stream and self.stream.active:
-            self.is_playing = False
-            self.is_paused = True
-            self.stream.stop()
+        self.is_playing = False
+        self.is_paused = True
+        if self.stream is not None and self.stream.active:
+            try:
+                self.stream.stop()
+            except Exception:
+                pass
 
     def shutdown(self):
         """Immediately aborts audio stream and releases hardware audio handles."""
@@ -422,6 +429,7 @@ class CyberAudioEngine:
                     self.active_sf.seek(target_frame)
                     self.current_frame = target_frame
                     self.head_buffer = None
+                    self.track_finished = False
                 except Exception as e:
                     print(f"[AUDIO ERROR] Seek failed: {e}")
 
