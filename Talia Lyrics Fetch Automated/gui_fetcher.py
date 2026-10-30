@@ -1,12 +1,13 @@
 """
-Talia Lyrics Fetch Automated - Cyberpunk GUI
-Visual desktop utility for batch lyrics downloading and continuous folder monitoring.
+Talia Lyrics Fetch Automated - Cyberpunk GUI (v2.0 Idiot-Proof Edition)
+Visual desktop utility for batch lyrics downloading, auto-tagging, and continuous folder monitoring.
 Matches Talia's Cyberpunk 2077 HUD palette and design system.
 """
 
 import os
 import sys
 import time
+import shutil
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QProgressBar, QTextEdit, QCheckBox, QFrame,
@@ -51,8 +52,8 @@ class LyricsFetcherWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TALIA // AUTOMATED LYRICS FETCHER")
-        self.resize(720, 640)
-        self.setMinimumSize(580, 500)
+        self.resize(760, 660)
+        self.setMinimumSize(600, 520)
 
         self.worker: BatchFetchWorker = None
         self.watcher_timer = QTimer(self)
@@ -162,7 +163,7 @@ class LyricsFetcherWindow(QWidget):
 
         # Header
         header_layout = QHBoxLayout()
-        title_lbl = QLabel("TALIA // AUTOMATED LYRICS FETCHER")
+        title_lbl = QLabel("TALIA // AUTOMATED LYRICS FETCHER (v2.0)")
         title_lbl.setStyleSheet("color: #e879f9; font-size: 14px; font-weight: bold; letter-spacing: 1.5px;")
         header_layout.addWidget(title_lbl)
 
@@ -200,10 +201,10 @@ class LyricsFetcherWindow(QWidget):
 
         # Options & Watcher
         hbox_opts = QHBoxLayout()
-        self.chk_force = QCheckBox("Force Re-fetch Existing (.lrc)")
+        self.chk_force = QCheckBox("Force Re-fetch Existing (Creates .bak backup)")
         hbox_opts.addWidget(self.chk_force)
 
-        self.chk_watch = QCheckBox("Auto-Watch Folder (Downloads lyrics when new songs are dropped in)")
+        self.chk_watch = QCheckBox("Auto-Watch Folder (Auto-downloads when songs are added)")
         self.chk_watch.toggled.connect(self._toggle_watcher)
         hbox_opts.addWidget(self.chk_watch)
         hbox_opts.addStretch()
@@ -215,6 +216,10 @@ class LyricsFetcherWindow(QWidget):
         self.btn_start.setStyleSheet("background-color: #2b1138; color: #e879f9; border: 1px solid #9333ea; font-size: 12px; padding: 10px;")
         self.btn_start.clicked.connect(self._start_batch_fetch)
         hbox_actions.addWidget(self.btn_start)
+
+        btn_restore_bak = QPushButton("RESTORE .BAK BACKUPS")
+        btn_restore_bak.clicked.connect(self._restore_backups)
+        hbox_actions.addWidget(btn_restore_bak)
 
         self.btn_clear_log = QPushButton("CLEAR LOG")
         self.btn_clear_log.clicked.connect(lambda: self.log_text.clear())
@@ -248,11 +253,11 @@ class LyricsFetcherWindow(QWidget):
 
         hbox_fields = QHBoxLayout()
         self.edit_search_title = QLineEdit()
-        self.edit_search_title.setPlaceholderText("Song Title (e.g. Bohemian Rhapsody)...")
+        self.edit_search_title.setPlaceholderText("Song Title (e.g. BANG BANG BANG)...")
         hbox_fields.addWidget(self.edit_search_title)
 
         self.edit_search_artist = QLineEdit()
-        self.edit_search_artist.setPlaceholderText("Artist (e.g. Queen)...")
+        self.edit_search_artist.setPlaceholderText("Artist (e.g. bbpanzu)...")
         hbox_fields.addWidget(self.edit_search_artist)
 
         btn_search = QPushButton("SEARCH")
@@ -319,6 +324,28 @@ class LyricsFetcherWindow(QWidget):
         self._log(f"BATCH FINISHED: Scanned {stats['total']} | Fetched {stats['fetched']} | Skipped {stats['skipped']} | Failed {stats['failed']}")
         self._log("=" * 50)
 
+    def _restore_backups(self):
+        folder = self.edit_folder.text().strip()
+        if not os.path.exists(folder):
+            return
+
+        count = 0
+        for root, _, files in os.walk(folder):
+            for f in files:
+                if f.lower().endswith(".lrc.bak"):
+                    bak_path = os.path.join(root, f)
+                    orig_lrc = bak_path[:-4]  # Remove .bak
+                    try:
+                        shutil.copy2(bak_path, orig_lrc)
+                        count += 1
+                        self._log(f"[RESTORED] {os.path.basename(orig_lrc)} from backup")
+                    except Exception as e:
+                        self._log(f"[ERROR] Restoring {f}: {e}")
+        if count == 0:
+            self._log("No .lrc.bak backups found in library.")
+        else:
+            self._log(f"Successfully restored {count} lyric backup(s).")
+
     def _toggle_watcher(self, enabled: bool):
         if enabled:
             folder = self.edit_folder.text().strip()
@@ -327,7 +354,7 @@ class LyricsFetcherWindow(QWidget):
                 self.chk_watch.setChecked(False)
                 return
 
-            self.watcher_timer.start(3500)  # Check every 3.5 seconds
+            self.watcher_timer.start(3500)
             self.lbl_watcher_status.setText("WATCHER: ACTIVE (MONITORING)")
             self.lbl_watcher_status.setStyleSheet("color: #38d9d9; font-size: 10px; font-weight: bold;")
             self._log(f"Live folder watcher enabled on: {folder}")
@@ -343,7 +370,7 @@ class LyricsFetcherWindow(QWidget):
             return
 
         for root, _, filenames in os.walk(folder):
-            for f in filenames:
+            for f in sorted(filenames):
                 if f.lower().endswith(SUPPORTED_AUDIO_EXTS):
                     audio_full = os.path.normpath(os.path.join(root, f))
                     lrc_full = os.path.splitext(audio_full)[0] + ".lrc"

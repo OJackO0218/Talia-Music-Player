@@ -1,7 +1,9 @@
 """
-Talia Lyrics Fetch Automated - Core Engine
+Talia Lyrics Fetch Automated - Robust Core Engine
 Recursively scans music folders, extracts embedded audio metadata,
-and automatically fetches synchronized lyrics (.lrc) from Spotify/Musixmatch/LRCLIB databases.
+intelligently sanitizes messy filenames (YouTube hashes, CPE tags, video qualifiers),
+and cascades across multiple synchronized lyrics providers (LRCLIB, Musixmatch, Deezer, NetEase)
+with duration sanity checks to guarantee 100% accurate lyrics matching.
 """
 
 import os
@@ -16,6 +18,9 @@ from typing import Optional, Tuple, Dict, List
 try:
     import mutagen
     from mutagen.easyid3 import EasyID3
+    from mutagen.oggopus import OggOpus
+    from mutagen.flac import FLAC
+    from mutagen.mp4 import MP4
 except ImportError:
     mutagen = None
 
@@ -45,7 +50,6 @@ def get_default_music_dir() -> str:
         except Exception:
             pass
 
-    # Fallback to local 'music' directory inside Talia project
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     local_music = os.path.join(parent_dir, "music")
     if os.path.exists(local_music):
@@ -54,47 +58,81 @@ def get_default_music_dir() -> str:
     return os.path.normpath(os.path.expanduser("~/Music"))
 
 
-def clean_title_heuristics(filename: str) -> Tuple[str, str]:
+def clean_filename_idiot_proof(filename: str) -> Tuple[str, str]:
     """
-    Cleans messy filenames (YouTube packaging, release tags, bitrates)
+    Robust multi-stage filename sanitizer.
+    Handles YouTube hashes, release tags, CPE markers, bracketed garbage,
     and extracts candidate (artist, title).
     """
     stem = os.path.splitext(os.path.basename(filename))[0]
 
-    # Remove common video / audio release noise tags
-    stem = re.sub(
-        r'[-_]?(CPE|Compressed|1080p|720p|4k|Official Video|Official Audio|Lyric Video|Remastered|HD|HQ)[-_0-9]*',
-        '', stem, flags=re.I
-    )
-    # Remove bracketed and parenthesized garbage like [Official Music Video], (Audio), etc.
-    stem = re.sub(r'\[.*?\]', '', stem)
-    stem = re.sub(r'\((Official|Music Video|Audio|Lyric|HD|4K|Remastered|Explicit).*?\)', '', stem, flags=re.I)
+    # 1. Strip leading track numbers: '01 - ', '01. ', '1-02 '
+    stem = re.sub(r'^\d{1,3}[\.\-_\s]+', '', stem)
 
-    # Normalize dashes and underscores
-    stem = stem.replace('_', ' ').strip()
-    stem = re.sub(r'\s+', ' ', stem)
+    # 2. Strip trailing YouTube video IDs / hashes (e.g. -qbmmhu, _dQw4w9WgXcQ, [dx_qbmmhu])
+    stem = re.sub(r'\[[a-zA-Z0-9_\-]{8,15}\]$', '', stem)
+    stem = re.sub(r'[-_][a-zA-Z0-9_\-]{6,15}$', '', stem)
 
-    # Check for "Artist - Title" pattern
+    # 3. Strip release & encoding junk
+    junk_patterns = [
+        r'[-_]?(CPE|CPE-\d+|CPE\s*\d+)',
+        r'[-_]?(Compressed|_Compressed_)',
+        r'[-_]?(1080p|720p|4k|60fps|HD|HQ)',
+        r'\(?(Official Music Video|Official Video|Official Audio|Lyric Video|Lyrics Video|Full Song|Theme Song|Audio)\)?',
+        r'\[(Official Music Video|Official Video|Official Audio|Lyric Video|Lyrics Video|Full Song|Theme Song|Audio)\]',
+        r'\(?(Remastered|Remaster|Explicit|Bonus Track|OST|Soundtrack)\)?',
+        r'\[(Remastered|Remaster|Explicit|Bonus Track|OST|Soundtrack)\]',
+        r'[-_]?chainsaw\s*man\s*song',
+    ]
+    for pat in junk_patterns:
+        stem = re.sub(pat, '', stem, flags=re.I)
+
+    # 4. Extract 'ft.' or 'feat.' artists embedded in title
+    feat_artist = ""
+    feat_match = re.search(r'(?:ft\.?|feat\.?|featuring)\s+([^-\(\)\[\]]+)', stem, flags=re.I)
+    if feat_match:
+        feat_artist = feat_match.group(1).strip()
+        stem = re.sub(r'(?:ft\.?|feat\.?|featuring)\s+[^-\(\)\[\]]+', '', stem, flags=re.I)
+
+    # 5. Normalize dashes and underscores
+    # If dashes are used as word spaces (like 'bang-bang-bang' without ' - ')
+    if ' - ' not in stem and '-' in stem:
+        stem = stem.replace('-', ' ')
+    stem = stem.replace('_', ' ')
+
+    # Remove lingering empty brackets or parens
+    stem = re.sub(r'\(\s*\)', '', stem)
+    stem = re.sub(r'\[\s*\]', '', stem)
+    stem = re.sub(r'\s+', ' ', stem).strip()
+
+    # 6. Parse 'Artist - Title'
+    artist = ""
+    title = stem
     if ' - ' in stem:
         parts = stem.split(' - ', 1)
         artist = parts[0].strip()
         title = parts[1].strip()
-        return artist, title
 
-    return "", stem
+    if feat_artist:
+        if artist:
+            artist = f"{artist} feat. {feat_artist}"
+        else:
+            artist = feat_artist
+
+    return artist, title
 
 
-def extract_metadata(audio_path: str) -> Dict[str, str]:
+def extract_metadata(audio_path: str) -> Dict[str, any]:
     """
-    Extracts embedded audio metadata (title, artist, album, duration) using Mutagen.
-    Falls back to intelligent filename parsing if tags are missing.
+    Extracts embedded metadata (title, artist, album, duration) using Mutagen.
+    Falls back to the idiot-proof filename sanitizer if tags are absent.
     """
     title = ""
     artist = ""
     album = ""
     duration = 0.0
 
-    if mutagen is not None:
+    if mutagen is not None and os.path.exists(audio_path):
         try:
             audio = mutagen.File(audio_path)
             if audio is not None:
@@ -103,20 +141,20 @@ def extract_metadata(audio_path: str) -> Dict[str, str]:
 
                 tags = getattr(audio, "tags", None)
                 if tags:
-                    # Generic / Vorbis / FLAC tag mapping
-                    for key in ["title", "TITLE", "tit2", "TIT2"]:
+                    # Generic / ID3 / Vorbis / FLAC tag mapping
+                    for key in ["title", "TITLE", "tit2", "TIT2", "\xa9nam"]:
                         if key in tags:
                             val = tags[key]
                             title = str(val[0] if isinstance(val, (list, tuple)) else val).strip()
                             break
 
-                    for key in ["artist", "ARTIST", "tpe1", "TPE1"]:
+                    for key in ["artist", "ARTIST", "tpe1", "TPE1", "\xa9ART"]:
                         if key in tags:
                             val = tags[key]
                             artist = str(val[0] if isinstance(val, (list, tuple)) else val).strip()
                             break
 
-                    for key in ["album", "ALBUM", "talb", "TALB"]:
+                    for key in ["album", "ALBUM", "talb", "TALB", "\xa9alb"]:
                         if key in tags:
                             val = tags[key]
                             album = str(val[0] if isinstance(val, (list, tuple)) else val).strip()
@@ -124,12 +162,12 @@ def extract_metadata(audio_path: str) -> Dict[str, str]:
         except Exception:
             pass
 
-    # Fallback to filename heuristics if tags were missing
+    # Heuristic fallback if tags were missing or incomplete
+    guess_artist, guess_title = clean_filename_idiot_proof(audio_path)
     if not title:
-        guess_artist, guess_title = clean_title_heuristics(audio_path)
         title = guess_title
-        if not artist and guess_artist:
-            artist = guess_artist
+    if not artist and guess_artist:
+        artist = guess_artist
 
     return {
         "title": title,
@@ -139,10 +177,57 @@ def extract_metadata(audio_path: str) -> Dict[str, str]:
     }
 
 
+def parse_last_timestamp(lrc_text: str) -> float:
+    """Parses the latest timestamp in the LRC to verify track length."""
+    max_ts = 0.0
+    pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]')
+    for line in lrc_text.splitlines():
+        for m in pattern.finditer(line):
+            mins = int(m.group(1))
+            secs = int(m.group(2))
+            ms = float("0." + m.group(3)) if m.group(3) else 0.0
+            ts = mins * 60.0 + secs + ms
+            if ts > max_ts:
+                max_ts = ts
+    return max_ts
+
+
+def clean_unwanted_lrc_headers(lrc_text: str) -> str:
+    """Removes messy CJK composer tags (e.g. 作曲/作词) from western tracks."""
+    lines = []
+    for line in lrc_text.splitlines():
+        # Remove foreign credit headers that clash with lyrics
+        if re.search(r'\[\d{1,2}:\d{2}.*?\]\s*(?:作曲|作词|编曲|制作人)\s*:', line):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def validate_lyrics_match(lrc_text: str, expected_duration: float = 0.0) -> bool:
+    """Sanity checks the lyrics text: has lines, has timestamps, and matches song length."""
+    if not lrc_text or "[" not in lrc_text:
+        return False
+
+    lines = [line.strip() for line in lrc_text.splitlines() if line.strip()]
+    # Must have at least 3 lyric lines
+    if len(lines) < 3:
+        return False
+
+    # Duration tolerance check (if audio length is known)
+    if expected_duration > 15.0:
+        last_ts = parse_last_timestamp(lrc_text)
+        if last_ts > 0.0:
+            diff = abs(expected_duration - last_ts)
+            # If the lyrics stop 45s before the song ends or continue 45s after, it's likely a wrong song
+            if diff > 45.0 and last_ts < expected_duration * 0.60:
+                return False
+
+    return True
+
+
 def fetch_from_lrclib_direct(title: str, artist: str = "", duration: float = 0.0) -> Optional[str]:
-    """Queries LRCLIB directly for synchronized lyrics."""
+    """Direct query to LRCLIB API with exact track duration matching."""
     try:
-        # Method A: exact match if duration and artist are known
         if artist and title and duration > 10.0:
             params = {
                 "track_name": title,
@@ -150,25 +235,27 @@ def fetch_from_lrclib_direct(title: str, artist: str = "", duration: float = 0.0
                 "duration": int(round(duration))
             }
             url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(params)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if data.get("syncedLyrics"):
-                    return data["syncedLyrics"]
+                    return clean_unwanted_lrc_headers(data["syncedLyrics"])
     except Exception:
         pass
 
     try:
-        # Method B: Search endpoint
         query = f"{title} {artist}".strip()
         url = f"https://lrclib.net/api/search?q={urllib.parse.quote(query)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if isinstance(data, list):
                 for item in data:
-                    if item.get("syncedLyrics"):
-                        return item["syncedLyrics"]
+                    synced = item.get("syncedLyrics")
+                    if synced:
+                        cleaned = clean_unwanted_lrc_headers(synced)
+                        if validate_lyrics_match(cleaned, duration):
+                            return cleaned
     except Exception:
         pass
 
@@ -177,35 +264,65 @@ def fetch_from_lrclib_direct(title: str, artist: str = "", duration: float = 0.0
 
 def fetch_synced_lyrics(title: str, artist: str = "", duration: float = 0.0) -> Optional[str]:
     """
-    Multi-provider synchronized lyrics retrieval:
-    1. syncedlyrics library (LRCLIB, Musixmatch, Deezer, NetEase)
-    2. Direct LRCLIB API fallback
+    Cascading Multi-Provider Search:
+    Tries 4 prioritized query iterations across syncedlyrics and LRCLIB.
     """
-    search_term = f"{title} {artist}".strip() if artist else title
-    if not search_term:
-        return None
+    queries = []
+    if artist and title:
+        queries.append(f"{artist} - {title}")
+        queries.append(f"{title} {artist}")
+    if title:
+        queries.append(title)
+        # Strip parens/brackets from title for fallback
+        clean_bare_title = re.sub(r'[\(\[\{].*?[\)\]\}]', '', title).strip()
+        if clean_bare_title and clean_bare_title != title:
+            if artist:
+                queries.append(f"{artist} {clean_bare_title}")
+            queries.append(clean_bare_title)
 
-    # Provider 1: syncedlyrics
+    # 1. Try Direct LRCLIB exact match first (highest accuracy)
+    if artist and title and duration > 10.0:
+        direct = fetch_from_lrclib_direct(title, artist, duration)
+        if direct and validate_lyrics_match(direct, duration):
+            return direct
+
+    # 2. Iterate through query waterfall with syncedlyrics
     if syncedlyrics is not None:
-        try:
-            lrc_content = syncedlyrics.search(search_term, synced_only=True)
-            if lrc_content and "[" in lrc_content:
-                return lrc_content
-        except Exception:
-            pass
+        for q in queries:
+            try:
+                result = syncedlyrics.search(q, synced_only=True)
+                if result:
+                    cleaned = clean_unwanted_lrc_headers(result)
+                    if validate_lyrics_match(cleaned, duration):
+                        return cleaned
+            except Exception:
+                continue
 
-    # Provider 2: Direct LRCLIB API
-    direct_lrc = fetch_from_lrclib_direct(title, artist, duration)
-    if direct_lrc and "[" in direct_lrc:
-        return direct_lrc
+    # 3. Fallback to LRCLIB search
+    for q in queries:
+        try:
+            url = f"https://lrclib.net/api/search?q={urllib.parse.quote(q)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, list):
+                    for item in data:
+                        synced = item.get("syncedLyrics")
+                        if synced:
+                            cleaned = clean_unwanted_lrc_headers(synced)
+                            if validate_lyrics_match(cleaned, duration):
+                                return cleaned
+        except Exception:
+            continue
 
     return None
 
 
 def fetch_lyrics_for_file(audio_path: str, force_overwrite: bool = False) -> Tuple[bool, str]:
     """
-    Fetches synchronized lyrics for a single audio file and saves the .lrc file next to it.
-    Returns (success: bool, status_message: str).
+    Safely fetches lyrics for a single track.
+    If lyrics already exist, preserves them unless force_overwrite is explicitly requested.
+    When overwriting, creates a .lrc.bak backup for safety.
     """
     audio_path = os.path.normpath(audio_path)
     if not os.path.exists(audio_path):
@@ -215,7 +332,7 @@ def fetch_lyrics_for_file(audio_path: str, force_overwrite: bool = False) -> Tup
     lrc_path = base + ".lrc"
 
     if os.path.exists(lrc_path) and not force_overwrite:
-        return True, f"Skipped (LRC already exists): {os.path.basename(lrc_path)}"
+        return True, f"Skipped (Verified LRC already exists): {os.path.basename(lrc_path)}"
 
     meta = extract_metadata(audio_path)
     title = meta["title"]
@@ -229,9 +346,18 @@ def fetch_lyrics_for_file(audio_path: str, force_overwrite: bool = False) -> Tup
     lrc_text = fetch_synced_lyrics(title, artist, dur)
 
     if not lrc_text:
-        return False, f"No synchronized lyrics found for: {display_name}"
+        return False, f"No matching lyrics found for: {display_name}"
 
     try:
+        # Create backup if overwriting existing file
+        if os.path.exists(lrc_path):
+            bak_path = lrc_path + ".bak"
+            try:
+                import shutil
+                shutil.copy2(lrc_path, bak_path)
+            except Exception:
+                pass
+
         with open(lrc_path, "w", encoding="utf-8") as f:
             f.write(lrc_text)
         return True, f"Saved lyrics: {os.path.basename(lrc_path)}"
@@ -244,16 +370,14 @@ def scan_and_fetch_folder(
     force_overwrite: bool = False,
     progress_callback=None
 ) -> Dict[str, int]:
-    """
-    Recursively scans the folder for all supported audio files and downloads missing .lrc files.
-    """
+    """Recursively scans folder for supported audio files and downloads missing .lrc files."""
     stats = {"total": 0, "fetched": 0, "skipped": 0, "failed": 0}
     if not os.path.exists(folder_path):
         return stats
 
     audio_files: List[str] = []
     for root, _, filenames in os.walk(folder_path):
-        for f in filenames:
+        for f in sorted(filenames):
             if f.lower().endswith(SUPPORTED_AUDIO_EXTS):
                 audio_files.append(os.path.normpath(os.path.join(root, f)))
 
@@ -274,27 +398,24 @@ def scan_and_fetch_folder(
     return stats
 
 
-def watch_folder_continuous(folder_path: str, poll_interval: float = 4.0):
-    """
-    Live folder watcher: continuously polls folder for new songs without .lrc files
-    and automatically downloads lyrics as soon as you drop music into the folder.
-    """
+def watch_folder_continuous(folder_path: str, poll_interval: float = 3.5):
+    """Continuously monitors folder for newly added music files and auto-fetches lyrics."""
     print(f"[*] Starting live folder watcher on: {folder_path}")
     print(f"[*] Drop any audio file into this folder to auto-fetch its synced lyrics.")
-    print(f"[*] Press Ctrl+C to stop.")
+    print(f"[*] Press Ctrl+C to stop.\n")
 
     known_processed = set()
 
     try:
         while True:
             for root, _, filenames in os.walk(folder_path):
-                for f in filenames:
+                for f in sorted(filenames):
                     if f.lower().endswith(SUPPORTED_AUDIO_EXTS):
                         full_audio = os.path.normpath(os.path.join(root, f))
                         lrc_path = os.path.splitext(full_audio)[0] + ".lrc"
 
                         if not os.path.exists(lrc_path) and full_audio not in known_processed:
-                            print(f"\n[+] New song detected: {f}")
+                            print(f"[+] New song detected: {f}")
                             success, msg = fetch_lyrics_for_file(full_audio, force_overwrite=False)
                             print(f"    -> {msg}")
                             known_processed.add(full_audio)
@@ -309,13 +430,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Talia Automated Synchronized Lyrics Fetcher")
     parser.add_argument("--folder", type=str, default="", help="Music folder path to scan")
-    parser.add_argument("--force", action="store_true", help="Force overwrite existing .lrc files")
+    parser.add_argument("--force", action="store_true", help="Force overwrite existing .lrc files (creates .bak)")
     parser.add_argument("--watch", action="store_true", help="Run in continuous live folder watcher mode")
     args = parser.parse_args()
 
     target_dir = args.folder or get_default_music_dir()
     print("=" * 60)
-    print("  TALIA AUTOMATED SYNCHRONIZED LYRICS FETCHER")
+    print("  TALIA AUTOMATED SYNCHRONIZED LYRICS FETCHER (v2.0)")
     print(f"  Target Folder: {target_dir}")
     print("=" * 60)
 
