@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon, QColor, QAction
 
 from config import (
-    user32, VK_F7, VK_F8, VK_F9, VK_F10, VK_CONTROL, VK_OEM_4, VK_OEM_6, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
+    user32, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_CONTROL, VK_OEM_4, VK_OEM_6, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
     save_settings, PROJECT_ROOT, ICON_PATH
 )
 from audio_engine import CyberAudioEngine
@@ -268,6 +268,10 @@ class ControlPanel(QWidget):
         self.hotkey_timer.timeout.connect(self.check_hotkeys)
         self.hotkey_timer.start(50)
 
+        # Eco Mode state
+        self.last_f11_state = False
+        self.eco_mode = False
+
         # Timeline & auto-advance timer (200ms)
         self.timeline_timer = QTimer(self)
         self.timeline_timer.timeout.connect(self.update_timeline)
@@ -310,6 +314,13 @@ class ControlPanel(QWidget):
         self.btn_lyrics.setStyleSheet("background-color: #2b1138; color: #e879f9; border: 1px solid #c084fc; font-weight: bold; font-size: 11px; padding: 7px 8px; letter-spacing: 0.5px;")
         self.btn_lyrics.clicked.connect(self.toggle_lyrics)
         hbox_top_toggles.addWidget(self.btn_lyrics)
+
+        self.btn_eco = QPushButton("ECO: OFF")
+        self.btn_eco.setObjectName("btnEco")
+        self.btn_eco.setToolTip("Toggle Eco Mode (< 1% CPU) [F11]")
+        self.btn_eco.setStyleSheet("background-color: #181318; color: #888899; border: 1px solid #2e3547; font-weight: bold; font-size: 11px; padding: 7px 8px; letter-spacing: 0.5px;")
+        self.btn_eco.clicked.connect(self.toggle_eco_mode)
+        hbox_top_toggles.addWidget(self.btn_eco)
 
         content_layout.addLayout(hbox_top_toggles)
 
@@ -1121,6 +1132,46 @@ class ControlPanel(QWidget):
             self.toggle_audio_mode()
         self.last_f10_state = f10_down
 
+        f11_down = bool(user32.GetAsyncKeyState(VK_F11) & 0x8000)
+        if f11_down and not self.last_f11_state:
+            self.toggle_eco_mode()
+        self.last_f11_state = f11_down
+
+    def toggle_eco_mode(self):
+        """Toggles Eco Mode (< 1% CPU target) and persists preference."""
+        self.set_eco_mode(not self.eco_mode)
+        if not getattr(self, "is_loading_settings", False):
+            try:
+                cfg = self.get_current_settings_dict()
+                save_settings(cfg)
+            except Exception:
+                pass
+
+    def set_eco_mode(self, enabled: bool):
+        """Applies Eco Mode settings across audio engine, character overlay, lyrics, and controller."""
+        self.eco_mode = enabled
+        if hasattr(self.audio_engine, "set_eco_mode"):
+            self.audio_engine.set_eco_mode(enabled)
+        if hasattr(self.overlay, "set_eco_mode"):
+            self.overlay.set_eco_mode(enabled)
+        if self.lyrics_overlay and hasattr(self.lyrics_overlay, "set_eco_mode"):
+            self.lyrics_overlay.set_eco_mode(enabled)
+
+        if enabled:
+            self.hotkey_timer.setInterval(125)
+            self.timeline_timer.setInterval(500)
+            if hasattr(self, "btn_eco"):
+                self.btn_eco.setText("ECO: ON")
+                self.btn_eco.setStyleSheet("background-color: #0d2918; color: #00ff66; border: 1px solid #00ff66; font-weight: bold; font-size: 11px; padding: 7px 8px; letter-spacing: 0.5px;")
+            print("[STATUS] Eco Mode enabled (< 1% CPU).")
+        else:
+            self.hotkey_timer.setInterval(50)
+            self.timeline_timer.setInterval(200)
+            if hasattr(self, "btn_eco"):
+                self.btn_eco.setText("ECO: OFF")
+                self.btn_eco.setStyleSheet("background-color: #181318; color: #888899; border: 1px solid #2e3547; font-weight: bold; font-size: 11px; padding: 7px 8px; letter-spacing: 0.5px;")
+            print("[STATUS] Eco Mode disabled (60 FPS standard).")
+
     def toggle_lyrics(self):
         if not self.lyrics_overlay:
             return
@@ -1296,6 +1347,7 @@ class ControlPanel(QWidget):
             "audio_mode": str(self.audio_engine.audio_mode),
             "music_folder": str(self.audio_engine.folder_path),
             "shuffle": bool(self.audio_engine.shuffle),
+            "eco_mode": bool(self.eco_mode),
             "show_startup_guide": bool(getattr(self, "show_startup_guide", True))
         }
         if self.lyrics_overlay:
@@ -1407,6 +1459,9 @@ class ControlPanel(QWidget):
                 self.chk_word_glow.blockSignals(True)
                 self.chk_word_glow.setChecked(word_glow)
                 self.chk_word_glow.blockSignals(False)
+
+        eco = bool(cfg.get("eco_mode", False))
+        self.set_eco_mode(eco)
 
         self.overlay.update()
         self.is_loading_settings = False

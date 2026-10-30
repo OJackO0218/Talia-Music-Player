@@ -22,6 +22,10 @@ class CyberVisualizer:
         self.rotation_angle = 0.0
         self._cached_grid_pixmap = None
         self._cached_grid_key = None
+        self.eco_mode = False
+
+    def set_eco_mode(self, enabled: bool):
+        self.eco_mode = enabled
 
     def draw(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine):
         """Draws the selected visualizer inside the target bounding rect."""
@@ -29,6 +33,14 @@ class CyberVisualizer:
         painter.setClipRect(rect)
 
         theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
+
+        # Eco Mode streamlined path (< 1% CPU target)
+        if getattr(self, "eco_mode", False):
+            painter.fillRect(rect, theme["bg"])
+            bars, peaks, beat = engine.update_spectrum()
+            self._draw_eco_bars(painter, rect, bars, theme)
+            painter.restore()
+            return
 
         # 1 & 2. Hardware-accelerated Cached Background & Grid (single blit)
         key = (rect.width(), rect.height(), self.current_theme_name)
@@ -73,6 +85,23 @@ class CyberVisualizer:
             self._draw_dual_mirror(painter, rect, bars, peaks, theme)
 
         painter.restore()
+
+    def _draw_eco_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, theme: dict):
+        """Ultra-efficient solid bar rendering for Eco Mode."""
+        if np.max(bars) < 0.002:
+            return
+        num = 10
+        pad_x = 4
+        usable_w = rect.width() - 8
+        bar_w = max(2, usable_w // num - 2)
+        gap = 2
+        max_h = rect.height() - 8
+        base_y = rect.bottom() - 4
+        col = theme["bar_top"]
+        for i in range(num):
+            bx = rect.left() + pad_x + i * (bar_w + gap)
+            h = max(2, int(bars[i * 2] * max_h))
+            painter.fillRect(bx, base_y - h, bar_w, h, col)
 
     def _draw_cyber_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
         """Segmented LED equalizer bars with falling peak hold caps."""

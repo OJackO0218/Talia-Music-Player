@@ -53,6 +53,11 @@ class CyberAudioEngine:
         self.desktop_running = False
         self.desktop_thread = None
 
+        # Eco Mode State (< 1% CPU optimization)
+        self.eco_mode = False
+        self._eco_frame_counter = 0
+        self._cached_eco_spectrum = None
+
         # Playlist State
         self.lyrics_manager = None
         self.folder_path = ""
@@ -61,6 +66,11 @@ class CyberAudioEngine:
         self.shuffle = False
         self.track_finished = False
         self.queue = []
+
+    def set_eco_mode(self, enabled: bool):
+        """Toggles Eco Mode (< 1% CPU target) by reducing internal sampling overhead."""
+        self.eco_mode = enabled
+        self._cached_eco_spectrum = None
 
     def set_audio_mode(self, mode: str):
         """Switches between 'player' (local playlist files) and 'desktop' (Windows audio loopback)."""
@@ -347,12 +357,17 @@ class CyberAudioEngine:
             outdata[:] = chunk * self.volume
             self.current_frame += frames
 
-        # Extract mono buffer for FFT visualizer
-        mono = np.mean(outdata, axis=1)
-        self.latest_buffer = mono.copy()
+        # Extract mono buffer for FFT visualizer (zero-allocation single channel slice)
+        n = min(1024, frames)
+        self.latest_buffer[:n] = outdata[:n, 0]
 
     def update_spectrum(self):
         """Vectorized FFT spectral analysis and bass beat energy computation (zero-allocation)."""
+        if getattr(self, "eco_mode", False):
+            self._eco_frame_counter = getattr(self, "_eco_frame_counter", 0) + 1
+            if self._eco_frame_counter % 3 != 0 and getattr(self, "_cached_eco_spectrum", None) is not None:
+                return self._cached_eco_spectrum
+
         buf = self.latest_buffer
         is_idle = (self.audio_mode == "player" and not self.is_playing) or np.max(np.abs(buf)) < 0.001
         if is_idle:
@@ -365,7 +380,10 @@ class CyberAudioEngine:
                 self.smoothed_bars.fill(0)
                 self.peak_bars.fill(0)
                 self.beat_energy = 0.0
-            return self.smoothed_bars, self.peak_bars, self.beat_energy
+            res = (self.smoothed_bars, self.peak_bars, self.beat_energy)
+            if getattr(self, "eco_mode", False):
+                self._cached_eco_spectrum = res
+            return res
 
         # 1. Apply pre-computed Hanning window & Real FFT
         windowed = buf * self.hanning_window
@@ -403,7 +421,10 @@ class CyberAudioEngine:
         )
         self.peak_decay = np.where(new_peaks, 0.005, self.peak_decay + 0.008)
 
-        return self.smoothed_bars, self.peak_bars, self.beat_energy
+        res = (self.smoothed_bars, self.peak_bars, self.beat_energy)
+        if getattr(self, "eco_mode", False):
+            self._cached_eco_spectrum = res
+        return res
 
     def get_waveform(self, sample_count: int = 80) -> np.ndarray:
         """Returns sampled oscilloscope points [-1.0, 1.0]."""

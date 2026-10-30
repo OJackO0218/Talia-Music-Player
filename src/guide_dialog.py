@@ -141,7 +141,9 @@ class GuideDialog(QDialog):
         note_txt = QLabel(
             "<b>Mode Switch:</b><br>"
             "Switch Talia to <b>Desktop Mode</b> (press <b>F10</b> or use the controller) to make her a global play/pause, skip, and volume control for desktop apps, games, or browser audio.<br><br>"
-            "Switch Talia to <b>Local Music Player</b> mode to play music files directly from your computer with synchronized lyrics."
+            "Switch Talia to <b>Local Music Player</b> mode to play music files directly from your computer with synchronized lyrics.<br><br>"
+            "<b>Eco Mode (< 1% CPU):</b><br>"
+            "Press <b>F11</b> or toggle the <b>ECO</b> button on the controller to enable ultra-low CPU power-saving mode (< 1% CPU usage)."
         )
         note_txt.setWordWrap(True)
         note_txt.setStyleSheet("color: #cbd5e1; font-size: 12px; line-height: 1.4;")

@@ -69,6 +69,7 @@ class LyricsOverlayWindow(QWidget):
 
         # By default, lyrics are 100% click-through so they never block games or apps
         self.set_click_through(True)
+        self.eco_mode = False
 
         # Dynamic sleep dirty-check & font metric layout cache
         self._was_rendering = False
@@ -84,6 +85,15 @@ class LyricsOverlayWindow(QWidget):
         self.topmost_timer = QTimer(self)
         self.topmost_timer.timeout.connect(self.enforce_topmost)
         self.topmost_timer.start(1000)
+
+    def set_eco_mode(self, enabled: bool):
+        """Toggles power-saving Eco Mode: drops animation timer to 12.5 FPS (80ms)."""
+        self.eco_mode = enabled
+        if enabled:
+            self.anim_timer.setInterval(80)
+        else:
+            self.anim_timer.setInterval(16)
+        self.update()
 
     def set_color(self, hex_code: str):
         """Sets the active lyrics palette with calculated neon bloom and high-contrast shadow."""
@@ -340,18 +350,22 @@ class LyricsOverlayWindow(QWidget):
                         p_word = (self.line_progress - w_start) / max(0.001, (w_end - w_start))
                     p_word = min(1.0, max(0.0, float(p_word)))
 
-                    # Subtle micro-bounce on the currently sung word (lifts up 2.8px then settles)
-                    y_bounce = -2.8 * math.sin(p_word * math.pi) if 0.0 < p_word < 1.0 else 0.0
+                    # Micro-bounce (disabled in eco mode to eliminate math overhead)
+                    y_bounce = (-2.8 * math.sin(p_word * math.pi)) if (not self.eco_mode and 0.0 < p_word < 1.0) else 0.0
                     pos_pt = QPointF(float(current_x), float(baseline_y + y_bounce))
 
                     # Layer 1: Ambient Drop Shadow
                     sh_alpha = min(255, max(0, int(230 * eff_opacity * (0.60 + 0.40 * p_word))))
                     painter.setPen(QColor(self.shadow_color.red(), self.shadow_color.green(), self.shadow_color.blue(), sh_alpha))
-                    for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1), (0, 3)]:
-                        painter.drawText(pos_pt + QPointF(float(dx), float(dy)), word)
+                    if self.eco_mode:
+                        # Single-pass drop shadow in Eco Mode
+                        painter.drawText(pos_pt + QPointF(1.5, 1.5), word)
+                    else:
+                        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1), (0, 3)]:
+                            painter.drawText(pos_pt + QPointF(float(dx), float(dy)), word)
 
                     # Layer 2: Radial Bloom Glow (dim when upcoming, peak flare when actively sung, full bloom when sung)
-                    if p_word > 0.05:
+                    if not self.eco_mode and p_word > 0.05:
                         active_flash = 0.60 * math.sin(p_word * math.pi) if p_word < 1.0 else 0.0
                         bloom_alpha = min(255, max(0, int(160 * eff_opacity * min(1.0, p_word) * (1.0 + self.glow_flash + active_flash))))
                         bl_color = QColor(self.bloom_color.red(), self.bloom_color.green(), self.bloom_color.blue(), bloom_alpha)

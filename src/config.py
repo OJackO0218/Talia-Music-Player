@@ -76,6 +76,7 @@ DEFAULT_SETTINGS = {
     "lyrics_offsets": {},
     "show_startup_guide": True,
     "bass_pop": True,
+    "eco_mode": False,
     "audio_mode": "player"  # "player" = Built-in Playlist, "desktop" = Desktop Audio (osu!, Spotify, Games)
 }
 
@@ -156,6 +157,7 @@ VK_F7 = 0x76   # F7: Toggle Lyrics Overlay
 VK_F8 = 0x77   # F8: Toggle Move Talia mode
 VK_F9 = 0x78   # F9: Toggle Show/Hide overlay
 VK_F10 = 0x79  # F10: Toggle Audio Source Mode (Desktop vs Player)
+VK_F11 = 0x7A  # F11: Toggle Eco Mode (< 1% CPU)
 
 VK_CONTROL = 0x11
 VK_OEM_4 = 0xDB  # '[' key (Lyrics Sync Offset -0.25s)

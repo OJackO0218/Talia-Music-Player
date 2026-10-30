@@ -112,6 +112,7 @@ def main():
     print("  - Press [F7] to toggle Synced Lyrics Overlay.")
     print("  - Press [F8] to toggle Move Mode.")
     print("  - Press [F10] to switch Desktop Mode vs Local Player.")
+    print("  - Press [F11] to toggle Eco Mode (< 1% CPU).")
     print("=======================================================\n")
 
     sys.exit(app.exec())

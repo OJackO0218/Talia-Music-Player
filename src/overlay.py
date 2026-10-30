@@ -50,6 +50,7 @@ class OverlayWindow(QWidget):
         self.move_talia_mode = False  # False = Locked & Clickable, True = Movable/Resizable
         self.opacity_val = 1.0
         self.enable_scanlines = True
+        self.eco_mode = False
         self.enable_bass_pop = True
         self.bass_pop_scale = 1.0
         self.use_widescreen = False
@@ -449,6 +450,17 @@ class OverlayWindow(QWidget):
         import os
         os._exit(0)
 
+    def set_eco_mode(self, enabled: bool):
+        """Toggles power-saving Eco Mode (< 1% CPU target)."""
+        self.eco_mode = enabled
+        if hasattr(self.visualizer, "set_eco_mode"):
+            self.visualizer.set_eco_mode(enabled)
+        if enabled:
+            self.anim_timer.setInterval(80)  # 12.5 FPS
+        else:
+            self.anim_timer.setInterval(16)  # 60 FPS
+        self.update()
+
     def set_volume(self, vol: float):
         """Sets in-app volume, updates pupil saturation, and syncs UI."""
         self.current_volume = max(0.0, min(1.0, float(vol)))
@@ -659,7 +671,7 @@ class OverlayWindow(QWidget):
             is_audio_active = (getattr(self.audio_engine, "beat_energy", 0.0) > 0.002 or np.max(getattr(self.audio_engine, "smoothed_bars", [0])) > 0.002)
 
         # 3.5. Beat Pop effect (Talia pulses with the music bass kick)
-        if self.enable_bass_pop and is_audio_active:
+        if not self.eco_mode and self.enable_bass_pop and is_audio_active:
             target_pop = 1.0 + float(getattr(self.audio_engine, "beat_energy", 0.0)) * 0.038
             bass_changing = abs(target_pop - self.bass_pop_scale) > 0.002
             self.bass_pop_scale += (target_pop - self.bass_pop_scale) * 0.35
@@ -929,7 +941,7 @@ class OverlayWindow(QWidget):
         pos_ry = int(char_y + (self.origin_ry + self.current_offset_ry) * scale)
 
         # High volume iris bloom (> 50% volume)
-        if self.current_volume > 0.50 and self.hold_saturation > 0.2:
+        if not self.eco_mode and self.current_volume > 0.50 and self.hold_saturation > 0.2:
             glow_intensity = (self.current_volume - 0.50) / 0.50
             glow_alpha = int(110 * glow_intensity * self.hold_saturation)
             glow_color = QColor(0, 240, 255, glow_alpha)
@@ -981,7 +993,7 @@ class OverlayWindow(QWidget):
         # ==========================================================
         # LAYER 4: CRT MONITOR SCANLINES (Across Mouth Opening)
         # ==========================================================
-        if self.enable_scanlines and self.hold_saturation > 0.05:
+        if not self.eco_mode and self.enable_scanlines and self.hold_saturation > 0.05:
             painter.setOpacity(0.20 * self.hold_saturation)
             painter.fillRect(mouth_rect, self._scanline_brush)
 
