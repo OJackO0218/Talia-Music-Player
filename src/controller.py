@@ -21,6 +21,7 @@ from config import (
 from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
 from guide_dialog import GuideDialog
+from song_downloader import SongDownloaderService
 
 
 def create_section_header(title: str) -> QWidget:
@@ -263,6 +264,13 @@ class ControlPanel(QWidget):
 
         self.init_ui()
 
+        # Song Downloader & Auto-Sync Service (YouTube search -> Opus 160k -> Synced LRC)
+        self.downloader = SongDownloaderService(self)
+        self.downloader.search_finished.connect(self._on_search_finished)
+        self.downloader.search_error.connect(self._on_search_error)
+        self.downloader.download_progress.connect(self._on_download_progress)
+        self.downloader.download_finished.connect(self._on_download_finished)
+
         # Polling timer for global hotkeys (50ms)
         self.hotkey_timer = QTimer(self)
         self.hotkey_timer.timeout.connect(self.check_hotkeys)
@@ -481,7 +489,79 @@ class ControlPanel(QWidget):
         self.queue_container.setVisible(False)
         content_layout.addWidget(self.queue_container)
 
-                # --- SECTION: LYRICS SETTINGS ---
+        # --- SECTION: SONG SEARCH & AUTO-DOWNLOAD ---
+        content_layout.addWidget(create_section_header("Song Search & Auto-Download"))
+
+        # Search Input row (Clean Cyberpunk styling)
+        hbox_dl_search = QHBoxLayout()
+        hbox_dl_search.setSpacing(6)
+        self.edit_dl_search = QLineEdit()
+        self.edit_dl_search.setPlaceholderText("Search YouTube (e.g. Hate Me Ellie Goulding) or paste URL...")
+        self.edit_dl_search.setStyleSheet("""
+            QLineEdit {
+                background-color: #141722;
+                color: #e0e6ed;
+                border: 1px solid #2e3547;
+                border-radius: 4px;
+                padding: 5px 8px;
+                font-size: 11px;
+                selection-background-color: #38d9d9;
+            }
+            QLineEdit:focus {
+                border: 1px solid #38d9d9;
+            }
+        """)
+        self.edit_dl_search.returnPressed.connect(self.on_dl_search_clicked)
+        hbox_dl_search.addWidget(self.edit_dl_search)
+
+        self.btn_dl_search = QPushButton("SEARCH")
+        self.btn_dl_search.setStyleSheet("background-color: #1a2a35; color: #38d9d9; border: 1px solid #38d9d9; font-weight: bold; font-size: 10px; padding: 5px 12px;")
+        self.btn_dl_search.clicked.connect(self.on_dl_search_clicked)
+        hbox_dl_search.addWidget(self.btn_dl_search)
+        content_layout.addLayout(hbox_dl_search)
+
+        # Search Results List (Collapsible / Dynamic)
+        self.list_dl_results = QListWidget()
+        self.list_dl_results.setFixedHeight(95)
+        self.list_dl_results.setStyleSheet("""
+            QListWidget {
+                background-color: #0d1017;
+                border: 1px solid #2e3547;
+                border-radius: 4px;
+                color: #cbd5e1;
+                font-size: 11px;
+                padding: 2px;
+            }
+            QListWidget::item {
+                padding: 3px 6px;
+                border-bottom: 1px solid #141722;
+            }
+            QListWidget::item:selected {
+                background-color: #1a2a35;
+                color: #38d9d9;
+                font-weight: bold;
+            }
+        """)
+        self.list_dl_results.itemDoubleClicked.connect(self.on_dl_item_double_clicked)
+        self.list_dl_results.itemSelectionChanged.connect(self.on_dl_selection_changed)
+        self.list_dl_results.setVisible(False)
+        content_layout.addWidget(self.list_dl_results)
+
+        # Download Action Button
+        self.btn_dl_action = QPushButton("+ AUTO-ADD (DOWNLOAD OPUS & SYNC LRC)")
+        self.btn_dl_action.setStyleSheet("background-color: #0f2e1f; color: #00ff66; border: 1px solid #00ff66; font-size: 10px; font-weight: bold; padding: 5px 8px;")
+        self.btn_dl_action.clicked.connect(self.on_dl_download_clicked)
+        self.btn_dl_action.setVisible(False)
+        content_layout.addWidget(self.btn_dl_action)
+
+        # Real-time Status / Progress Terminal Log
+        self.lbl_dl_status = QLabel("")
+        self.lbl_dl_status.setStyleSheet("color: #8b9cb3; font-size: 10px; font-family: 'Consolas', monospace;")
+        self.lbl_dl_status.setWordWrap(True)
+        self.lbl_dl_status.setVisible(False)
+        content_layout.addWidget(self.lbl_dl_status)
+
+        # --- SECTION: LYRICS SETTINGS ---
         content_layout.addWidget(create_section_header("Lyrics Settings"))
 
         hbox_lyric_color = QHBoxLayout()
@@ -1494,3 +1574,104 @@ class ControlPanel(QWidget):
         self.hide()
         event.ignore()
         print("[CONTROLLER] Controller window hidden. Click Talia 3x to reopen.")
+
+    # -------------------------------------------------------------
+    # SONG SEARCH & AUTO-DOWNLOAD SLOTS
+    # -------------------------------------------------------------
+    def on_dl_search_clicked(self):
+        query = self.edit_dl_search.text().strip()
+        if not query:
+            return
+        self.lbl_dl_status.setText("Searching YouTube...")
+        self.lbl_dl_status.setStyleSheet("color: #38d9d9; font-size: 10px; font-family: 'Consolas', monospace;")
+        self.lbl_dl_status.setVisible(True)
+        self.btn_dl_search.setEnabled(False)
+        self.btn_dl_search.setText("SEARCHING...")
+        self.downloader.search_async(query, limit=5)
+
+    def _on_search_finished(self, results):
+        self.btn_dl_search.setEnabled(True)
+        self.btn_dl_search.setText("SEARCH")
+        self.list_dl_results.clear()
+        if not results:
+            self.lbl_dl_status.setText("No search results found. Try a different title or paste a YouTube URL.")
+            self.lbl_dl_status.setStyleSheet("color: #d94452; font-size: 10px; font-family: 'Consolas', monospace;")
+            self.list_dl_results.setVisible(False)
+            self.btn_dl_action.setVisible(False)
+            return
+
+        for r in results:
+            title = r.get("title", "Unknown")
+            channel = r.get("channel", "Unknown")
+            dur_str = r.get("duration_str", "--:--")
+            item = QListWidgetItem(f"[{dur_str}] {title} • {channel}")
+            item.setData(Qt.ItemDataRole.UserRole, r)
+            self.list_dl_results.addItem(item)
+
+        self.list_dl_results.setVisible(True)
+        self.list_dl_results.setCurrentRow(0)
+        self.btn_dl_action.setVisible(True)
+        self.lbl_dl_status.setText(f"Found {len(results)} matches. Double-click to auto-add or select & click below.")
+        self.lbl_dl_status.setStyleSheet("color: #8b9cb3; font-size: 10px; font-family: 'Consolas', monospace;")
+
+    def _on_search_error(self, err_msg):
+        self.btn_dl_search.setEnabled(True)
+        self.btn_dl_search.setText("SEARCH")
+        self.lbl_dl_status.setText(f"Search error: {err_msg}")
+        self.lbl_dl_status.setStyleSheet("color: #d94452; font-size: 10px; font-family: 'Consolas', monospace;")
+        self.lbl_dl_status.setVisible(True)
+
+    def on_dl_selection_changed(self):
+        has_sel = len(self.list_dl_results.selectedItems()) > 0
+        self.btn_dl_action.setEnabled(has_sel)
+
+    def on_dl_item_double_clicked(self, item):
+        self.on_dl_download_clicked()
+
+    def on_dl_download_clicked(self):
+        items = self.list_dl_results.selectedItems()
+        if not items:
+            return
+        data = items[0].data(Qt.ItemDataRole.UserRole)
+        if not data or not data.get("url"):
+            return
+
+        url = data.get("url")
+        title = data.get("title", "Track")
+        music_dir = self.audio_engine.folder_path
+        self.btn_dl_action.setEnabled(False)
+        self.btn_dl_search.setEnabled(False)
+        self.lbl_dl_status.setText(f"Connecting to download '{title}'...")
+        self.lbl_dl_status.setStyleSheet("color: #38d9d9; font-size: 10px; font-family: 'Consolas', monospace;")
+        self.lbl_dl_status.setVisible(True)
+
+        self.downloader.download_and_sync_async(url, music_dir)
+
+    def _on_download_progress(self, msg):
+        self.lbl_dl_status.setText(msg)
+        self.lbl_dl_status.setStyleSheet("color: #38d9d9; font-size: 10px; font-family: 'Consolas', monospace;")
+
+    def _on_download_finished(self, success, opus_path, status_msg):
+        self.btn_dl_action.setEnabled(True)
+        self.btn_dl_search.setEnabled(True)
+        if success:
+            self.lbl_dl_status.setText(f"✓ {status_msg}")
+            self.lbl_dl_status.setStyleSheet("color: #00ff66; font-size: 10px; font-family: 'Consolas', monospace; font-weight: bold;")
+
+            # Automatically refresh playlist to include the new track
+            self.audio_engine.refresh_playlist()
+            self.refresh_tracklist()
+
+            # Highlight the newly downloaded track in list_tracks
+            if opus_path and os.path.exists(opus_path):
+                norm_opus = os.path.normpath(opus_path)
+                for r in range(self.list_tracks.count()):
+                    it = self.list_tracks.item(r)
+                    orig_idx = it.data(Qt.ItemDataRole.UserRole)
+                    if 0 <= orig_idx < len(self.audio_engine.playlist):
+                        if os.path.normpath(self.audio_engine.playlist[orig_idx]) == norm_opus:
+                            self.list_tracks.setCurrentRow(r)
+                            break
+        else:
+            self.lbl_dl_status.setText(f"✗ {status_msg}")
+            self.lbl_dl_status.setStyleSheet("color: #d94452; font-size: 10px; font-family: 'Consolas', monospace;")

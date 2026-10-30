@@ -691,7 +691,12 @@ class OverlayWindow(QWidget):
             self.flash_alpha = 0.0
 
         # 4.5. Cyber Mute Indicator Interpolation
-        target_mute = 1.0 if not is_audio_active else 0.0
+        if self.audio_engine.volume < 0.01:
+            target_mute = 1.0
+        elif is_audio_active:
+            target_mute = 0.0
+        else:
+            target_mute = 1.0
         mute_changing = abs(target_mute - self.mute_alpha) > 0.01
         self.mute_alpha += (target_mute - self.mute_alpha) * 0.22
         if not mute_changing:
