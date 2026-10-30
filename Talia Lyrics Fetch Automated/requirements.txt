@@ -2,3 +2,6 @@ syncedlyrics>=1.0.0
 mutagen>=1.48.0
 requests>=2.31.0
 PyQt6>=6.5.0
+soundfile>=0.12.0
+numpy>=1.24.0
+scipy>=1.10.0
