@@ -214,10 +214,35 @@ class LyricsManager:
 
             synced_content = None
             if isinstance(data, list):
+                # Try to determine target audio duration from file
+                target_dur = 0.0
+                if track_path and os.path.exists(track_path):
+                    try:
+                        import soundfile as sf
+                        info = sf.info(track_path)
+                        target_dur = info.duration
+                    except Exception:
+                        pass
+
+                best_item = None
+                best_diff = float("inf")
                 for item in data:
-                    if item.get("syncedLyrics"):
-                        synced_content = item["syncedLyrics"]
-                        break
+                    synced = item.get("syncedLyrics")
+                    if not synced:
+                        continue
+                    cand_dur = float(item.get("duration") or 0.0)
+                    if target_dur > 10.0 and cand_dur > 10.0:
+                        diff = abs(cand_dur - target_dur)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_item = item
+                            if diff < 2.5:
+                                break
+                    elif best_item is None:
+                        best_item = item
+
+                if best_item and best_item.get("syncedLyrics"):
+                    synced_content = best_item["syncedLyrics"]
 
             if synced_content:
                 parsed = self.parse_lrc(synced_content)
