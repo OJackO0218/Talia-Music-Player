@@ -398,6 +398,135 @@ def scan_and_fetch_folder(
     return stats
 
 
+
+def detect_audio_onset(audio_path: str, max_search_s: float = 35.0, hop_ms: float = 50.0) -> float:
+    """
+    Detects the first significant vocal or musical energy onset in an audio track.
+    Returns the onset timestamp in seconds.
+    """
+    try:
+        import soundfile as sf
+        import numpy as np
+
+        data, sr = sf.read(audio_path)
+        if len(data.shape) > 1:
+            data = data.mean(axis=1)
+
+        max_samples = int(min(len(data), sr * max_search_s))
+        search_data = data[:max_samples]
+        hop_samples = int(sr * (hop_ms / 1000.0))
+
+        rms_vals = []
+        times = []
+        for i in range(0, max_samples - hop_samples, hop_samples):
+            chunk = search_data[i:i + hop_samples]
+            rms = float(np.sqrt(np.mean(chunk**2)))
+            rms_vals.append(rms)
+            times.append(i / float(sr))
+
+        if not rms_vals:
+            return 0.0
+
+        peak_rms = max(rms_vals)
+        thresh = max(0.08, peak_rms * 0.28)
+
+        for i in range(len(rms_vals) - 3):
+            if rms_vals[i] >= thresh and rms_vals[i+1] >= thresh and rms_vals[i+2] >= thresh:
+                return round(float(times[i]), 2)
+    except Exception:
+        pass
+    return 0.0
+
+
+def shift_lrc_timestamps(lrc_text: str, offset_seconds: float) -> str:
+    """
+    Applies a time offset (in seconds) to all timestamps within an LRC text string.
+    Positive offset adds time; negative offset shifts earlier.
+    """
+    pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]')
+    shifted_lines = []
+
+    for line in lrc_text.splitlines():
+        matches = list(pattern.finditer(line))
+        if not matches:
+            shifted_lines.append(line)
+            continue
+
+        text_content = pattern.sub('', line).strip()
+        new_tags = []
+        for m in matches:
+            mins = int(m.group(1))
+            secs = int(m.group(2))
+            ms = float("0." + m.group(3)) if m.group(3) else 0.0
+            ts = mins * 60.0 + secs + ms
+            new_ts = max(0.0, ts + offset_seconds)
+            new_mins = int(new_ts // 60)
+            new_secs = int(new_ts % 60)
+            new_ms = int(round((new_ts - int(new_ts)) * 100))
+            new_tags.append(f"[{new_mins:02d}:{new_secs:02d}.{new_ms:02d}]")
+
+        shifted_lines.append("".join(new_tags) + text_content)
+
+    return "\n".join(shifted_lines) + "\n"
+
+
+def auto_calibrate_lrc_file(audio_path: str) -> Tuple[bool, float, str]:
+    """
+    Calculates audio onset and first lyric timestamp for an audio track.
+    If a substantial offset discrepancy (>= 1.5s) exists, safely shifts the LRC timestamps.
+    """
+    audio_path = os.path.normpath(audio_path)
+    if not os.path.exists(audio_path):
+        return False, 0.0, "Audio file does not exist"
+
+    lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
+    if not os.path.exists(lrc_path):
+        return False, 0.0, "Companion .lrc file not found"
+
+    try:
+        with open(lrc_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]')
+        first_ts = None
+        for line in content.splitlines():
+            m = pattern.search(line)
+            if m:
+                text = pattern.sub('', line).strip()
+                if len(text) >= 2 and not text.startswith(('by:', 'ar:', 'ti:', 'al:')):
+                    mins = int(m.group(1))
+                    secs = int(m.group(2))
+                    ms = float("0." + m.group(3)) if m.group(3) else 0.0
+                    first_ts = mins * 60.0 + secs + ms
+                    break
+
+        if first_ts is None:
+            return False, 0.0, "No lyric timestamps found in LRC"
+
+        onset = detect_audio_onset(audio_path)
+        diff = round(onset - first_ts, 2)
+
+        if abs(diff) < 1.0:
+            return False, 0.0, f"Already synchronized (onset: {onset}s, first lyric: {first_ts}s)"
+
+        # Apply shift
+        offset = round(onset - first_ts, 2)
+        # Create backup
+        try:
+            import shutil
+            shutil.copy2(lrc_path, lrc_path + ".bak")
+        except Exception:
+            pass
+
+        shifted_lrc = shift_lrc_timestamps(content, offset)
+        with open(lrc_path, "w", encoding="utf-8") as f:
+            f.write(shifted_lrc)
+
+        return True, offset, f"Shifted by {offset:+.2f}s (onset: {onset}s -> lyric: {first_ts}s)"
+
+    except Exception as e:
+        return False, 0.0, f"Auto-calibration failed: {e}"
+
 def watch_folder_continuous(folder_path: str, poll_interval: float = 3.5):
     """Continuously monitors folder for newly added music files and auto-fetches lyrics."""
     print(f"[*] Starting live folder watcher on: {folder_path}")

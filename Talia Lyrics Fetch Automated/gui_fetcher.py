@@ -18,7 +18,7 @@ from PyQt6.QtGui import QFont, QIcon, QColor
 
 from fetch_lyrics import (
     get_default_music_dir, scan_and_fetch_folder, fetch_synced_lyrics,
-    fetch_lyrics_for_file, SUPPORTED_AUDIO_EXTS
+    fetch_lyrics_for_file, SUPPORTED_AUDIO_EXTS, detect_audio_onset, shift_lrc_timestamps, auto_calibrate_lrc_file
 )
 
 
@@ -177,6 +177,7 @@ class LyricsFetcherWindow(QWidget):
         tabs = QTabWidget()
         tabs.addTab(self._create_batch_tab(), "BATCH FOLDER SYNC")
         tabs.addTab(self._create_lookup_tab(), "SINGLE SONG SEARCH")
+        tabs.addTab(self._create_calibrator_tab(), "SYNC CALIBRATOR")
         main_layout.addWidget(tabs)
 
     def _create_batch_tab(self) -> QWidget:
@@ -278,6 +279,158 @@ class LyricsFetcherWindow(QWidget):
         layout.addLayout(hbox_save)
 
         return tab
+
+
+    def _create_calibrator_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        desc = QLabel("Analyze and auto-align audio vs lyrics timestamps to fix delayed or early subtitles.")
+        desc.setStyleSheet("color: #64748b; font-size: 11px;")
+        layout.addWidget(desc)
+
+        # File selector
+        hbox_file = QHBoxLayout()
+        self.edit_cal_file = QLineEdit()
+        self.edit_cal_file.setPlaceholderText("Select audio track to calibrate...")
+        hbox_file.addWidget(self.edit_cal_file)
+
+        btn_browse_cal = QPushButton("BROWSE FILE")
+        btn_browse_cal.clicked.connect(self._browse_cal_file)
+        hbox_file.addWidget(btn_browse_cal)
+
+        btn_analyze = QPushButton("ANALYZE TIMING")
+        btn_analyze.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9;")
+        btn_analyze.clicked.connect(self._analyze_cal_file)
+        hbox_file.addWidget(btn_analyze)
+        layout.addLayout(hbox_file)
+
+        # Telemetry Display Box
+        telemetry_frame = QFrame()
+        telemetry_frame.setStyleSheet("background-color: #12151f; border: 1px solid #23293a; border-radius: 4px; padding: 6px;")
+        hbox_tele = QHBoxLayout(telemetry_frame)
+
+        self.lbl_cal_onset = QLabel("AUDIO ONSET: --")
+        self.lbl_cal_onset.setStyleSheet("color: #38d9d9; font-weight: bold; font-family: 'Consolas', monospace;")
+        hbox_tele.addWidget(self.lbl_cal_onset)
+
+        self.lbl_cal_lyric = QLabel("FIRST LYRIC: --")
+        self.lbl_cal_lyric.setStyleSheet("color: #e879f9; font-weight: bold; font-family: 'Consolas', monospace;")
+        hbox_tele.addWidget(self.lbl_cal_lyric)
+
+        self.lbl_cal_diff = QLabel("DISCREPANCY: --")
+        self.lbl_cal_diff.setStyleSheet("color: #ffe600; font-weight: bold; font-family: 'Consolas', monospace;")
+        hbox_tele.addWidget(self.lbl_cal_diff)
+
+        layout.addWidget(telemetry_frame)
+
+        # Quick Offset Tuning Buttons
+        hbox_shifts = QHBoxLayout()
+        for delta in [-1.0, -0.5, -0.1, 0.1, 0.5, 1.0]:
+            sign = "+" if delta > 0 else ""
+            btn = QPushButton(f"{sign}{delta}s")
+            btn.setStyleSheet("background-color: #181d2c; color: #cbd5e1; border: 1px solid #2e3852; padding: 4px 8px;")
+            btn.clicked.connect(lambda _, d=delta: self._shift_active_lrc(d))
+            hbox_shifts.addWidget(btn)
+
+        btn_auto_cal = QPushButton("AUTO-CALIBRATE & SAVE")
+        btn_auto_cal.setStyleSheet("background-color: #2b1138; color: #e879f9; border: 1px solid #c084fc; font-weight: bold; padding: 6px 12px;")
+        btn_auto_cal.clicked.connect(self._auto_calibrate_active_file)
+        hbox_shifts.addWidget(btn_auto_cal)
+        layout.addLayout(hbox_shifts)
+
+        # Preview area
+        self.txt_cal_preview = QTextEdit()
+        self.txt_cal_preview.setPlaceholderText("LRC file content will be previewed here...")
+        layout.addWidget(self.txt_cal_preview)
+
+        # Save button
+        hbox_save = QHBoxLayout()
+        hbox_save.addStretch()
+        btn_save = QPushButton("SAVE CURRENT PREVIEW TO .LRC")
+        btn_save.setStyleSheet("background-color: #122822; color: #00ff66; border: 1px solid #00ff66; font-weight: bold;")
+        btn_save.clicked.connect(self._save_cal_preview)
+        hbox_save.addWidget(btn_save)
+        layout.addLayout(hbox_save)
+
+        return tab
+
+    def _browse_cal_file(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Select Audio File", self.edit_folder.text(), "Audio Files (*.mp3 *.opus *.flac *.ogg *.m4a *.wav)")
+        if f:
+            self.edit_cal_file.setText(os.path.normpath(f))
+            self._analyze_cal_file()
+
+    def _analyze_cal_file(self):
+        audio_path = self.edit_cal_file.text().strip()
+        if not os.path.exists(audio_path):
+            return
+
+        onset = detect_audio_onset(audio_path)
+        self.lbl_cal_onset.setText(f"AUDIO ONSET: {onset:.2f}s")
+
+        lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
+        if os.path.exists(lrc_path):
+            with open(lrc_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            self.txt_cal_preview.setText(content)
+
+            import re
+            pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]')
+            first_ts = None
+            for line in content.splitlines():
+                m = pattern.search(line)
+                if m:
+                    text = pattern.sub('', line).strip()
+                    if len(text) >= 2 and not text.startswith(('by:', 'ar:', 'ti:', 'al:')):
+                        mins = int(m.group(1))
+                        secs = int(m.group(2))
+                        ms = float("0." + m.group(3)) if m.group(3) else 0.0
+                        first_ts = mins * 60.0 + secs + ms
+                        break
+
+            if first_ts is not None:
+                self.lbl_cal_lyric.setText(f"FIRST LYRIC: {first_ts:.2f}s")
+                diff = round(onset - first_ts, 2)
+                self.lbl_cal_diff.setText(f"DISCREPANCY: {diff:+.2f}s")
+            else:
+                self.lbl_cal_lyric.setText("FIRST LYRIC: N/A")
+                self.lbl_cal_diff.setText("DISCREPANCY: N/A")
+        else:
+            self.txt_cal_preview.setText("// No companion .lrc file found for this track.")
+            self.lbl_cal_lyric.setText("FIRST LYRIC: MISSING")
+            self.lbl_cal_diff.setText("DISCREPANCY: MISSING")
+
+    def _shift_active_lrc(self, delta: float):
+        text = self.txt_cal_preview.toPlainText()
+        if not text or text.startswith("//"):
+            return
+        shifted = shift_lrc_timestamps(text, delta)
+        self.txt_cal_preview.setText(shifted)
+
+    def _auto_calibrate_active_file(self):
+        audio_path = self.edit_cal_file.text().strip()
+        if not os.path.exists(audio_path):
+            return
+        success, offset, msg = auto_calibrate_lrc_file(audio_path)
+        self._analyze_cal_file()
+
+    def _save_cal_preview(self):
+        audio_path = self.edit_cal_file.text().strip()
+        if not audio_path:
+            return
+        lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
+        text = self.txt_cal_preview.toPlainText()
+        if not text or text.startswith("//"):
+            return
+        try:
+            with open(lrc_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self._analyze_cal_file()
+        except Exception as e:
+            pass
 
     def _browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Music Library Folder", self.edit_folder.text())

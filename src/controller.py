@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon, QColor, QAction
 
 from config import (
-    user32, VK_F7, VK_F8, VK_F9, VK_F10, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
+    user32, VK_F7, VK_F8, VK_F9, VK_F10, VK_CONTROL, VK_OEM_4, VK_OEM_6, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
     save_settings, PROJECT_ROOT, ICON_PATH
 )
 from audio_engine import CyberAudioEngine
@@ -56,6 +56,8 @@ class ControlPanel(QWidget):
             self.lyrics_overlay.panel = self
 
         self.last_f7_state = False
+        self.last_bracket_left_state = False
+        self.last_bracket_right_state = False
         self.last_f8_state = False
         self.last_f9_state = False
         self.last_f10_state = False
@@ -501,6 +503,51 @@ class ControlPanel(QWidget):
         self.chk_word_glow.toggled.connect(self.on_word_glow_toggled)
         content_layout.addWidget(self.chk_word_glow)
 
+        # --- SYNC OFFSET CONTROLS ---
+        hbox_sync = QHBoxLayout()
+        lbl_sync_title = QLabel("SYNC:")
+        lbl_sync_title.setStyleSheet("color: #d94452; font-weight: bold;")
+        hbox_sync.addWidget(lbl_sync_title)
+
+        btn_minus_half = QPushButton("-0.5s")
+        btn_minus_half.setStyleSheet("background-color: #1e1528; color: #c084fc; border: 1px solid #4a3b60; font-weight: bold; padding: 2px 6px;")
+        btn_minus_half.setToolTip("Shift lyrics 0.5s earlier (Hotkeys: Ctrl+[ / Ctrl+])")
+        btn_minus_half.clicked.connect(lambda: self.adjust_lyrics_offset(-0.5))
+        hbox_sync.addWidget(btn_minus_half)
+
+        btn_minus_tenth = QPushButton("-0.1s")
+        btn_minus_tenth.setStyleSheet("background-color: #1e1528; color: #c084fc; border: 1px solid #4a3b60; font-weight: bold; padding: 2px 6px;")
+        btn_minus_tenth.clicked.connect(lambda: self.adjust_lyrics_offset(-0.1))
+        hbox_sync.addWidget(btn_minus_tenth)
+
+        self.lbl_sync_offset = QLabel("+0.00s")
+        self.lbl_sync_offset.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_sync_offset.setStyleSheet("color: #e879f9; font-weight: bold; min-width: 55px;")
+        hbox_sync.addWidget(self.lbl_sync_offset)
+
+        btn_plus_tenth = QPushButton("+0.1s")
+        btn_plus_tenth.setStyleSheet("background-color: #1e1528; color: #c084fc; border: 1px solid #4a3b60; font-weight: bold; padding: 2px 6px;")
+        btn_plus_tenth.clicked.connect(lambda: self.adjust_lyrics_offset(0.1))
+        hbox_sync.addWidget(btn_plus_tenth)
+
+        btn_plus_half = QPushButton("+0.5s")
+        btn_plus_half.setStyleSheet("background-color: #1e1528; color: #c084fc; border: 1px solid #4a3b60; font-weight: bold; padding: 2px 6px;")
+        btn_plus_half.clicked.connect(lambda: self.adjust_lyrics_offset(0.5))
+        hbox_sync.addWidget(btn_plus_half)
+
+        btn_sync_reset = QPushButton("RESET")
+        btn_sync_reset.setStyleSheet("background-color: #2b1138; color: #ff2a85; border: 1px solid #ff2a85; font-weight: bold; padding: 2px 6px;")
+        btn_sync_reset.clicked.connect(self.reset_lyrics_offset)
+        hbox_sync.addWidget(btn_sync_reset)
+
+        btn_auto_sync = QPushButton("AUTO-SYNC")
+        btn_auto_sync.setStyleSheet("background-color: #0d2830; color: #00f0ff; border: 1px solid #00f0ff; font-weight: bold; padding: 2px 8px;")
+        btn_auto_sync.setToolTip("Automatically detect audio start vs lyrics timestamp and auto-align")
+        btn_auto_sync.clicked.connect(self.auto_sync_lyrics)
+        hbox_sync.addWidget(btn_auto_sync)
+
+        content_layout.addLayout(hbox_sync)
+
         # --- SECTION: VISUALIZER CONFIGURATION ---
         content_layout.addWidget(create_section_header("Visualizer Configuration"))
 
@@ -867,6 +914,7 @@ class ControlPanel(QWidget):
         self.sync_play_state()
 
     def sync_play_state(self):
+        self.update_sync_offset_display()
         if self.audio_engine.audio_mode == "desktop":
             self.btn_play_pause.setText("LIVE INPUT")
             self.btn_play_pause.setStyleSheet("background-color: #1b3b44; color: #38d9d9; border: 1px solid #38d9d9;")
@@ -1047,6 +1095,17 @@ class ControlPanel(QWidget):
             self.toggle_lyrics()
         self.last_f7_state = f7_down
 
+        ctrl_down = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+        bracket_l = bool(user32.GetAsyncKeyState(VK_OEM_4) & 0x8000)
+        if ctrl_down and bracket_l and not self.last_bracket_left_state:
+            self.adjust_lyrics_offset(-0.25)
+        self.last_bracket_left_state = bracket_l
+
+        bracket_r = bool(user32.GetAsyncKeyState(VK_OEM_6) & 0x8000)
+        if ctrl_down and bracket_r and not self.last_bracket_right_state:
+            self.adjust_lyrics_offset(0.25)
+        self.last_bracket_right_state = bracket_r
+
         f8_down = bool(user32.GetAsyncKeyState(VK_F8) & 0x8000)
         if f8_down and not self.last_f8_state:
             self.toggle_move_talia()
@@ -1093,6 +1152,29 @@ class ControlPanel(QWidget):
         else:
             self.btn_move_talia.setText("MOVE: LOCKED")
             self.btn_move_talia.setStyleSheet("background-color: #181318; color: #d94452; border: 1px solid #4d1f27; font-weight: bold;")
+
+    def adjust_lyrics_offset(self, delta: float):
+        if self.lyrics_overlay and hasattr(self.lyrics_overlay, "lyrics_manager") and self.lyrics_overlay.lyrics_manager:
+            new_val = self.lyrics_overlay.lyrics_manager.adjust_offset(delta)
+            self.update_sync_offset_display(new_val)
+            print(f"[LYRICS] Manual sync offset adjusted: {new_val:+.2f}s")
+
+    def reset_lyrics_offset(self):
+        if self.lyrics_overlay and hasattr(self.lyrics_overlay, "lyrics_manager") and self.lyrics_overlay.lyrics_manager:
+            new_val = self.lyrics_overlay.lyrics_manager.reset_offset()
+            self.update_sync_offset_display(new_val)
+            print("[LYRICS] Manual sync offset reset to 0.0s")
+
+    def auto_sync_lyrics(self):
+        if self.lyrics_overlay and hasattr(self.lyrics_overlay, "lyrics_manager") and self.lyrics_overlay.lyrics_manager:
+            success, val, msg = self.lyrics_overlay.lyrics_manager.auto_align_with_audio()
+            self.update_sync_offset_display()
+            print(f"[LYRICS AUTO-SYNC] {msg}")
+
+    def update_sync_offset_display(self, val=None):
+        if hasattr(self, "lbl_sync_offset") and self.lyrics_overlay and hasattr(self.lyrics_overlay, "lyrics_manager") and self.lyrics_overlay.lyrics_manager:
+            offset = val if val is not None else self.lyrics_overlay.lyrics_manager.get_total_offset()
+            self.lbl_sync_offset.setText(f"{offset:+.2f}s")
 
     def on_word_glow_toggled(self, checked: bool):
         if self.lyrics_overlay:

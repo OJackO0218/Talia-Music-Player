@@ -1,6 +1,8 @@
 """
 Lyrics Manager: Synchronized LRC lyrics parser, cache manager, and auto-fetcher.
 Fetches high-accuracy timestamps from LRCLIB (Spotify/Musixmatch data source) and manages local .lrc files.
+Includes full support for [offset: +/-ms] tags, manual micro-tuning, per-track persistence,
+and automated audio-onset alignment.
 """
 
 import os
@@ -10,11 +12,19 @@ import time
 import urllib.request
 import urllib.parse
 import threading
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
+
+try:
+    from config import load_settings, save_settings
+except ImportError:
+    def load_settings():
+        return {}
+    def save_settings(data):
+        return True
 
 
 class LyricsManager:
-    """Manages synchronized line-by-line lyrics with offline cache and LRCLIB integration."""
+    """Manages synchronized line-by-line lyrics with offline cache, LRCLIB integration, and auto-sync offset."""
 
     def __init__(self, cache_dir: Optional[str] = None):
         self.cache_dir = cache_dir or ""
@@ -32,6 +42,44 @@ class LyricsManager:
         self.has_lyrics: bool = False
         self.lock = threading.Lock()
 
+        # Offset management (in seconds)
+        # Standard LRC [offset: +/-ms] tag: positive means lyrics play earlier
+        self.file_offset: float = 0.0
+        self.manual_offset: float = 0.0
+
+        # Per-track saved offsets dictionary: { "filename": offset_in_seconds }
+        self.track_offsets: Dict[str, float] = {}
+        self._load_saved_offsets()
+
+    def _load_saved_offsets(self):
+        """Loads saved track offsets from settings.json."""
+        try:
+            cfg = load_settings()
+            offsets = cfg.get("lyrics_offsets", {})
+            if isinstance(offsets, dict):
+                self.track_offsets = {k: float(v) for k, v in offsets.items()}
+        except Exception as e:
+            print(f"[LYRICS] Could not load saved offsets: {e}")
+            self.track_offsets = {}
+
+    def _save_current_track_offset(self):
+        """Persists the current track's manual offset into settings.json."""
+        if not self.current_track_path:
+            return
+        track_key = os.path.basename(self.current_track_path)
+        with self.lock:
+            if abs(self.manual_offset) > 0.01:
+                self.track_offsets[track_key] = round(self.manual_offset, 2)
+            else:
+                self.track_offsets.pop(track_key, None)
+
+        try:
+            cfg = load_settings()
+            cfg["lyrics_offsets"] = self.track_offsets
+            save_settings(cfg)
+        except Exception as e:
+            print(f"[LYRICS] Failed to save track offset: {e}")
+
     def clean_title(self, filename: str) -> str:
         """Strips tags, file extensions, and common packaging noise to isolate song title."""
         stem = os.path.splitext(os.path.basename(filename))[0]
@@ -47,8 +95,21 @@ class LyricsManager:
         return stem
 
     def parse_lrc(self, lrc_text: str) -> List[Tuple[float, str]]:
-        """Parses standard LRC text into sorted [(timestamp_seconds, text), ...] list."""
+        """Parses standard LRC text into sorted [(timestamp_seconds, text), ...] list and extracts offset tag."""
         parsed: List[Tuple[float, str]] = []
+
+        # Extract standard LRC [offset: +/-ms] tag if present
+        # Note: positive offset means lyrics trigger earlier (+effective_time)
+        offset_match = re.search(r'\[offset:\s*([+-]?\d+)\]', lrc_text, flags=re.I)
+        if offset_match:
+            try:
+                ms_val = float(offset_match.group(1))
+                self.file_offset = ms_val / 1000.0
+            except Exception:
+                self.file_offset = 0.0
+        else:
+            self.file_offset = 0.0
+
         # Matches [mm:ss.xx] or [mm:ss.xxx] or [mm:ss]
         pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]')
 
@@ -83,6 +144,8 @@ class LyricsManager:
                 self.lines = []
                 self.has_lyrics = False
                 self.current_track_path = ""
+                self.file_offset = 0.0
+                self.manual_offset = 0.0
             return
 
         with self.lock:
@@ -91,6 +154,11 @@ class LyricsManager:
             self.lines = []
             self.has_lyrics = False
             self.is_loading = True
+            self.file_offset = 0.0
+
+            # Restore per-track saved offset
+            track_key = os.path.basename(track_path)
+            self.manual_offset = float(self.track_offsets.get(track_key, 0.0))
 
         # 1. Check local .lrc file right next to audio file
         local_lrc = os.path.splitext(track_path)[0] + ".lrc"
@@ -137,7 +205,6 @@ class LyricsManager:
     def _fetch_remote_lyrics(self, query_title: str, query_artist: str, cache_file: str, track_path: str):
         """Background worker that queries LRCLIB for Spotify/Musixmatch synced lyrics."""
         try:
-            # Query by search API
             search_query = f"{query_title} {query_artist}".strip()
             url = f"https://lrclib.net/api/search?q={urllib.parse.quote(search_query)}"
             req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyrics/1.0"})
@@ -155,7 +222,6 @@ class LyricsManager:
             if synced_content:
                 parsed = self.parse_lrc(synced_content)
                 if parsed:
-                    # Save to cache
                     if cache_file:
                         try:
                             with open(cache_file, "w", encoding="utf-8") as f:
@@ -179,19 +245,120 @@ class LyricsManager:
                 if self.current_track_path == track_path:
                     self.is_loading = False
 
+    def get_total_offset(self) -> float:
+        """Returns the active total offset applied to playback time in seconds."""
+        with self.lock:
+            return round(self.manual_offset + self.file_offset, 2)
+
+    def adjust_offset(self, delta: float, persist: bool = True) -> float:
+        """Shifts the manual offset by delta seconds (e.g. +0.25s or -0.25s) and saves."""
+        with self.lock:
+            self.manual_offset = round(self.manual_offset + delta, 2)
+        if persist:
+            self._save_current_track_offset()
+        return self.get_total_offset()
+
+    def set_offset(self, val: float, persist: bool = True) -> float:
+        """Explicitly sets the manual offset in seconds and saves."""
+        with self.lock:
+            self.manual_offset = round(val, 2)
+        if persist:
+            self._save_current_track_offset()
+        return self.get_total_offset()
+
+    def reset_offset(self, persist: bool = True) -> float:
+        """Resets the manual offset to 0.0s and saves."""
+        with self.lock:
+            self.manual_offset = 0.0
+        if persist:
+            self._save_current_track_offset()
+        return self.get_total_offset()
+
+    def auto_align_with_audio(self, audio_path: Optional[str] = None) -> Tuple[bool, float, str]:
+        """
+        Analyzes the audio file's initial energy onset and compares with the first lyric timestamp.
+        If a significant discrepancy is detected, automatically applies the calculated offset.
+        Returns (success, applied_offset, status_message).
+        """
+        target_path = audio_path or self.current_track_path
+        if not target_path or not os.path.exists(target_path):
+            return False, 0.0, "No audio file loaded"
+
+        with self.lock:
+            if not self.lines:
+                return False, 0.0, "No lyrics loaded for track"
+            # Find first non-empty lyric line timestamp
+            first_lyric_ts = None
+            for ts, text in self.lines:
+                if len(text.strip()) > 1:
+                    first_lyric_ts = ts
+                    break
+
+        if first_lyric_ts is None:
+            return False, 0.0, "No valid lyric lines found"
+
+        try:
+            import soundfile as sf
+            import numpy as np
+
+            data, sr = sf.read(target_path)
+            if len(data.shape) > 1:
+                data = data.mean(axis=1)
+
+            # Analyze first 35 seconds of audio in 50ms hops
+            max_samples = int(min(len(data), sr * 35.0))
+            hop = int(sr * 0.05)
+            rms_list = []
+            times = []
+
+            for i in range(0, max_samples - hop, hop):
+                chunk = data[i:i + hop]
+                rms = np.sqrt(np.mean(chunk**2))
+                rms_list.append(rms)
+                times.append(i / float(sr))
+
+            rms_arr = np.array(rms_list)
+            if len(rms_arr) == 0:
+                return False, 0.0, "Audio empty or unreadable"
+
+            peak_rms = float(np.max(rms_arr))
+            thresh = max(0.08, peak_rms * 0.28)
+
+            detected_onset = 0.0
+            for i in range(len(rms_arr) - 3):
+                if rms_arr[i] >= thresh and rms_arr[i+1] >= thresh and rms_arr[i+2] >= thresh:
+                    detected_onset = round(float(times[i]), 2)
+                    break
+
+            diff = round(detected_onset - first_lyric_ts, 2)
+            # Only apply auto-sync if discrepancy is substantial (>= 1.5 seconds)
+            if abs(diff) >= 1.5:
+                needed_offset = round(first_lyric_ts - detected_onset, 2)
+                self.set_offset(needed_offset, persist=True)
+                return True, needed_offset, f"Auto-synced: {needed_offset:+.2f}s (onset: {detected_onset}s, lyric: {first_lyric_ts}s)"
+            else:
+                return False, 0.0, f"Already aligned within threshold (diff: {diff:+.2f}s)"
+
+        except Exception as e:
+            return False, 0.0, f"Auto-sync analysis error: {e}"
+
     def get_current_line_info(self, current_time: float) -> Tuple[int, str, float, float]:
         """
         Returns (line_index, text, time_since_line_start, line_duration).
+        Takes into account total sync offset (file offset + manual offset).
         If before the first line or no lyrics, returns (-1, "", 0.0, 0.0).
         """
         with self.lock:
             if not self.lines:
                 return -1, "", 0.0, 0.0
 
-            # Find the active line index: largest timestamp <= current_time
+            # Apply sync offset: positive moves lyrics earlier
+            effective_time = max(0.0, current_time + self.manual_offset + self.file_offset)
+
+            # Find the active line index: largest timestamp <= effective_time
             idx = -1
             for i, (ts, text) in enumerate(self.lines):
-                if ts <= current_time:
+                if ts <= effective_time:
                     idx = i
                 else:
                     break
@@ -200,13 +367,12 @@ class LyricsManager:
                 return -1, "", 0.0, 0.0
 
             ts, text = self.lines[idx]
-            time_into_line = current_time - ts
+            time_into_line = effective_time - ts
 
             # Calculate active duration to next line
             if idx + 1 < len(self.lines):
                 next_ts = self.lines[idx + 1][0]
                 gap = max(0.5, next_ts - ts)
-                # Vocal singing duration: typically 80% of gap or estimated by word count
                 word_count = max(1, len(text.split()))
                 est_dur = max(2.0, word_count * 0.42)
                 singing_dur = min(gap * 0.85, est_dur)
