@@ -87,7 +87,7 @@ def main():
     # Load first track into engine in paused state (no autoplay)
     if audio_engine.playlist:
         audio_engine.current_index = 0
-        audio_engine.load_file(audio_engine.playlist[0], auto_play=False)
+        audio_engine.load_file(audio_engine.playlist[0], auto_play=False, blocking=True)
         panel.sync_play_state()
 
     # Show overlays (Talia + Synced Lyrics)
