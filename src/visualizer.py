@@ -2,6 +2,7 @@
 Cyberpunk Visualizer: Renders audio-reactive spectrum, waveforms, and reactor cores inside Talia's mouth.
 """
 
+import os
 import math
 import numpy as np
 from PyQt6.QtCore import Qt, QRect, QRectF, QPointF
@@ -9,7 +10,7 @@ from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QRadialGradient, QPolygonF, QPixmap
 )
 
-from config import COLOR_THEMES
+from config import COLOR_THEMES, PNGS_DIR
 from audio_engine import CyberAudioEngine
 
 
@@ -23,6 +24,12 @@ class CyberVisualizer:
         self._cached_grid_pixmap = None
         self._cached_grid_key = None
         self.eco_mode = False
+        self.music_note_icon = QPixmap()
+        icon_path = os.path.join(PNGS_DIR, "music_note_white.png")
+        if os.path.exists(icon_path):
+            self.music_note_icon.load(icon_path)
+        self._cached_scaled_note_size = -1
+        self._cached_scaled_note = QPixmap()
 
     def set_eco_mode(self, enabled: bool):
         self.eco_mode = enabled
@@ -34,11 +41,9 @@ class CyberVisualizer:
 
         theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
 
-        # Eco Mode streamlined path (< 1% CPU target)
+        # Eco Mode: visualizer is removed; replaced with sleek black background and white music symbol
         if getattr(self, "eco_mode", False):
-            painter.fillRect(rect, theme["bg"])
-            bars, peaks, beat = engine.update_spectrum()
-            self._draw_eco_bars(painter, rect, bars, theme)
+            self._draw_eco_mode(painter, rect, theme)
             painter.restore()
             return
 
@@ -86,22 +91,62 @@ class CyberVisualizer:
 
         painter.restore()
 
-    def _draw_eco_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, theme: dict):
-        """Ultra-efficient solid bar rendering for Eco Mode."""
-        if np.max(bars) < 0.002:
-            return
-        num = 10
-        pad_x = 4
-        usable_w = rect.width() - 8
-        bar_w = max(2, usable_w // num - 2)
-        gap = 2
-        max_h = rect.height() - 8
-        base_y = rect.bottom() - 4
-        col = theme["bar_top"]
-        for i in range(num):
-            bx = rect.left() + pad_x + i * (bar_w + gap)
-            h = max(2, int(bars[i * 2] * max_h))
-            painter.fillRect(bx, base_y - h, bar_w, h, col)
+    def _draw_eco_mode(self, painter: QPainter, rect: QRect, theme: dict):
+        """Renders ultra-low CPU black background with crisp white music symbol and sleek cyber HUD accents."""
+        # 1. Pitch black background inside mouth cavity
+        painter.fillRect(rect, QColor(8, 8, 12, 255))
+
+        cx = rect.center().x()
+        cy = rect.center().y()
+        icon_dim = max(16, int(min(rect.width(), rect.height()) * 0.52))
+
+        # 2. Sleek Cyber HUD Corner Brackets
+        bracket_pad = int(icon_dim * 0.16)
+        bx1 = cx - icon_dim // 2 - bracket_pad
+        bx2 = cx + icon_dim // 2 + bracket_pad
+        by1 = cy - icon_dim // 2 - bracket_pad
+        by2 = cy + icon_dim // 2 + bracket_pad
+        blen = max(4, int(icon_dim * 0.20))
+
+        bracket_color = theme.get("bar_bottom", QColor(0, 240, 255))
+        bpen = QPen(QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 130), 1.5)
+        painter.setPen(bpen)
+        # Top-left
+        painter.drawLine(bx1, by1, bx1 + blen, by1)
+        painter.drawLine(bx1, by1, bx1, by1 + blen)
+        # Top-right
+        painter.drawLine(bx2, by1, bx2 - blen, by1)
+        painter.drawLine(bx2, by1, bx2, by1 + blen)
+        # Bottom-left
+        painter.drawLine(bx1, by2, bx1 + blen, by2)
+        painter.drawLine(bx1, by2, bx1, by2 - blen)
+        # Bottom-right
+        painter.drawLine(bx2, by2, bx2 - blen, by2)
+        painter.drawLine(bx2, by2, bx2, by2 - blen)
+
+        # 3. Soft ambient glow behind music note
+        glow_rad = icon_dim * 0.85
+        glow = QRadialGradient(float(cx), float(cy), float(glow_rad))
+        glow.setColorAt(0.0, QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 45))
+        glow.setColorAt(0.55, QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 12))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.setBrush(glow)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(float(cx), float(cy)), glow_rad, glow_rad)
+
+        # 4. White Music Note Icon
+        if not self.music_note_icon.isNull():
+            if self._cached_scaled_note_size != icon_dim:
+                self._cached_scaled_note = self.music_note_icon.scaled(
+                    icon_dim, icon_dim,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self._cached_scaled_note_size = icon_dim
+
+            ix = cx - self._cached_scaled_note.width() // 2
+            iy = cy - self._cached_scaled_note.height() // 2
+            painter.drawPixmap(ix, iy, self._cached_scaled_note)
 
     def _draw_cyber_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
         """Segmented LED equalizer bars with falling peak hold caps."""

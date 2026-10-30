@@ -739,9 +739,12 @@ class OverlayWindow(QWidget):
         sway_active = self.is_holding or (self.impulse_timer > 0.0) or (abs(self.current_rotation) > 0.02) or (abs(self.current_shake_x) > 0.05) or (abs(self.current_shake_y) > 0.05)
         fx_active = self.is_starting_up or self.is_shutting_down or (self.hover_glow > 0.005)
 
+        # In Eco Mode with static music symbol, only repaint audio if not in eco mode
+        audio_visual_animating = is_audio_active and not self.eco_mode
+
         needs_render = (
             self.move_talia_mode or
-            is_audio_active or
+            audio_visual_animating or
             cursor_moved or
             eye_moving or
             outline_changing or
