@@ -25,9 +25,12 @@ class CyberVisualizer:
         self._cached_grid_key = None
         self.eco_mode = False
         self.music_note_icon = QPixmap()
-        icon_path = os.path.join(PNGS_DIR, "music_note_white.png")
-        if os.path.exists(icon_path):
-            self.music_note_icon.load(icon_path)
+        for cand_dir in [PNGS_DIR, os.path.join(os.path.dirname(PNGS_DIR), "icons"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons")]:
+            ip = os.path.join(cand_dir, "music_note_white.png")
+            if os.path.exists(ip):
+                self.music_note_icon.load(ip)
+                if not self.music_note_icon.isNull():
+                    break
         self._cached_scaled_note_size = -1
         self._cached_scaled_note = QPixmap()
 
@@ -37,60 +40,71 @@ class CyberVisualizer:
     def draw(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine):
         """Draws the selected visualizer inside the target bounding rect."""
         painter.save()
-        painter.setClipRect(rect)
+        try:
+            painter.setClipRect(rect)
 
-        theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
+            theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
 
-        # Eco Mode: visualizer is removed; replaced with sleek black background and white music symbol
-        if getattr(self, "eco_mode", False):
-            is_active = bool(engine and engine.is_playing and not engine.is_paused)
-            self._draw_eco_mode(painter, rect, theme, show_symbol=is_active)
+            # Eco Mode: visualizer is removed; replaced with sleek black background and white music symbol
+            if getattr(self, "eco_mode", False):
+                is_active = False
+                if engine is not None:
+                    if getattr(engine, "audio_mode", "player") == "desktop":
+                        is_active = bool(getattr(engine, "beat_energy", 0.0) > 0.002 or np.max(getattr(engine, "smoothed_bars", [0])) > 0.002)
+                    else:
+                        is_active = bool(getattr(engine, "is_playing", False) and not getattr(engine, "is_paused", False))
+                self._draw_eco_mode(painter, rect, theme, show_symbol=is_active)
+                return
+
+            # 1 & 2. Hardware-accelerated Cached Background & Grid (single blit)
+            key = (rect.width(), rect.height(), self.current_theme_name)
+            if self._cached_grid_key != key or self._cached_grid_pixmap is None:
+                self._cached_grid_key = key
+                pm = QPixmap(rect.width(), rect.height())
+                pm.fill(theme["bg"])
+                p_grid = QPainter(pm)
+                p_grid.setPen(QPen(theme["grid"], 1))
+                step_x = 24
+                step_y = 20
+                for x in range(0, rect.width(), step_x):
+                    p_grid.drawLine(x, 0, x, rect.height())
+                for y in range(0, rect.height(), step_y):
+                    p_grid.drawLine(0, y, rect.width(), y)
+                p_grid.end()
+                self._cached_grid_pixmap = pm
+
+            painter.drawPixmap(rect.topLeft(), self._cached_grid_pixmap)
+
+            # 3. Ambient Beat Glow Pulse (Lights up Talia's inner jaw on heavy bass)
+            bars, peaks, beat = engine.update_spectrum()
+            if beat > 0.15:
+                cx = float(rect.center().x())
+                cy = float(rect.center().y())
+                radius = float(rect.width() * 0.45 * (1.0 + beat * 0.35))
+                radial = QRadialGradient(cx, cy, radius)
+                glow_col = QColor(theme["bar_mid"])
+                glow_col.setAlpha(int(65 * beat))
+                radial.setColorAt(0.0, glow_col)
+                radial.setColorAt(1.0, QColor(0, 0, 0, 0))
+                painter.fillRect(rect, QBrush(radial))
+
+            # 4. Mode-specific Visualizer
+            if self.mode == "Cyber Bars":
+                self._draw_cyber_bars(painter, rect, bars, peaks, theme)
+            elif self.mode == "Neon Wave":
+                self._draw_neon_wave(painter, rect, engine, theme)
+            elif self.mode == "Radial Core":
+                self._draw_radial_core(painter, rect, bars, beat, theme)
+            elif self.mode == "Dual Mirror":
+                self._draw_dual_mirror(painter, rect, bars, peaks, theme)
+        except Exception:
+            # Bulletproof safe fallback
+            try:
+                painter.fillRect(rect, QColor(8, 8, 12, 255))
+            except Exception:
+                pass
+        finally:
             painter.restore()
-            return
-
-        # 1 & 2. Hardware-accelerated Cached Background & Grid (single blit)
-        key = (rect.width(), rect.height(), self.current_theme_name)
-        if self._cached_grid_key != key or self._cached_grid_pixmap is None:
-            self._cached_grid_key = key
-            pm = QPixmap(rect.width(), rect.height())
-            pm.fill(theme["bg"])
-            p_grid = QPainter(pm)
-            p_grid.setPen(QPen(theme["grid"], 1))
-            step_x = 24
-            step_y = 20
-            for x in range(0, rect.width(), step_x):
-                p_grid.drawLine(x, 0, x, rect.height())
-            for y in range(0, rect.height(), step_y):
-                p_grid.drawLine(0, y, rect.width(), y)
-            p_grid.end()
-            self._cached_grid_pixmap = pm
-
-        painter.drawPixmap(rect.topLeft(), self._cached_grid_pixmap)
-
-        # 3. Ambient Beat Glow Pulse (Lights up Talia's inner jaw on heavy bass)
-        bars, peaks, beat = engine.update_spectrum()
-        if beat > 0.15:
-            cx = float(rect.center().x())
-            cy = float(rect.center().y())
-            radius = float(rect.width() * 0.45 * (1.0 + beat * 0.35))
-            radial = QRadialGradient(cx, cy, radius)
-            glow_col = QColor(theme["bar_mid"])
-            glow_col.setAlpha(int(65 * beat))
-            radial.setColorAt(0.0, glow_col)
-            radial.setColorAt(1.0, QColor(0, 0, 0, 0))
-            painter.fillRect(rect, QBrush(radial))
-
-        # 4. Mode-specific Visualizer
-        if self.mode == "Cyber Bars":
-            self._draw_cyber_bars(painter, rect, bars, peaks, theme)
-        elif self.mode == "Neon Wave":
-            self._draw_neon_wave(painter, rect, engine, theme)
-        elif self.mode == "Radial Core":
-            self._draw_radial_core(painter, rect, bars, beat, theme)
-        elif self.mode == "Dual Mirror":
-            self._draw_dual_mirror(painter, rect, bars, peaks, theme)
-
-        painter.restore()
 
     def _draw_eco_mode(self, painter: QPainter, rect: QRect, theme: dict, show_symbol: bool = True):
         """Renders ultra-low CPU black background with crisp white music symbol and sleek cyber HUD accents."""
@@ -150,6 +164,37 @@ class CyberVisualizer:
             ix = cx - self._cached_scaled_note.width() // 2
             iy = cy - self._cached_scaled_note.height() // 2
             painter.drawPixmap(ix, iy, self._cached_scaled_note)
+        else:
+            # Vector fallback: crisp white beamed eighth note
+            self._draw_vector_music_note(painter, cx, cy, icon_dim)
+
+    def _draw_vector_music_note(self, painter: QPainter, cx: int, cy: int, dim: int):
+        """Crisp vector fallback for beamed eighth note symbol."""
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 255))
+        # Note heads
+        r = max(3, int(dim * 0.16))
+        dx = int(dim * 0.28)
+        painter.drawEllipse(QPointF(cx - dx, cy + r), r, int(r * 0.85))
+        painter.drawEllipse(QPointF(cx + dx, cy), r, int(r * 0.85))
+        # Stems
+        stem_w = max(2, int(dim * 0.08))
+        stem_top = cy - int(dim * 0.38)
+        painter.fillRect(QRect(cx - dx + r - stem_w, stem_top + int(dim * 0.08), stem_w, int(cy + r - stem_top)), QColor(255, 255, 255, 255))
+        painter.fillRect(QRect(cx + dx + r - stem_w, stem_top, stem_w, int(cy - stem_top)), QColor(255, 255, 255, 255))
+        # Beam
+        beam_h = max(3, int(dim * 0.12))
+        from PyQt6.QtGui import QPolygonF
+        beam_poly = QPolygonF([
+            QPointF(cx - dx + r - stem_w, stem_top + int(dim * 0.08)),
+            QPointF(cx + dx + r, stem_top),
+            QPointF(cx + dx + r, stem_top + beam_h),
+            QPointF(cx - dx + r - stem_w, stem_top + int(dim * 0.08) + beam_h),
+        ])
+        painter.drawPolygon(beam_poly)
+        painter.restore()
 
     def _draw_cyber_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
         """Segmented LED equalizer bars with falling peak hold caps."""

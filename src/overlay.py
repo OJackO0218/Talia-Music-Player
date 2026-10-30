@@ -864,7 +864,10 @@ class OverlayWindow(QWidget):
         if self.hold_saturation > 0.05:
             vis_opacity = self.opacity_val * self.hold_saturation
             painter.setOpacity(vis_opacity)
-            self.visualizer.draw(painter, mouth_rect, self.audio_engine)
+            try:
+                self.visualizer.draw(painter, mouth_rect, self.audio_engine)
+            except Exception:
+                pass
             painter.setOpacity(self.opacity_val)
 
         # ==========================================================

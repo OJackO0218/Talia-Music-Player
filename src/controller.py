@@ -1158,7 +1158,7 @@ class ControlPanel(QWidget):
             self.lyrics_overlay.set_eco_mode(enabled)
 
         if enabled:
-            self.hotkey_timer.setInterval(125)
+            self.hotkey_timer.setInterval(60)
             self.timeline_timer.setInterval(500)
             if hasattr(self, "btn_eco"):
                 self.btn_eco.setText("ECO: ON")

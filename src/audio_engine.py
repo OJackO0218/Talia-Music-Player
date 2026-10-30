@@ -28,6 +28,7 @@ class CyberAudioEngine:
         self.current_frame = 0
         self.total_frames = 0
         self.is_playing = False
+        self.is_paused = False
         self.volume = 0.85
 
         # Raw audio buffer from audio callback (1024 mono samples)
@@ -220,6 +221,9 @@ class CyberAudioEngine:
 
             if auto_play:
                 self.play()
+            else:
+                self.is_playing = False
+                self.is_paused = True
             return True
         except Exception as e:
             print(f"[AUDIO ERROR] Could not open {file_path}: {e}")
@@ -228,16 +232,19 @@ class CyberAudioEngine:
     def play(self):
         if self.stream and not self.stream.active:
             self.is_playing = True
+            self.is_paused = False
             self.stream.start()
 
     def pause(self):
         if self.stream and self.stream.active:
             self.is_playing = False
+            self.is_paused = True
             self.stream.stop()
 
     def shutdown(self):
         """Immediately aborts audio stream and releases hardware audio handles."""
         self.is_playing = False
+        self.is_paused = False
         self._stop_desktop_capture()
         try:
             if self.stream is not None:
