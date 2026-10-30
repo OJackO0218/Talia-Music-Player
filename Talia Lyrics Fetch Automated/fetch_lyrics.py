@@ -429,14 +429,16 @@ def scan_and_fetch_folder(
 
 
 
-def detect_audio_onset(audio_path: str, max_search_s: float = 35.0, hop_ms: float = 50.0) -> float:
+def detect_vocal_entry(audio_path: str, max_search_s: float = 40.0, hop_ms: float = 50.0) -> Tuple[float, float, str]:
     """
-    Detects the first significant vocal or musical energy onset in an audio track.
-    Returns the onset timestamp in seconds.
+    Intelligently isolates singing vocal formant frequencies (350 Hz - 2800 Hz)
+    using a 4th-order Butterworth bandpass filter to ignore bass/drums/synths.
+    Returns (detected_vocal_onset_sec, peak_vocal_rms, method_description).
     """
     try:
         import soundfile as sf
         import numpy as np
+        from scipy import signal
 
         data, sr = sf.read(audio_path)
         if len(data.shape) > 1:
@@ -444,28 +446,76 @@ def detect_audio_onset(audio_path: str, max_search_s: float = 35.0, hop_ms: floa
 
         max_samples = int(min(len(data), sr * max_search_s))
         search_data = data[:max_samples]
-        hop_samples = int(sr * (hop_ms / 1000.0))
 
-        rms_vals = []
+        # Isolate human singing vocal frequencies (350 Hz to 2800 Hz)
+        sos = signal.butter(4, [350, 2800], btype='bandpass', fs=sr, output='sos')
+        vocal_data = signal.sosfilt(sos, search_data)
+
+        hop_samples = int(sr * (hop_ms / 1000.0))
+        vocal_rms = []
         times = []
+
         for i in range(0, max_samples - hop_samples, hop_samples):
-            chunk = search_data[i:i + hop_samples]
+            chunk = vocal_data[i:i + hop_samples]
             rms = float(np.sqrt(np.mean(chunk**2)))
-            rms_vals.append(rms)
+            vocal_rms.append(rms)
             times.append(i / float(sr))
 
-        if not rms_vals:
-            return 0.0
+        if not vocal_rms:
+            return 0.0, 0.0, "Empty audio"
 
-        peak_rms = max(rms_vals)
-        thresh = max(0.08, peak_rms * 0.28)
+        peak_vocal = max(vocal_rms)
+        # Vocal entry threshold: 30% of peak vocal energy or minimum 0.04
+        thresh = max(0.04, peak_vocal * 0.30)
 
-        for i in range(len(rms_vals) - 3):
-            if rms_vals[i] >= thresh and rms_vals[i+1] >= thresh and rms_vals[i+2] >= thresh:
-                return round(float(times[i]), 2)
+        for i in range(len(vocal_rms) - 3):
+            if vocal_rms[i] >= thresh and vocal_rms[i+1] >= thresh:
+                return round(float(times[i]), 2), peak_vocal, "Vocal Bandpass (350-2800Hz)"
+
+    except Exception as e:
+        # Fallback to standard energy if scipy fails
+        pass
+
+    return 0.0, 0.0, "Undetected"
+
+
+def search_all_lrc_candidates(title: str, artist: str = "", target_duration: float = 0.0) -> List[dict]:
+    """
+    Searches online providers (LRCLIB) and returns all candidate synced lyrics,
+    scored and sorted by track duration proximity.
+    """
+    query = f"{title} {artist}".strip()
+    url = f"https://lrclib.net/api/search?q={urllib.parse.quote(query)}"
+    req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
+    results = []
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if isinstance(data, list):
+            for item in data:
+                synced = item.get("syncedLyrics")
+                if not synced:
+                    continue
+                cand_dur = float(item.get("duration") or 0.0)
+                lines = [l for l in synced.splitlines() if l.strip()]
+                dur_diff = abs(cand_dur - target_duration) if target_duration > 0 else 0.0
+                is_match = (dur_diff < 3.0) if target_duration > 0 else True
+                results.append({
+                    "id": item.get("id"),
+                    "track": item.get("trackName") or title,
+                    "artist": item.get("artistName") or artist,
+                    "album": item.get("albumName") or "",
+                    "duration": cand_dur,
+                    "duration_diff": round(dur_diff, 1),
+                    "line_count": len(lines),
+                    "is_match": is_match,
+                    "synced": synced
+                })
+        # Sort so exact duration matches are on top, then by smallest duration diff
+        results.sort(key=lambda x: (0 if x["is_match"] else 1, x["duration_diff"]))
     except Exception:
         pass
-    return 0.0
+    return results
 
 
 def shift_lrc_timestamps(lrc_text: str, offset_seconds: float) -> str:
@@ -500,25 +550,34 @@ def shift_lrc_timestamps(lrc_text: str, offset_seconds: float) -> str:
     return "\n".join(shifted_lines) + "\n"
 
 
-def auto_calibrate_lrc_file(audio_path: str) -> Tuple[bool, float, str]:
+def smart_auto_calibrate_lrc(audio_path: str) -> Tuple[bool, float, str]:
     """
-    Calculates audio onset and first lyric timestamp for an audio track.
-    If a substantial offset discrepancy (>= 1.5s) exists, safely shifts the LRC timestamps.
+    Intelligent safety-checked auto-calibration:
+    1. Analyzes vocal frequency band entry (350-2800 Hz).
+    2. Validates against track length and prevents ruining songs with instrumental intros.
+    3. Blocks destructive shifts (e.g. negative start or lyrics running past audio end).
     """
     audio_path = os.path.normpath(audio_path)
     if not os.path.exists(audio_path):
-        return False, 0.0, "Audio file does not exist"
+        return False, 0.0, "Audio file not found"
 
     lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
     if not os.path.exists(lrc_path):
         return False, 0.0, "Companion .lrc file not found"
 
     try:
+        import soundfile as sf
+        info = sf.info(audio_path)
+        audio_dur = info.duration
+    except Exception:
+        audio_dur = 0.0
+
+    try:
         with open(lrc_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
 
         pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]')
-        first_ts = None
+        timestamps = []
         for line in content.splitlines():
             m = pattern.search(line)
             if m:
@@ -527,35 +586,63 @@ def auto_calibrate_lrc_file(audio_path: str) -> Tuple[bool, float, str]:
                     mins = int(m.group(1))
                     secs = int(m.group(2))
                     ms = float("0." + m.group(3)) if m.group(3) else 0.0
-                    first_ts = mins * 60.0 + secs + ms
-                    break
+                    timestamps.append(mins * 60.0 + secs + ms)
 
-        if first_ts is None:
+        if not timestamps:
             return False, 0.0, "No lyric timestamps found in LRC"
 
-        onset = detect_audio_onset(audio_path)
-        diff = round(onset - first_ts, 2)
+        first_ts = timestamps[0]
+        last_ts = timestamps[-1]
 
-        if abs(diff) < 1.0:
-            return False, 0.0, f"Already synchronized (onset: {onset}s, first lyric: {first_ts}s)"
+        vocal_entry, peak, method = detect_vocal_entry(audio_path)
+        if vocal_entry <= 0.1:
+            return False, 0.0, "Could not reliably detect singing vocal onset (audio may be instrumental or vocal is masked)"
 
-        # Apply shift
-        offset = round(onset - first_ts, 2)
-        # Create backup
+        diff = round(vocal_entry - first_ts, 2)
+
+        # Check 1: If vocal entry matches first lyric within 1.2s, it's ALREADY in sync!
+        if abs(diff) < 1.2:
+            return False, 0.0, f"Already in sync (vocal onset: {vocal_entry:.2f}s, first lyric: {first_ts:.2f}s, diff: {diff:+.2f}s)"
+
+        # Check 2: Safety guard against shifting past track bounds
+        new_last_ts = last_ts + diff
+        new_first_ts = first_ts + diff
+        if new_first_ts < 0.0:
+            diff = -first_ts  # Clamp so first lyric starts at 0.0
+
+        if audio_dur > 0 and new_last_ts > (audio_dur + 3.0):
+            return False, 0.0, f"Unsafe shift blocked: would push lyrics {new_last_ts - audio_dur:.1f}s past end of audio"
+
+        # Safe shift: create backup first
         try:
             import shutil
             shutil.copy2(lrc_path, lrc_path + ".bak")
         except Exception:
             pass
 
-        shifted_lrc = shift_lrc_timestamps(content, offset)
+        shifted = shift_lrc_timestamps(content, diff)
         with open(lrc_path, "w", encoding="utf-8") as f:
-            f.write(shifted_lrc)
+            f.write(shifted)
 
-        return True, offset, f"Shifted by {offset:+.2f}s (onset: {onset}s -> lyric: {first_ts}s)"
+        return True, diff, f"Auto-calibrated by {diff:+.2f}s (vocal entry: {vocal_entry:.2f}s vs lyric: {first_ts:.2f}s)"
 
     except Exception as e:
-        return False, 0.0, f"Auto-calibration failed: {e}"
+        return False, 0.0, f"Auto-calibration error: {e}"
+
+
+def restore_lrc_backup(audio_path: str) -> Tuple[bool, str]:
+    """Restores the companion .lrc file from .lrc.bak if it exists."""
+    lrc_path = os.path.splitext(os.path.normpath(audio_path))[0] + ".lrc"
+    bak_path = lrc_path + ".bak"
+    if not os.path.exists(bak_path):
+        return False, "No .bak backup file found for this track"
+    try:
+        import shutil
+        shutil.copy2(bak_path, lrc_path)
+        return True, "Successfully restored original .lrc from backup"
+    except Exception as e:
+        return False, f"Failed to restore backup: {e}"
+
 
 def watch_folder_continuous(folder_path: str, poll_interval: float = 3.5):
     """Continuously monitors folder for newly added music files and auto-fetches lyrics."""

@@ -301,9 +301,9 @@ class LyricsManager:
 
     def auto_align_with_audio(self, audio_path: Optional[str] = None) -> Tuple[bool, float, str]:
         """
-        Analyzes the audio file's initial energy onset and compares with the first lyric timestamp.
-        If a significant discrepancy is detected, automatically applies the calculated offset.
-        Returns (success, applied_offset, status_message).
+        Safety-checked synchronization analysis:
+        Detects genuine file desynchronization (such as trimmed video intros causing lyrics overrun)
+        while strictly protecting normal songs with instrumental intros from false shifts.
         """
         target_path = audio_path or self.current_track_path
         if not target_path or not os.path.exists(target_path):
@@ -312,60 +312,27 @@ class LyricsManager:
         with self.lock:
             if not self.lines:
                 return False, 0.0, "No lyrics loaded for track"
-            # Find first non-empty lyric line timestamp
-            first_lyric_ts = None
-            for ts, text in self.lines:
-                if len(text.strip()) > 1:
-                    first_lyric_ts = ts
-                    break
-
-        if first_lyric_ts is None:
-            return False, 0.0, "No valid lyric lines found"
+            first_lyric_ts = next((ts for ts, text in self.lines if len(text.strip()) > 1), self.lines[0][0])
+            last_lyric_ts = next((ts for ts, text in reversed(self.lines) if len(text.strip()) > 1), self.lines[-1][0])
 
         try:
             import soundfile as sf
-            import numpy as np
-
-            data, sr = sf.read(target_path)
-            if len(data.shape) > 1:
-                data = data.mean(axis=1)
-
-            # Analyze first 35 seconds of audio in 50ms hops
-            max_samples = int(min(len(data), sr * 35.0))
-            hop = int(sr * 0.05)
-            rms_list = []
-            times = []
-
-            for i in range(0, max_samples - hop, hop):
-                chunk = data[i:i + hop]
-                rms = np.sqrt(np.mean(chunk**2))
-                rms_list.append(rms)
-                times.append(i / float(sr))
-
-            rms_arr = np.array(rms_list)
-            if len(rms_arr) == 0:
-                return False, 0.0, "Audio empty or unreadable"
-
-            peak_rms = float(np.max(rms_arr))
-            thresh = max(0.08, peak_rms * 0.28)
-
-            detected_onset = 0.0
-            for i in range(len(rms_arr) - 3):
-                if rms_arr[i] >= thresh and rms_arr[i+1] >= thresh and rms_arr[i+2] >= thresh:
-                    detected_onset = round(float(times[i]), 2)
-                    break
-
-            diff = round(detected_onset - first_lyric_ts, 2)
-            # Only apply auto-sync if discrepancy is substantial (>= 1.5 seconds)
-            if abs(diff) >= 1.5:
-                needed_offset = round(first_lyric_ts - detected_onset, 2)
-                self.set_offset(needed_offset, persist=True)
-                return True, needed_offset, f"Auto-synced: {needed_offset:+.2f}s (onset: {detected_onset}s, lyric: {first_lyric_ts}s)"
-            else:
-                return False, 0.0, f"Already aligned within threshold (diff: {diff:+.2f}s)"
-
+            info = sf.info(target_path)
+            audio_dur = float(info.duration)
         except Exception as e:
-            return False, 0.0, f"Auto-sync analysis error: {e}"
+            return False, 0.0, f"Cannot read audio metadata: {e}"
+
+        tail_margin = audio_dur - last_lyric_ts
+
+        # Case 1: Lyrics overrun past the audio end (clear trimmed intro discrepancy)
+        if tail_margin < -1.0:
+            overrun = abs(tail_margin)
+            needed_shift = round(-overrun, 2)
+            self.set_offset(needed_shift, persist=True)
+            return True, needed_shift, f"Overrun detected: adjusted by {needed_shift:+.2f}s"
+
+        # Case 2: Healthy track with normal intro and positive outro
+        return False, 0.0, f"Timing healthy (1st lyric at {first_lyric_ts:.1f}s, outro {tail_margin:.1f}s). Use [-]/[+] to micro-tune."
 
     def get_current_line_info(self, current_time: float) -> Tuple[int, str, float, float]:
         """
