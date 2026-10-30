@@ -1070,7 +1070,9 @@ class ControlPanel(QWidget):
         self.lbl_time_cur.setText(f"{m_pos:02d}:{s_pos:02d}")
         self.lbl_time_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
 
-        if self.audio_engine.is_track_finished():
+        # Auto-advance to next track when song finishes
+        if self.audio_engine.track_finished:
+            self.audio_engine.track_finished = False
             self.audio_engine.next_track()
             self.sync_play_state()
             self.refresh_queue_ui()

@@ -445,6 +445,10 @@ class CyberAudioEngine:
             return os.path.basename(self.playlist[self.current_index])
         return "No Track Loaded"
 
+    def is_track_finished(self) -> bool:
+        """Returns True if track playback has reached the end."""
+        return bool(self.track_finished)
+
     def _audio_callback(self, outdata, frames, time_info, status):
         """High-priority audio streaming thread callback with zero-memory block streaming."""
         if not self.is_playing or self.active_sf is None:
