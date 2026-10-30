@@ -43,7 +43,8 @@ class CyberVisualizer:
 
         # Eco Mode: visualizer is removed; replaced with sleek black background and white music symbol
         if getattr(self, "eco_mode", False):
-            self._draw_eco_mode(painter, rect, theme)
+            is_active = bool(engine and engine.is_playing and not engine.is_paused)
+            self._draw_eco_mode(painter, rect, theme, show_symbol=is_active)
             painter.restore()
             return
 
@@ -91,10 +92,12 @@ class CyberVisualizer:
 
         painter.restore()
 
-    def _draw_eco_mode(self, painter: QPainter, rect: QRect, theme: dict):
+    def _draw_eco_mode(self, painter: QPainter, rect: QRect, theme: dict, show_symbol: bool = True):
         """Renders ultra-low CPU black background with crisp white music symbol and sleek cyber HUD accents."""
         # 1. Pitch black background inside mouth cavity
         painter.fillRect(rect, QColor(8, 8, 12, 255))
+        if not show_symbol:
+            return
 
         cx = rect.center().x()
         cy = rect.center().y()
