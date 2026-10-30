@@ -208,8 +208,8 @@ class SettingsDialog(QDialog):
             self.setWindowIcon(QIcon(ICON_PATH))
 
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
-        self.setMinimumSize(420, 500)
-        self.resize(440, 620)
+        self.setMinimumSize(460, 560)
+        self.resize(480, 740)
         self.setStyleSheet(SHARED_PANEL_STYLE)
         self.init_ui()
 
@@ -227,6 +227,54 @@ class SettingsDialog(QDialog):
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(14, 14, 14, 14)
         content_layout.setSpacing(10)
+
+        # --- SECTION: MODES & WINDOW STATE ---
+        content_layout.addWidget(create_section_header("Playback Modes"))
+
+        hbox_modes = QHBoxLayout()
+        hbox_modes.setSpacing(6)
+
+        self.btn_move_talia = QPushButton("Lock Window")
+        self.btn_move_talia.clicked.connect(self.panel.toggle_move_talia)
+        hbox_modes.addWidget(self.btn_move_talia)
+
+        self.btn_audio_mode = QPushButton("Player Mode")
+        self.btn_audio_mode.clicked.connect(self.panel.toggle_audio_mode)
+        hbox_modes.addWidget(self.btn_audio_mode)
+
+        self.btn_lyrics = QPushButton("Lyrics: On")
+        self.btn_lyrics.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold; font-size: 11px; padding: 7px 8px;")
+        self.btn_lyrics.clicked.connect(self.panel.toggle_lyrics)
+        hbox_modes.addWidget(self.btn_lyrics)
+
+        self.btn_eco = QPushButton("Eco Mode: Off")
+        self.btn_eco.setToolTip("Toggle Eco Mode (< 1% CPU) [F11]")
+        self.btn_eco.clicked.connect(self.panel.toggle_eco_mode)
+        hbox_modes.addWidget(self.btn_eco)
+
+        content_layout.addLayout(hbox_modes)
+
+        # --- SECTION: MUSIC FOLDER & LIBRARY ---
+        content_layout.addWidget(create_section_header("Music Folder"))
+
+        self.lbl_folder_path = QLabel(f"{self.panel.audio_engine.folder_path}")
+        self.lbl_folder_path.setStyleSheet("color: #71717a; font-size: 10px;")
+        self.lbl_folder_path.setWordWrap(True)
+        content_layout.addWidget(self.lbl_folder_path)
+
+        hbox_folder_btns = QHBoxLayout()
+        btn_choose = QPushButton("Change Folder")
+        btn_choose.clicked.connect(self.panel.choose_music_folder)
+        hbox_folder_btns.addWidget(btn_choose)
+
+        btn_open_exp = QPushButton("Open in Explorer")
+        btn_open_exp.clicked.connect(self.panel.open_music_folder_explorer)
+        hbox_folder_btns.addWidget(btn_open_exp)
+
+        btn_refresh = QPushButton("Refresh Library")
+        btn_refresh.clicked.connect(self.panel.refresh_tracklist)
+        hbox_folder_btns.addWidget(btn_refresh)
+        content_layout.addLayout(hbox_folder_btns)
 
         # --- SECTION: LYRICS ---
         content_layout.addWidget(create_section_header("Lyrics"))
@@ -491,19 +539,19 @@ class ControlPanel(QWidget):
         self.last_f11_state = False
         self.is_user_scrubbing = False
 
-        self.setWindowTitle("Talia Controller")
+        self.setWindowTitle("Talia Player")
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
 
-        # Resizable window with compact default bounds
-        self.setMinimumSize(420, 520)
-        self.resize(440, 580)
+        # Stylized minimal player window
+        self.setMinimumSize(360, 480)
+        self.resize(380, 560)
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(SHARED_PANEL_STYLE)
 
         self.init_ui()
 
-        # Dedicated Settings Dialog
+        # Dedicated Full Settings & Customization Dialog
         self.settings_dialog = SettingsDialog(self)
 
         # Direct attribute proxies for seamless backwards compatibility
@@ -522,6 +570,7 @@ class ControlPanel(QWidget):
         self.chk_word_glow = self.settings_dialog.chk_word_glow
         self.lbl_sync_offset = self.settings_dialog.lbl_sync_offset
         self.btn_save_settings = self.settings_dialog.btn_save_settings
+        self.lbl_folder_path = self.settings_dialog.lbl_folder_path
 
         # Song Downloader & Auto-Sync Service (YouTube search -> Opus 160k -> Synced LRC)
         self.downloader = SongDownloaderService(self)
@@ -558,18 +607,18 @@ class ControlPanel(QWidget):
 
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(14, 12, 14, 14)
-        content_layout.setSpacing(10)
+        content_layout.setContentsMargins(12, 10, 12, 12)
+        content_layout.setSpacing(8)
 
         # --- PRIMARY TOGGLES (Settings, Move, Mode, Lyrics, Eco) ---
         hbox_top_toggles = QHBoxLayout()
-        hbox_top_toggles.setSpacing(6)
+        hbox_top_toggles.setSpacing(4)
 
         self.btn_open_settings = QPushButton("⚙ Settings")
         self.btn_open_settings.setObjectName("btnOpenSettings")
-        self.btn_open_settings.setToolTip("Open Advanced Settings")
+        self.btn_open_settings.setToolTip("Open Full Settings & Customization")
         self.btn_open_settings.setStyleSheet(
-            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; font-weight: 600; font-size: 11px; padding: 6px 10px;"
+            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; font-weight: 600; font-size: 11px; padding: 5px 8px;"
         )
         self.btn_open_settings.clicked.connect(self.open_settings_window)
         hbox_top_toggles.addWidget(self.btn_open_settings)
@@ -586,7 +635,7 @@ class ControlPanel(QWidget):
 
         self.btn_lyrics = QPushButton("Lyrics: On")
         self.btn_lyrics.setObjectName("btnLyrics")
-        self.btn_lyrics.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold; font-size: 11px; padding: 7px 8px;")
+        self.btn_lyrics.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold; font-size: 11px; padding: 5px 8px;")
         self.btn_lyrics.clicked.connect(self.toggle_lyrics)
         hbox_top_toggles.addWidget(self.btn_lyrics)
 
@@ -608,8 +657,9 @@ class ControlPanel(QWidget):
 
         # Timeline seeker
         hbox_time = QHBoxLayout()
+        hbox_time.setSpacing(6)
         self.lbl_time_cur = QLabel("00:00")
-        self.lbl_time_cur.setStyleSheet("color: #a1a1aa; font-family: 'Consolas', monospace;")
+        self.lbl_time_cur.setStyleSheet("color: #a1a1aa; font-family: 'Consolas', monospace; font-size: 11px;")
         self.slider_seek = QSlider(Qt.Orientation.Horizontal)
         self.slider_seek.setRange(0, 1000)
         self.slider_seek.setValue(0)
@@ -617,25 +667,27 @@ class ControlPanel(QWidget):
         self.slider_seek.sliderReleased.connect(self.on_seek_released)
         self.slider_seek.sliderMoved.connect(self.on_seek_moved)
         self.lbl_time_dur = QLabel("00:00")
-        self.lbl_time_dur.setStyleSheet("color: #a1a1aa; font-family: 'Consolas', monospace;")
+        self.lbl_time_dur.setStyleSheet("color: #a1a1aa; font-family: 'Consolas', monospace; font-size: 11px;")
 
         hbox_time.addWidget(self.lbl_time_cur)
         hbox_time.addWidget(self.slider_seek)
         hbox_time.addWidget(self.lbl_time_dur)
         content_layout.addLayout(hbox_time)
 
-        # Playback Transport Buttons
+        # Playback Transport Buttons (Basic: Rewind, Play/Pause, Next + Shuffle)
         hbox_controls = QHBoxLayout()
-        btn_prev = QPushButton("Previous")
+        hbox_controls.setSpacing(6)
+        btn_prev = QPushButton("◄◄ Rewind")
         btn_prev.clicked.connect(self.on_prev_clicked)
         hbox_controls.addWidget(btn_prev)
 
         self.btn_play_pause = QPushButton("Play")
         self.btn_play_pause.setObjectName("btnPlayPause")
+        self.btn_play_pause.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold;")
         self.btn_play_pause.clicked.connect(self.on_play_pause_clicked)
         hbox_controls.addWidget(self.btn_play_pause)
 
-        btn_next = QPushButton("Next")
+        btn_next = QPushButton("Next ►►")
         btn_next.clicked.connect(self.on_next_clicked)
         hbox_controls.addWidget(btn_next)
 
@@ -644,10 +696,11 @@ class ControlPanel(QWidget):
         hbox_controls.addWidget(self.btn_shuffle)
         content_layout.addLayout(hbox_controls)
 
-        # Volume Slider
+        # Small Volume Slider
         hbox_vol = QHBoxLayout()
-        lbl_vol_title = QLabel("Volume:")
-        lbl_vol_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_vol.setSpacing(8)
+        lbl_vol_title = QLabel("Vol:")
+        lbl_vol_title.setStyleSheet("color: #a1a1aa; font-weight: 600; font-size: 11px;")
         hbox_vol.addWidget(lbl_vol_title)
 
         self.slider_vol = QSlider(Qt.Orientation.Horizontal)
@@ -657,36 +710,18 @@ class ControlPanel(QWidget):
         hbox_vol.addWidget(self.slider_vol)
 
         self.lbl_vol_val = QLabel(f"{int(self.audio_engine.volume * 100)}%")
-        self.lbl_vol_val.setFixedWidth(36)
-        self.lbl_vol_val.setStyleSheet("color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600;")
+        self.lbl_vol_val.setFixedWidth(34)
+        self.lbl_vol_val.setStyleSheet("color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;")
         hbox_vol.addWidget(self.lbl_vol_val)
         content_layout.addLayout(hbox_vol)
 
-        # --- SECTION: LIBRARY & PLAYLIST ---
-        content_layout.addWidget(create_section_header("Library"))
-
-        self.lbl_folder_path = QLabel(f"{self.audio_engine.folder_path}")
-        self.lbl_folder_path.setStyleSheet("color: #71717a; font-size: 10px;")
-        content_layout.addWidget(self.lbl_folder_path)
-
-        hbox_folder_btns = QHBoxLayout()
-        btn_choose = QPushButton("Change Folder")
-        btn_choose.clicked.connect(self.choose_music_folder)
-        hbox_folder_btns.addWidget(btn_choose)
-
-        btn_open_exp = QPushButton("Open Folder")
-        btn_open_exp.clicked.connect(self.open_music_folder_explorer)
-        hbox_folder_btns.addWidget(btn_open_exp)
-
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.clicked.connect(self.refresh_tracklist)
-        hbox_folder_btns.addWidget(btn_refresh)
-        content_layout.addLayout(hbox_folder_btns)
+        # --- SECTION: SONG SELECTION ---
+        content_layout.addWidget(create_section_header("Song Selection"))
 
         # Search Bar with live filter and clear button
         hbox_search = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search songs or folders...")
+        self.search_input.setPlaceholderText("Search songs...")
         self.search_input.setStyleSheet("""
             QLineEdit {
                 background-color: #202024;
@@ -702,6 +737,13 @@ class ControlPanel(QWidget):
         """)
         self.search_input.textChanged.connect(self.filter_tracks)
         hbox_search.addWidget(self.search_input)
+
+        self.btn_clear_search = QPushButton("✕")
+        self.btn_clear_search.setFixedWidth(28)
+        self.btn_clear_search.setStyleSheet("background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-weight: bold;")
+        self.btn_clear_search.clicked.connect(lambda: self.search_input.clear())
+        hbox_search.addWidget(self.btn_clear_search)
+        content_layout.addLayout(hbox_search)
 
         self.btn_clear_search = QPushButton("✕")
         self.btn_clear_search.setFixedWidth(28)
@@ -857,7 +899,10 @@ class ControlPanel(QWidget):
 
     def populate_playlist_ui(self):
         """Refreshes the tracklist widget items with search and subfolder display."""
-        self.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
+        if hasattr(self, "lbl_folder_path") and self.lbl_folder_path:
+            self.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
+        if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "lbl_folder_path"):
+            self.settings_dialog.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
         search_txt = self.search_input.text() if hasattr(self, "search_input") else ""
         self.filter_tracks(search_txt)
         self.refresh_queue_ui()
@@ -1057,12 +1102,15 @@ class ControlPanel(QWidget):
         self.sync_play_state()
 
     def update_audio_mode_ui(self):
-        if self.audio_engine.audio_mode == "desktop":
-            self.btn_audio_mode.setText("Desktop Audio")
-            self.btn_audio_mode.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: 500;")
-        else:
-            self.btn_audio_mode.setText("Player Mode")
-            self.btn_audio_mode.setStyleSheet("")
+        is_desktop = (self.audio_engine.audio_mode == "desktop")
+        txt = "Desktop Audio" if is_desktop else "Player Mode"
+        style = "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: 500;" if is_desktop else ""
+        if hasattr(self, "btn_audio_mode"):
+            self.btn_audio_mode.setText(txt)
+            self.btn_audio_mode.setStyleSheet(style)
+        if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "btn_audio_mode"):
+            self.settings_dialog.btn_audio_mode.setText(txt)
+            self.settings_dialog.btn_audio_mode.setStyleSheet(style)
 
     def on_play_pause_clicked(self):
         if self.audio_engine.audio_mode == "desktop":
@@ -1198,7 +1246,10 @@ class ControlPanel(QWidget):
         if folder:
             self.audio_engine.set_music_folder(folder)
             self.populate_playlist_ui()
-            self.lbl_folder_path.setText(f"{folder}")
+            if hasattr(self, "lbl_folder_path") and self.lbl_folder_path:
+                self.lbl_folder_path.setText(f"{folder}")
+            if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "lbl_folder_path"):
+                self.settings_dialog.lbl_folder_path.setText(f"{folder}")
             cfg = self.get_current_settings_dict()
             save_settings(cfg)
 
@@ -1211,7 +1262,10 @@ class ControlPanel(QWidget):
     def refresh_tracklist(self):
         self.audio_engine.refresh_playlist()
         self.populate_playlist_ui()
-        self.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
+        if hasattr(self, "lbl_folder_path") and self.lbl_folder_path:
+            self.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
+        if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "lbl_folder_path"):
+            self.settings_dialog.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
 
     def on_vis_mode_changed(self, mode: str):
         self.overlay.visualizer.set_mode(mode)
@@ -1336,6 +1390,9 @@ class ControlPanel(QWidget):
             if hasattr(self, "btn_eco"):
                 self.btn_eco.setText("Eco Mode: On")
                 self.btn_eco.setStyleSheet("background-color: #166534; color: #4ade80; border: 1px solid #22c55e; font-weight: 500; font-size: 11px; padding: 7px 8px;")
+            if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "btn_eco"):
+                self.settings_dialog.btn_eco.setText("Eco Mode: On")
+                self.settings_dialog.btn_eco.setStyleSheet("background-color: #166534; color: #4ade80; border: 1px solid #22c55e; font-weight: 500; font-size: 11px; padding: 7px 8px;")
             print("[STATUS] Eco Mode enabled (< 1% CPU).")
         else:
             self.hotkey_timer.setInterval(50)
@@ -1343,6 +1400,9 @@ class ControlPanel(QWidget):
             if hasattr(self, "btn_eco"):
                 self.btn_eco.setText("Eco Mode: Off")
                 self.btn_eco.setStyleSheet("")
+            if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "btn_eco"):
+                self.settings_dialog.btn_eco.setText("Eco Mode: Off")
+                self.settings_dialog.btn_eco.setStyleSheet("")
             print("[STATUS] Eco Mode disabled (Standard).")
 
     def toggle_lyrics(self):
@@ -1361,21 +1421,25 @@ class ControlPanel(QWidget):
     def update_lyrics_ui(self):
         if not hasattr(self, "btn_lyrics") or not self.lyrics_overlay:
             return
-        if self.lyrics_overlay.is_enabled:
-            self.btn_lyrics.setText("Lyrics: On")
-            self.btn_lyrics.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: 500; font-size: 11px; padding: 7px 8px;")
-        else:
-            self.btn_lyrics.setText("Lyrics: Off")
-            self.btn_lyrics.setStyleSheet("")
+        txt = "Lyrics: On" if self.lyrics_overlay.is_enabled else "Lyrics: Off"
+        style = "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: 500; font-size: 11px; padding: 7px 8px;" if self.lyrics_overlay.is_enabled else ""
+        if hasattr(self, "btn_lyrics"):
+            self.btn_lyrics.setText(txt)
+            self.btn_lyrics.setStyleSheet(style)
+        if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "btn_lyrics"):
+            self.settings_dialog.btn_lyrics.setText(txt)
+            self.settings_dialog.btn_lyrics.setStyleSheet(style)
 
     def update_move_talia_ui(self):
         """Refreshes the Move Talia toggle button appearance to match current overlay state."""
-        if self.overlay.move_talia_mode:
-            self.btn_move_talia.setText("Unlock Window")
-            self.btn_move_talia.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: 500;")
-        else:
-            self.btn_move_talia.setText("Lock Window")
-            self.btn_move_talia.setStyleSheet("")
+        txt = "Unlock Window" if self.overlay.move_talia_mode else "Lock Window"
+        style = "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: 500;" if self.overlay.move_talia_mode else ""
+        if hasattr(self, "btn_move_talia"):
+            self.btn_move_talia.setText(txt)
+            self.btn_move_talia.setStyleSheet(style)
+        if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "btn_move_talia"):
+            self.settings_dialog.btn_move_talia.setText(txt)
+            self.settings_dialog.btn_move_talia.setStyleSheet(style)
 
     def adjust_lyrics_offset(self, delta: float):
         if self.lyrics_overlay and hasattr(self.lyrics_overlay, "lyrics_manager") and self.lyrics_overlay.lyrics_manager:
