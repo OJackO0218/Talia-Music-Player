@@ -48,5 +48,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Talia-Windows-x64.zip
+          tag_name: ${{ github.ref_name }}
+          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
