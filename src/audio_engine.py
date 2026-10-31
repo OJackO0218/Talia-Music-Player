@@ -531,13 +531,13 @@ class CyberAudioEngine:
                         outdata[:] = data * gain
                     self.current_frame += frames
 
-        # Mono buffer for visualizer FFT normalized so mouth stays animated at low volume
+        # Mono buffer for visualizer FFT
         n = min(1024, frames)
-        norm_factor = max(gain, 0.04) if gain > 0 else 1.0
+        norm_factor = max(gain, 0.05) if gain > 0 else 1.0
         self.latest_buffer[:n] = outdata[:n, 0] / norm_factor
 
     def update_spectrum(self):
-        """Vectorized FFT spectral analysis and bass beat energy computation (zero-allocation)."""
+        # FFT spectral analysis and bass beat energy
         if getattr(self, "eco_mode", False):
             self._eco_frame_counter = getattr(self, "_eco_frame_counter", 0) + 1
             if self._eco_frame_counter % 3 != 0 and getattr(self, "_cached_eco_spectrum", None) is not None:
@@ -549,7 +549,7 @@ class CyberAudioEngine:
         if is_idle:
             bars_peak = float(self.smoothed_bars.max()) if len(self.smoothed_bars) > 0 else 0.0
             if self.beat_energy > 0.002 or bars_peak > 0.002:
-                # Fast exponential decay towards zero
+                # Fast decay towards zero
                 self.smoothed_bars *= 0.82
                 self.peak_bars *= 0.88
                 self.beat_energy *= 0.80
@@ -562,35 +562,35 @@ class CyberAudioEngine:
                 self._cached_eco_spectrum = res
             return res
 
-        # 1. Apply pre-computed Hanning window & Real FFT (zero allocation)
+        # 1. Apply Hanning window and Real FFT
         np.multiply(buf, self.hanning_window, out=self._windowed_buffer)
         fft = np.abs(np.fft.rfft(self._windowed_buffer))
 
-        # 2. Bass & kick drum energy (20Hz - 250Hz)
+        # 2. Bass energy (20Hz - 250Hz)
         bass_mag = float(np.mean(fft[1:8]))
-        target_beat = min(1.0, bass_mag / 20.0)
+        target_beat = min(1.0, bass_mag / 28.0)
         self.beat_energy = max(target_beat, self.beat_energy * 0.82)
 
-        # 3. Logarithmic band grouping (reusing preallocated buffer, 0 bytes allocated)
+        # 3. Logarithmic band grouping
         self.raw_bars.fill(0)
         for i in range(self.num_bars):
             start = self.indices[i]
             end = max(start + 1, self.indices[i + 1])
             self.raw_bars[i] = np.mean(fft[start:end])
 
-        # Apply high-frequency boost and normalize to [0.0, 1.0] in-place
-        np.clip((self.raw_bars * self.boost_weights) / 28.0, 0.0, 1.0, out=self.raw_bars)
+        # Apply high-frequency boost and normalization
+        np.clip((self.raw_bars * self.boost_weights) / 38.0, 0.0, 1.0, out=self.raw_bars)
 
-        # 4. Vectorized attack & release smoothing (single subtraction)
+        # 4. Attack and release smoothing
         rising = self.raw_bars > self.smoothed_bars
         diff = self.raw_bars - self.smoothed_bars
         self.smoothed_bars = np.where(
             rising,
-            self.smoothed_bars + diff * 0.65,  # Fast attack
-            self.smoothed_bars + diff * 0.16   # Smooth release
+            self.smoothed_bars + diff * 0.65,
+            self.smoothed_bars + diff * 0.16
         )
 
-        # 5. Vectorized peak hold with gravity acceleration
+        # 5. Peak hold with decay
         new_peaks = self.smoothed_bars >= self.peak_bars
         self.peak_bars = np.where(
             new_peaks,
@@ -605,9 +605,9 @@ class CyberAudioEngine:
         return res
 
     def get_waveform(self, sample_count: int = 80) -> np.ndarray:
-        """Returns sampled oscilloscope points [-1.0, 1.0]."""
+        # Sampled oscilloscope points
         buf = self.latest_buffer
         if len(buf) < sample_count:
             return np.zeros(sample_count, dtype=np.float32)
         step = len(buf) // sample_count
-        return np.clip(buf[::step][:sample_count] * 1.8, -1.0, 1.0)
+        return np.clip(buf[::step][:sample_count] * 1.25, -1.0, 1.0)

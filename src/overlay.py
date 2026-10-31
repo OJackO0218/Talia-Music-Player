@@ -120,10 +120,10 @@ class OverlayWindow(QWidget):
         self.has_dragged = False
         self.is_holding = False
 
-        # Click Color Flashes (1x White, 2x Red, 3x Yellow) with 0.24s solid hold
+        # Click Color Flashes (1x White, 2x Red, 3x Yellow) with 0.1s duration
         self.flash_color = QColor(255, 255, 255)
         self.flash_alpha = 0.0
-        self.flash_hold_timer = 0.0  # Holds peak color for 0.24s before smooth fade-out
+        self.flash_hold_timer = 0.0
 
         # Sinking Shutdown State (3.0s to 3.6s)
         self.is_shutting_down = False
@@ -432,13 +432,13 @@ class OverlayWindow(QWidget):
         self.update()
 
     def _trigger_click_feedback(self, color: QColor, rot_degrees: float, alpha: float):
-        """osu! lazer style tactile color flash and rotational bounce for clicks."""
+        # Click feedback flash and tilt bounce
         self.flash_color = color
         self.flash_alpha = alpha
-        self.flash_hold_timer = 0.24  # Holds peak color solid for 0.24s (0.2s + 20%)
+        self.flash_hold_timer = 0.016
         self.impulse_rock_intensity = rot_degrees
         self.impulse_sway_intensity = 6.5
-        self.impulse_timer = 0.24
+        self.impulse_timer = 0.10
         if hasattr(self, "sound_btn") and self.sound_btn.isLoaded():
             self.sound_btn.play()
         self.update()
@@ -720,12 +720,12 @@ class OverlayWindow(QWidget):
             if not bass_changing:
                 self.bass_pop_scale = 1.0
 
-        # 4. Click tactile flash: 0.24s solid hold, followed by smooth exponential fade-out
+        # 4. Click feedback flash: 0.1s duration
         flash_changing = (self.flash_hold_timer > 0.0) or (self.flash_alpha > 0.005)
         if self.flash_hold_timer > 0.0:
             self.flash_hold_timer -= 0.016
         elif self.flash_alpha > 0.005:
-            self.flash_alpha *= 0.82
+            self.flash_alpha *= 0.35
         else:
             self.flash_alpha = 0.0
 
@@ -1284,14 +1284,12 @@ class OverlayWindow(QWidget):
             event.accept()
 
     def _handle_click(self):
-        """Dispatches single, double, or triple clicks cleanly with tactile satisfaction flashes & shakes."""
+        # Handle single, double, or triple clicks
         self.click_count += 1
         if self.click_count == 1:
-            # 1 Click: Instant WHITE flash (holds 0.24s) + osu! lazer tilt bounce!
             self._trigger_click_feedback(color=QColor(255, 255, 255), rot_degrees=-2.2, alpha=0.65)
             self.multi_click_timer.start(340)
         elif self.click_count == 2:
-            # 2 Clicks: Right side = Cyan flash (Skip), Left side = Crimson flash (Rewind)
             click_x = getattr(self, "last_click_pos", QPoint(self.width() // 2, 0)).x()
             is_right = click_x >= self.width() / 2.0
             color = QColor(0, 240, 255) if is_right else QColor(255, 30, 80)
@@ -1299,7 +1297,6 @@ class OverlayWindow(QWidget):
             self._trigger_click_feedback(color=color, rot_degrees=rot, alpha=0.70)
             self.multi_click_timer.start(340)
         elif self.click_count >= 3:
-            # 3 Clicks: Instant GOLDEN YELLOW flash (holds 0.24s) + osu! lazer tilt bounce & open Controller!
             self._trigger_click_feedback(color=QColor(255, 215, 0), rot_degrees=-3.0, alpha=0.70)
             self.multi_click_timer.stop()
             self.click_count = 0
