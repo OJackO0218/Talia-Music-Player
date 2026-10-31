@@ -1464,15 +1464,13 @@ class ControlPanel(QWidget):
 
 
 
-        # Timeline & auto-advance timer (only ticks when ControlPanel is visible!)
+        # Timeline & auto-advance timer (always active in background for reliable track progression)
 
         self.timeline_timer = QTimer(self)
 
         self.timeline_timer.timeout.connect(self.update_timeline)
 
-        if self.isVisible():
-
-            self.timeline_timer.start(200)
+        self.timeline_timer.start(500 if getattr(self, "eco_mode", False) else 200)
 
 
 
@@ -2882,7 +2880,7 @@ class ControlPanel(QWidget):
 
         if self.audio_engine.audio_mode != "desktop":
 
-            is_finished = self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.08)
+            is_finished = self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5))
 
             if is_finished:
 
@@ -3184,9 +3182,7 @@ class ControlPanel(QWidget):
 
             self.hotkey_timer.setInterval(120)
 
-            if self.isVisible():
-
-                self.timeline_timer.setInterval(500)
+            self.timeline_timer.setInterval(500)
 
             if hasattr(self, "btn_eco"):
 
@@ -3206,9 +3202,7 @@ class ControlPanel(QWidget):
 
             self.hotkey_timer.setInterval(50)
 
-            if self.isVisible():
-
-                self.timeline_timer.setInterval(200)
+            self.timeline_timer.setInterval(200)
 
             if hasattr(self, "btn_eco"):
 
@@ -4050,7 +4044,7 @@ class ControlPanel(QWidget):
 
             interval = 500 if getattr(self, "eco_mode", False) else 200
 
-            self.timeline_timer.start(interval)
+            self.timeline_timer.setInterval(interval)
 
             self.update_timeline()
 
@@ -4066,7 +4060,7 @@ class ControlPanel(QWidget):
 
         if hasattr(self, "timeline_timer"):
 
-            self.timeline_timer.stop()
+            self.timeline_timer.setInterval(600)
 
         if self.overlay and hasattr(self.overlay, "sound_menu_close") and self.overlay.sound_menu_close.isLoaded():
 

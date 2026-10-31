@@ -393,10 +393,15 @@ class CyberAudioEngine:
 
             # Trigger background preload for next track (max 1 track, 15s head)
             self._trigger_preload_next()
+            self._consecutive_failures = 0
             trim_process_memory(force_gc=False)
             return True
         except Exception as e:
             print(f"[AUDIO ERROR] Could not open {file_path}: {e}")
+            # Auto-skip to next track if file is corrupted/missing so playback never stalls
+            if len(self.playlist) > 1 and getattr(self, "_consecutive_failures", 0) < len(self.playlist):
+                self._consecutive_failures = getattr(self, "_consecutive_failures", 0) + 1
+                self.next_track()
             return False
 
     def _trigger_preload_next(self):

@@ -1014,6 +1014,17 @@ class OverlayWindow(QWidget):
                 self.osd_timer = 0.0
                 self.osd_symbol = None
 
+        # Instant auto-advance when song finishes (works even when ControlPanel is closed)
+        if self.audio_engine.audio_mode != "desktop":
+            dur = self.audio_engine.get_duration()
+            pos = self.audio_engine.get_position()
+            if self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)):
+                self.audio_engine.track_finished = False
+                self.audio_engine.next_track()
+                if self.panel:
+                    self.panel.sync_play_state()
+                    self.panel.update_timeline()
+
         if is_audio_active:
             self.track_scroll_x += 0.55
 
