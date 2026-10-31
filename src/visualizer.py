@@ -48,15 +48,40 @@ class CyberVisualizer:
     def set_eco_mode(self, enabled: bool):
         self.eco_mode = enabled
 
+    def draw_background(self, painter: QPainter, rect: QRect):
+        # Draw background and grid inside mouth
+        theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
+        if getattr(self, "eco_mode", False):
+            painter.fillRect(rect, QColor(8, 8, 12, 255))
+            return
+
+        key = (rect.width(), rect.height(), self.current_theme_name)
+        if self._cached_grid_key != key or self._cached_grid_pixmap is None:
+            self._cached_grid_key = key
+            pm = QPixmap(rect.width(), rect.height())
+            pm.fill(theme["bg"])
+            p_grid = QPainter(pm)
+            p_grid.setPen(QPen(theme["grid"], 1))
+            step_x = 24
+            step_y = 20
+            for x in range(0, rect.width(), step_x):
+                p_grid.drawLine(x, 0, x, rect.height())
+            for y in range(0, rect.height(), step_y):
+                p_grid.drawLine(0, y, rect.width(), y)
+            p_grid.end()
+            self._cached_grid_pixmap = pm
+
+        painter.drawPixmap(rect.topLeft(), self._cached_grid_pixmap)
+
     def draw(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine, osd_symbol: str = None):
-        """Draws the selected visualizer inside the target bounding rect."""
+        # Draws visualizer in target rect
         painter.save()
         try:
             painter.setClipRect(rect)
 
             theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
 
-            # Eco Mode: visualizer is removed; replaced with sleek black background and white music symbol
+            # Eco Mode
             if getattr(self, "eco_mode", False):
                 is_active = False
                 if engine is not None:
@@ -68,26 +93,9 @@ class CyberVisualizer:
                 self._draw_eco_mode(painter, rect, theme, show_symbol=is_active or bool(osd_symbol), override_symbol=osd_symbol)
                 return
 
-            # 1 & 2. Hardware-accelerated Cached Background & Grid (single blit)
-            key = (rect.width(), rect.height(), self.current_theme_name)
-            if self._cached_grid_key != key or self._cached_grid_pixmap is None:
-                self._cached_grid_key = key
-                pm = QPixmap(rect.width(), rect.height())
-                pm.fill(theme["bg"])
-                p_grid = QPainter(pm)
-                p_grid.setPen(QPen(theme["grid"], 1))
-                step_x = 24
-                step_y = 20
-                for x in range(0, rect.width(), step_x):
-                    p_grid.drawLine(x, 0, x, rect.height())
-                for y in range(0, rect.height(), step_y):
-                    p_grid.drawLine(0, y, rect.width(), y)
-                p_grid.end()
-                self._cached_grid_pixmap = pm
+            self.draw_background(painter, rect)
 
-            painter.drawPixmap(rect.topLeft(), self._cached_grid_pixmap)
-
-            # 3. Ambient Beat Glow Pulse (Lights up Talia's inner jaw on heavy bass)
+            # Ambient bass glow pulse
             bars, peaks, beat = engine.update_spectrum()
             if beat > 0.15:
                 cx = float(rect.center().x())

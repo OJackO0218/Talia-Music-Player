@@ -919,10 +919,74 @@ class OverlayWindow(QWidget):
         if self.hold_saturation > 0.05:
             vis_opacity = self.opacity_val * self.hold_saturation
             painter.setOpacity(vis_opacity)
+            painter.save()
             try:
-                self.visualizer.draw(painter, mouth_rect, self.audio_engine, getattr(self, "osd_symbol", None))
+                painter.setClipRect(mouth_rect)
+
+                # Skip feedback symbol in full mouth cavity
+                if self.osd_timer > 0.0 and self.osd_symbol in ("forward", "backward"):
+                    self.visualizer.draw_background(painter, mouth_rect)
+
+                    alpha_ratio = min(1.0, self.osd_timer / 0.25)
+                    icon = self.icon_forward if self.osd_symbol == "forward" else self.icon_backward
+                    if not icon.isNull():
+                        icon_dim = max(28, int(min(mouth_w, mouth_h) * 0.72))
+                        iw = int(icon.width() * (icon_dim / float(icon.height())))
+                        ih = icon_dim
+                        ix = mouth_x + (mouth_w - iw) // 2
+                        iy = mouth_y + (mouth_h - ih) // 2
+
+                        glow_color = QColor(0, 240, 255) if self.osd_symbol == "forward" else QColor(255, 0, 128)
+                        cx = float(mouth_x + mouth_w / 2.0)
+                        cy = float(mouth_y + mouth_h / 2.0)
+                        rad = float(max(iw, ih) * 0.70)
+                        glow = QRadialGradient(cx, cy, rad)
+                        glow.setColorAt(0.0, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), int(95 * alpha_ratio)))
+                        glow.setColorAt(0.60, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), int(25 * alpha_ratio)))
+                        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+                        painter.setBrush(glow)
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.drawEllipse(QPointF(cx, cy), rad, rad)
+
+                        painter.setOpacity(vis_opacity * alpha_ratio)
+                        painter.drawPixmap(ix, iy, iw, ih, icon)
+                        painter.setOpacity(vis_opacity)
+                else:
+                    # Visualizer
+                    self.visualizer.draw(painter, mouth_rect, self.audio_engine)
+
+                    # Transparent scrolling text in front of visualizer
+                    if self.audio_engine.is_active:
+                        title_text = self.audio_engine.get_current_track_title()
+                        if title_text and title_text != "No Track Loaded":
+                            font_size = max(10, int(mouth_h * 0.17))
+                            osd_font = QFont("Rajdhani", font_size, QFont.Weight.Bold)
+                            fm = QFontMetrics(osd_font)
+                            text_w = fm.horizontalAdvance(title_text)
+
+                            band_h = fm.height() + 4
+                            band_y = mouth_y + int(mouth_h * 0.52) - band_h // 2
+                            painter.fillRect(QRect(mouth_x, band_y, mouth_w, band_h), QColor(6, 6, 12, 60))
+
+                            painter.setFont(osd_font)
+                            baseline = band_y + (band_h + fm.ascent() - fm.descent()) / 2.0
+                            gap = 42
+                            span = text_w + gap
+                            curr_tx = mouth_x - (self.track_scroll_x % span)
+
+                            # Drop shadow
+                            painter.setPen(QColor(0, 0, 0, 180))
+                            painter.drawText(QPointF(curr_tx + 1, baseline + 1), title_text)
+                            painter.drawText(QPointF(curr_tx + span + 1, baseline + 1), title_text)
+
+                            # Semi-transparent Rajdhani title text
+                            painter.setPen(QColor(240, 248, 255, 205))
+                            painter.drawText(QPointF(curr_tx, baseline), title_text)
+                            painter.drawText(QPointF(curr_tx + span, baseline), title_text)
             except Exception:
                 pass
+            finally:
+                painter.restore()
             painter.setOpacity(self.opacity_val)
 
         # ==========================================================
@@ -1089,81 +1153,6 @@ class OverlayWindow(QWidget):
             outline_rect = QRectF(char_x - 2.5, char_y - 2.5, char_size + 5.0, char_size + 5.0)
             painter.drawRect(outline_rect)
             painter.restore()
-
-        # Track info and skip OSD banner
-        is_audio_playing = bool(getattr(self.audio_engine, "is_active", False))
-        if (self.osd_timer > 0.0 and self.osd_symbol) or (is_audio_playing and getattr(self, "show_track_banner", True)):
-            painter.save()
-            try:
-                if self.osd_timer > 0.0:
-                    alpha_ratio = min(1.0, self.osd_timer / 0.4)
-                else:
-                    alpha_ratio = 0.90
-
-                badge_alpha = int(210 * alpha_ratio)
-                if self.osd_symbol == "forward":
-                    border_col = QColor(0, 240, 255, int(220 * alpha_ratio))
-                elif self.osd_symbol == "backward":
-                    border_col = QColor(255, 0, 128, int(220 * alpha_ratio))
-                else:
-                    border_col = QColor(0, 240, 255, int(130 * alpha_ratio))
-
-                osd_font = QFont("Rajdhani", max(9, int(char_size * 0.040)), QFont.Weight.Bold)
-                fm = QFontMetrics(osd_font)
-                title_text = self.osd_title or self.audio_engine.get_current_track_title()
-                text_w = fm.horizontalAdvance(title_text)
-
-                badge_h = max(24, int(char_size * 0.088))
-                icon_dim = max(14, int(badge_h * 0.62))
-                max_w = min(self.width() - 16, int(char_size * 0.92))
-                badge_w = min(max_w, max(icon_dim + 40, icon_dim + text_w + 24))
-
-                bx = (self.width() - badge_w) // 2
-                by = min(self.height() - badge_h - 4, int(char_y + char_size * 0.76))
-
-                # Background capsule
-                painter.setBrush(QColor(8, 8, 16, badge_alpha))
-                painter.setPen(QPen(border_col, 1.2))
-                painter.drawRoundedRect(QRect(bx, by, badge_w, badge_h), 6, 6)
-
-                # Icon
-                icon = None
-                if self.osd_symbol == "forward":
-                    icon = self.icon_forward
-                elif self.osd_symbol == "backward":
-                    icon = self.icon_backward
-                elif hasattr(self, "visualizer") and not self.visualizer.music_note_icon.isNull():
-                    icon = self.visualizer.music_note_icon
-
-                ix = bx + 8
-                if icon and not icon.isNull():
-                    iy = by + (badge_h - icon_dim) // 2
-                    painter.drawPixmap(ix, iy, icon_dim, icon_dim, icon)
-                    text_x = ix + icon_dim + 6
-                else:
-                    text_x = ix
-
-                avail_tw = badge_w - (text_x - bx) - 8
-                if avail_tw > 10:
-                    painter.setFont(osd_font)
-                    painter.setPen(QColor(245, 248, 255, int(255 * alpha_ratio)))
-                    clip_r = QRect(text_x, by, avail_tw, badge_h)
-                    painter.setClipRect(clip_r)
-
-                    if text_w > avail_tw:
-                        # Smooth continuous marquee
-                        gap = 36
-                        span = text_w + gap
-                        curr_tx = text_x - (self.track_scroll_x % span)
-                        baseline = by + (badge_h + fm.ascent() - fm.descent()) / 2.0
-                        painter.drawText(QPointF(curr_tx, baseline), title_text)
-                        painter.drawText(QPointF(curr_tx + span, baseline), title_text)
-                    else:
-                        painter.drawText(clip_r, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, title_text)
-            except Exception:
-                pass
-            finally:
-                painter.restore()
 
         # Restore painter matrix transform
         painter.restore()
@@ -1341,9 +1330,9 @@ class OverlayWindow(QWidget):
         print("[ACTION] 1 Click on Talia: Play/Pause toggled.")
 
     def trigger_skip_feedback(self, direction: str):
-        """Displays on-screen Cyberpunk fast-forward or backward symbol and Rajdhani song title."""
+        # Trigger skip sound and show symbol in mouth
         self.osd_symbol = direction
-        self.osd_timer = 2.4
+        self.osd_timer = 1.6
         self.osd_title = self.audio_engine.get_current_track_title()
         if direction == "forward":
             if hasattr(self, "sound_skip_next") and self.sound_skip_next.isLoaded():
