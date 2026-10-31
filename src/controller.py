@@ -279,6 +279,29 @@ class SettingsDialog(QDialog):
         # --- SECTION: LYRICS ---
         content_layout.addWidget(create_section_header("Lyrics"))
 
+        # Launch automated lyrics fetcher tool
+        self.btn_open_fetcher = QPushButton("Launch Automated Lyric Fetcher")
+        self.btn_open_fetcher.setToolTip("Open the automated lyrics fetcher and calibration tool")
+        self.btn_open_fetcher.setStyleSheet("""
+            QPushButton {
+                background-color: #27272a;
+                color: #38bdf8;
+                border: 1px solid #0284c7;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: 600;
+                font-size: 11px;
+                margin-top: 2px;
+                margin-bottom: 4px;
+            }
+            QPushButton:hover {
+                background-color: #0284c7;
+                color: #ffffff;
+            }
+        """)
+        self.btn_open_fetcher.clicked.connect(self.panel.open_lyric_fetcher)
+        content_layout.addWidget(self.btn_open_fetcher)
+
         self.lbl_lyric_disclaimer = QLabel("Note: Some songs may not have available or synchronized lyrics.")
         self.lbl_lyric_disclaimer.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic; margin-top: 2px; margin-bottom: 4px;")
         self.lbl_lyric_disclaimer.setWordWrap(True)
@@ -510,32 +533,25 @@ class SettingsDialog(QDialog):
 
 
 class CyberScrollingTrackLabel(QWidget):
-    """
-    High-performance scrolling track title label using Rajdhani font.
-    Features marquee animation when text overflows, skip forward/backward flash indicators,
-    and automatic timer shutdown when idle or hidden for 0.0% CPU overhead.
-    """
+    # Track title marquee label in Rajdhani font
     def __init__(self, parent=None):
         super().__init__(parent)
         self.full_text = "No track loaded"
         self.scroll_x = 0.0
-        self.scroll_speed = 36.0  # px per second
-        self.pause_time = 1.6     # seconds to pause at start and end
-        self.pause_counter = 1.6
+        self.scroll_speed = 36.0
         self.is_scrolling = False
-        self.symbol_mode = None   # None, "forward", or "backward"
-        self.symbol_timer = 0.0   # seconds remaining for symbol display
+        self.symbol_mode = None
+        self.symbol_timer = 0.0
 
-        # Load forward/backward symbol pixmaps
+        # Load skip symbols
         self.icon_forward = QPixmap(os.path.join(PNGS_DIR, "icon_forward.png"))
         self.icon_backward = QPixmap(os.path.join(PNGS_DIR, "icon_backward.png"))
 
         self.setFixedHeight(26)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_tick)
-        self.timer.setInterval(33)  # 30 FPS smooth scrolling
+        self.timer.setInterval(33)
 
-        # Styled Rajdhani Font
         self.font = QFont("Rajdhani", 12, QFont.Weight.Bold)
         self.font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.5)
 
@@ -547,24 +563,19 @@ class CyberScrollingTrackLabel(QWidget):
         if cleaned != self.full_text:
             self.full_text = cleaned
             self.scroll_x = 0.0
-            self.pause_counter = self.pause_time
             self._check_scroll_needed()
             self.update()
 
     def trigger_symbol(self, direction: str):
-        """Displays the fast-forward or backward symbol for 2.2 seconds."""
-        self.symbol_mode = direction  # 'forward' or 'backward'
+        # Display forward/backward symbol for 2.2 seconds
+        self.symbol_mode = direction
         self.symbol_timer = 2.2
         if not self.timer.isActive() and self.isVisible():
             self.timer.start(33)
         self.update()
 
     def _check_scroll_needed(self):
-        metrics = QFontMetrics(self.font)
-        text_w = metrics.horizontalAdvance(self.full_text)
-        prefix_w = 24 if self.symbol_mode else 4
-        avail_w = self.width() - prefix_w
-        if text_w > avail_w and self.isVisible():
+        if self.full_text != "No track loaded" and self.isVisible():
             self.is_scrolling = True
             if not self.timer.isActive():
                 self.timer.start(33)
@@ -590,7 +601,6 @@ class CyberScrollingTrackLabel(QWidget):
         dt = 0.033
         needs_update = False
 
-        # Symbol timer decay
         if self.symbol_timer > 0.0:
             self.symbol_timer -= dt
             if self.symbol_timer <= 0.0:
@@ -598,23 +608,8 @@ class CyberScrollingTrackLabel(QWidget):
                 self.symbol_timer = 0.0
             needs_update = True
 
-        # Marquee scroll animation
-        if self.is_scrolling:
-            metrics = QFontMetrics(self.font)
-            text_w = metrics.horizontalAdvance(self.full_text)
-            prefix_w = 24 if self.symbol_mode else 4
-            avail_w = max(10, self.width() - prefix_w)
-            max_scroll = max(0, text_w - avail_w)
-
-            if self.pause_counter > 0.0:
-                self.pause_counter -= dt
-            else:
-                self.scroll_x += self.scroll_speed * dt
-                if self.scroll_x >= max_scroll:
-                    self.scroll_x = max_scroll
-                    self.pause_counter = self.pause_time
-                    # Reset back smoothly
-                    self.scroll_x = 0.0
+        if self.is_scrolling and self.full_text != "No track loaded":
+            self.scroll_x += self.scroll_speed * dt
             needs_update = True
         elif self.symbol_timer <= 0.0:
             self.timer.stop()
@@ -631,7 +626,6 @@ class CyberScrollingTrackLabel(QWidget):
         baseline = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
 
         x_start = 2
-        # Draw forward/backward symbol if active
         if self.symbol_mode:
             icon = self.icon_forward if self.symbol_mode == "forward" else self.icon_backward
             if not icon.isNull():
@@ -639,18 +633,23 @@ class CyberScrollingTrackLabel(QWidget):
                 icon_w = int(icon.width() * (icon_h / float(icon.height())))
                 iy = int((self.height() - icon_h) / 2.0)
                 painter.drawPixmap(x_start, iy, icon_w, icon_h, icon)
-                x_start += icon_w + 6
+                x_start += icon_w + 8
 
-        # Draw Rajdhani song title
         painter.setFont(self.font)
         painter.setPen(QColor("#f4f4f5"))
 
-        # Clip text within available area
         avail_w = max(10, self.width() - x_start)
         painter.setClipRect(x_start, 0, avail_w, self.height())
 
-        curr_x = x_start - max(0.0, self.scroll_x)
-        painter.drawText(QPointF(curr_x, baseline), self.full_text)
+        text_w = metrics.horizontalAdvance(self.full_text)
+        if self.is_scrolling and self.full_text != "No track loaded":
+            gap = 48
+            span = text_w + gap
+            curr_x = x_start - (self.scroll_x % span)
+            painter.drawText(QPointF(curr_x, baseline), self.full_text)
+            painter.drawText(QPointF(curr_x + span, baseline), self.full_text)
+        else:
+            painter.drawText(QPointF(x_start, baseline), self.full_text)
 
 
 class ControlPanel(QWidget):
@@ -867,7 +866,7 @@ class ControlPanel(QWidget):
         hbox_vol.addWidget(self.slider_vol)
 
         self.lbl_vol_val = QLabel(f"{int(self.audio_engine.volume * 100)}%")
-        self.lbl_vol_val.setFixedWidth(34)
+        self.lbl_vol_val.setFixedWidth(40)
         self.lbl_vol_val.setStyleSheet("color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;")
         hbox_vol.addWidget(self.lbl_vol_val)
         content_layout.addLayout(hbox_vol)
@@ -1751,6 +1750,36 @@ class ControlPanel(QWidget):
     def open_fonts_folder(self):
         os.makedirs(FONTS_DIR, exist_ok=True)
         subprocess.run(["explorer", os.path.normpath(FONTS_DIR)])
+
+    def open_lyric_fetcher(self):
+        # Launch automated lyrics fetcher
+        try:
+            candidates = [
+                os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated", "gui_fetcher.py"),
+                os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated", "fetch_lyrics.py"),
+                os.path.join(os.path.dirname(PROJECT_ROOT), "Talia Lyrics Fetch Automated", "gui_fetcher.py")
+            ]
+            script_path = None
+            for p in candidates:
+                if os.path.exists(p):
+                    script_path = p
+                    break
+
+            bat_path = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated", "run_fetcher.bat")
+
+            if script_path and os.path.exists(script_path):
+                py_bin = sys.executable if not getattr(sys, "frozen", False) else "python"
+                subprocess.Popen([py_bin, script_path], cwd=os.path.dirname(script_path))
+                print(f"[ACTION] Launched lyric fetcher: {script_path}")
+            elif os.path.exists(bat_path):
+                subprocess.Popen(["cmd.exe", "/c", bat_path], cwd=os.path.dirname(bat_path))
+                print(f"[ACTION] Launched lyric fetcher bat: {bat_path}")
+            else:
+                folder = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
+                if os.path.exists(folder):
+                    os.startfile(folder)
+        except Exception as e:
+            print(f"[ERROR] Failed to open lyric fetcher: {e}")
 
     def reload_custom_fonts(self):
         if hasattr(self, "settings_dialog"):

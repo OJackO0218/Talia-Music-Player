@@ -11,7 +11,8 @@ from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QPoint, QPointF, QTimer, QRect, QRectF, QUrl
 from PyQt6.QtGui import (
-    QPixmap, QPainter, QColor, QPen, QImage, QCursor, QRadialGradient, QBrush
+    QPixmap, QPainter, QColor, QPen, QImage, QCursor, QRadialGradient, QBrush,
+    QFont, QFontMetrics
 )
 from PyQt6.QtMultimedia import QSoundEffect
 
@@ -137,65 +138,65 @@ class OverlayWindow(QWidget):
         self.startup_offset_y = 110
         self.startup_duration = 0.20
 
-        # Tactile Sound Effects (Hover Pop, Click Button, Hold Ramp-up with Bubbles, Heavy Sinking Shutdown)
-        # All SFX reduced by a further 50% for soft, subtle background feedback
+        # Sound effects (50% louder)
         self.sound_pop = QSoundEffect(self)
         pop_path = os.path.join(SOUNDS_DIR, "hover_pop.wav")
         if os.path.exists(pop_path):
             self.sound_pop.setSource(QUrl.fromLocalFile(pop_path))
-            self.sound_pop.setVolume(0.15)
+            self.sound_pop.setVolume(0.24)
 
         self.sound_btn = QSoundEffect(self)
         btn_path = os.path.join(SOUNDS_DIR, "click_button.wav")
         if os.path.exists(btn_path):
             self.sound_btn.setSource(QUrl.fromLocalFile(btn_path))
-            self.sound_btn.setVolume(0.12)
+            self.sound_btn.setVolume(0.20)
 
         self.sound_hold = QSoundEffect(self)
         hold_path = os.path.join(SOUNDS_DIR, "hold_ramp.wav")
         if os.path.exists(hold_path):
             self.sound_hold.setSource(QUrl.fromLocalFile(hold_path))
-            self.sound_hold.setVolume(0.12)
+            self.sound_hold.setVolume(0.20)
 
         self.sound_shutdown = QSoundEffect(self)
         shutdown_path = os.path.join(SOUNDS_DIR, "shutdown_heavy.wav")
         if os.path.exists(shutdown_path):
             self.sound_shutdown.setSource(QUrl.fromLocalFile(shutdown_path))
-            self.sound_shutdown.setVolume(0.15)
+            self.sound_shutdown.setVolume(0.25)
 
-        # Cyberpunk 2077 Skip & Menu Navigation SFX
         self.sound_skip_next = QSoundEffect(self)
         sn_path = os.path.join(SOUNDS_DIR, "skip_next.wav")
         if os.path.exists(sn_path):
             self.sound_skip_next.setSource(QUrl.fromLocalFile(sn_path))
-            self.sound_skip_next.setVolume(0.18)
+            self.sound_skip_next.setVolume(0.30)
 
         self.sound_skip_prev = QSoundEffect(self)
         sp_path = os.path.join(SOUNDS_DIR, "skip_prev.wav")
         if os.path.exists(sp_path):
             self.sound_skip_prev.setSource(QUrl.fromLocalFile(sp_path))
-            self.sound_skip_prev.setVolume(0.18)
+            self.sound_skip_prev.setVolume(0.30)
 
         self.sound_menu_open = QSoundEffect(self)
         mo_path = os.path.join(SOUNDS_DIR, "menu_open.wav")
         if os.path.exists(mo_path):
             self.sound_menu_open.setSource(QUrl.fromLocalFile(mo_path))
-            self.sound_menu_open.setVolume(0.16)
+            self.sound_menu_open.setVolume(0.25)
 
         self.sound_menu_close = QSoundEffect(self)
         mc_path = os.path.join(SOUNDS_DIR, "menu_close.wav")
         if os.path.exists(mc_path):
             self.sound_menu_close.setSource(QUrl.fromLocalFile(mc_path))
-            self.sound_menu_close.setVolume(0.16)
+            self.sound_menu_close.setVolume(0.25)
 
-        # Skip track fast-forward / backward OSD HUD indicators
+        # Track title and skip OSD indicators
         self.icon_forward = QPixmap(os.path.join(PNGS_DIR, "icon_forward.png"))
         self.icon_backward = QPixmap(os.path.join(PNGS_DIR, "icon_backward.png"))
-        self.osd_symbol = None      # 'forward' or 'backward'
-        self.osd_timer = 0.0        # Countdown timer (2.2s)
+        self.osd_symbol = None
+        self.osd_timer = 0.0
         self.osd_title = ""
+        self.track_scroll_x = 0.0
+        self.show_track_banner = True
 
-        # Cyber Mute Indicator (Displays when music is paused)
+        # Mute indicator for pause
         self.mute_icon = QPixmap()
         mute_path = os.path.join(PNGS_DIR, "mute_icon.png")
         if os.path.exists(mute_path):
@@ -337,7 +338,7 @@ class OverlayWindow(QWidget):
             self.pupil_r = QPixmap()
             return
 
-        vol = self.current_volume
+        vol = min(1.0, max(0.0, self.current_volume))
         if vol <= 0.5:
             ratio = vol / 0.5
             sat_factor = ratio * self.hold_saturation
@@ -495,7 +496,7 @@ class OverlayWindow(QWidget):
         self.update()
 
     def set_volume(self, vol: float):
-        """Sets in-app volume, updates pupil saturation, and syncs UI."""
+        # Update volume and UI
         self.current_volume = max(0.0, min(1.0, float(vol)))
         self.audio_engine.set_volume(self.current_volume)
         self._apply_pupil_saturation()
@@ -782,7 +783,7 @@ class OverlayWindow(QWidget):
         sway_active = self.is_holding or (self.impulse_timer > 0.0) or (abs(self.current_rotation) > 0.02) or (abs(self.current_shake_x) > 0.05) or (abs(self.current_shake_y) > 0.05)
         fx_active = self.is_starting_up or self.is_shutting_down or (self.hover_glow > 0.005)
 
-        # OSD Skip feedback timer
+        # OSD skip timer and track text scroll
         osd_active = self.osd_timer > 0.0
         if self.osd_timer > 0.0:
             self.osd_timer -= 0.016
@@ -790,8 +791,10 @@ class OverlayWindow(QWidget):
                 self.osd_timer = 0.0
                 self.osd_symbol = None
 
-        # In Eco Mode with static music symbol, only repaint audio if not in eco mode
-        audio_visual_animating = is_audio_active and not self.eco_mode
+        if is_audio_active:
+            self.track_scroll_x += 0.55
+
+        audio_visual_animating = is_audio_active
 
         needs_render = (
             self.move_talia_mode or
@@ -1087,44 +1090,80 @@ class OverlayWindow(QWidget):
             painter.drawRect(outline_rect)
             painter.restore()
 
-        # ==========================================================
-        # LAYER 6: CYBERPUNK SKIP TRACK OSD (Fast-forward / Backward symbol + Rajdhani Song Title)
-        # ==========================================================
-        if self.osd_timer > 0.0 and self.osd_symbol:
+        # Track info and skip OSD banner
+        is_audio_playing = bool(getattr(self.audio_engine, "is_active", False))
+        if (self.osd_timer > 0.0 and self.osd_symbol) or (is_audio_playing and getattr(self, "show_track_banner", True)):
             painter.save()
-            alpha_ratio = min(1.0, self.osd_timer / 0.5)
-            badge_alpha = int(220 * alpha_ratio)
-            border_col = QColor(0, 240, 255, int(210 * alpha_ratio)) if self.osd_symbol == "forward" else QColor(255, 0, 128, int(210 * alpha_ratio))
+            try:
+                if self.osd_timer > 0.0:
+                    alpha_ratio = min(1.0, self.osd_timer / 0.4)
+                else:
+                    alpha_ratio = 0.90
 
-            osd_font = QFont("Rajdhani", max(9, int(char_size * 0.040)), QFont.Weight.Bold)
-            fm = QFontMetrics(osd_font)
-            title_text = self.osd_title or self.audio_engine.get_current_track_title()
-            text_w = fm.horizontalAdvance(title_text)
+                badge_alpha = int(210 * alpha_ratio)
+                if self.osd_symbol == "forward":
+                    border_col = QColor(0, 240, 255, int(220 * alpha_ratio))
+                elif self.osd_symbol == "backward":
+                    border_col = QColor(255, 0, 128, int(220 * alpha_ratio))
+                else:
+                    border_col = QColor(0, 240, 255, int(130 * alpha_ratio))
 
-            badge_h = max(24, int(char_size * 0.088))
-            icon_dim = max(14, int(badge_h * 0.62))
-            badge_w = min(self.width() - 20, icon_dim + text_w + 24)
+                osd_font = QFont("Rajdhani", max(9, int(char_size * 0.040)), QFont.Weight.Bold)
+                fm = QFontMetrics(osd_font)
+                title_text = self.osd_title or self.audio_engine.get_current_track_title()
+                text_w = fm.horizontalAdvance(title_text)
 
-            bx = (self.width() - badge_w) // 2
-            by = min(self.height() - badge_h - 4, int(char_y + char_size * 0.76))
+                badge_h = max(24, int(char_size * 0.088))
+                icon_dim = max(14, int(badge_h * 0.62))
+                max_w = min(self.width() - 16, int(char_size * 0.92))
+                badge_w = min(max_w, max(icon_dim + 40, icon_dim + text_w + 24))
 
-            # Translucent Cyber HUD glass capsule
-            painter.setBrush(QColor(8, 8, 16, badge_alpha))
-            painter.setPen(QPen(border_col, 1.2))
-            painter.drawRoundedRect(QRect(bx, by, badge_w, badge_h), 6, 6)
+                bx = (self.width() - badge_w) // 2
+                by = min(self.height() - badge_h - 4, int(char_y + char_size * 0.76))
 
-            # Icon
-            icon = self.icon_forward if self.osd_symbol == "forward" else self.icon_backward
-            if not icon.isNull():
-                iy = by + (badge_h - icon_dim) // 2
-                painter.drawPixmap(bx + 8, iy, icon_dim, icon_dim, icon)
+                # Background capsule
+                painter.setBrush(QColor(8, 8, 16, badge_alpha))
+                painter.setPen(QPen(border_col, 1.2))
+                painter.drawRoundedRect(QRect(bx, by, badge_w, badge_h), 6, 6)
 
-            # Rajdhani song title
-            painter.setFont(osd_font)
-            painter.setPen(QColor(245, 248, 255, int(255 * alpha_ratio)))
-            text_rect = QRect(bx + icon_dim + 14, by, badge_w - icon_dim - 20, badge_h)
-            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, fm.elidedText(title_text, Qt.TextElideMode.ElideRight, text_rect.width()))
-            painter.restore()
+                # Icon
+                icon = None
+                if self.osd_symbol == "forward":
+                    icon = self.icon_forward
+                elif self.osd_symbol == "backward":
+                    icon = self.icon_backward
+                elif hasattr(self, "visualizer") and not self.visualizer.music_note_icon.isNull():
+                    icon = self.visualizer.music_note_icon
+
+                ix = bx + 8
+                if icon and not icon.isNull():
+                    iy = by + (badge_h - icon_dim) // 2
+                    painter.drawPixmap(ix, iy, icon_dim, icon_dim, icon)
+                    text_x = ix + icon_dim + 6
+                else:
+                    text_x = ix
+
+                avail_tw = badge_w - (text_x - bx) - 8
+                if avail_tw > 10:
+                    painter.setFont(osd_font)
+                    painter.setPen(QColor(245, 248, 255, int(255 * alpha_ratio)))
+                    clip_r = QRect(text_x, by, avail_tw, badge_h)
+                    painter.setClipRect(clip_r)
+
+                    if text_w > avail_tw:
+                        # Smooth continuous marquee
+                        gap = 36
+                        span = text_w + gap
+                        curr_tx = text_x - (self.track_scroll_x % span)
+                        baseline = by + (badge_h + fm.ascent() - fm.descent()) / 2.0
+                        painter.drawText(QPointF(curr_tx, baseline), title_text)
+                        painter.drawText(QPointF(curr_tx + span, baseline), title_text)
+                    else:
+                        painter.drawText(clip_r, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, title_text)
+            except Exception:
+                pass
+            finally:
+                painter.restore()
 
         # Restore painter matrix transform
         painter.restore()
@@ -1390,9 +1429,9 @@ class OverlayWindow(QWidget):
                 print(f"[ACTION] Global Mode: Laptop audio {dir_str} (Talia eyes synced to {int(self.current_volume * 100)}%)")
                 event.accept()
             else:
-                # Local player mode: scroll wheel changes Talia music playback volume
-                step = 0.05 if delta > 0 else -0.05
+                # Scroll wheel changes local music volume with 1% fine-tuning at low volume
+                step = 0.01 if self.current_volume <= 0.10 else 0.03
+                step = step if delta > 0 else -step
                 new_vol = max(0.0, min(1.0, round(self.current_volume + step, 2)))
                 self.set_volume(new_vol)
-                print(f"[ACTION] Player Mode: Talia volume adjusted: {int(new_vol * 100)}% (Eye saturation updated)")
                 event.accept()

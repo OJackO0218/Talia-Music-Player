@@ -33,6 +33,7 @@ class CyberAudioEngine:
         self.is_playing = False
         self.is_paused = False
         self.volume = 0.85
+        self.effective_gain = float(self.volume ** 2.2)
 
         # Raw audio buffer from audio callback (1024 mono samples)
         self.latest_buffer = np.zeros(1024, dtype=np.float32)
@@ -447,7 +448,10 @@ class CyberAudioEngine:
         return 0.0
 
     def set_volume(self, vol: float):
+        # Set volume from 0.0 to 1.0
         self.volume = max(0.0, min(float(vol), 1.0))
+        # Logarithmic perceptual curve for quiet volume down to -88 dB
+        self.effective_gain = float(self.volume ** 2.2) if self.volume > 0.0 else 0.0
 
     def get_current_track_title(self) -> str:
         if self.audio_mode == "desktop":
@@ -457,26 +461,25 @@ class CyberAudioEngine:
         return "No Track Loaded"
 
     def is_track_finished(self) -> bool:
-        """Returns True if track playback has reached the end."""
         return bool(self.track_finished)
 
     def _audio_callback(self, outdata, frames, time_info, status):
-        """High-priority audio streaming thread callback with zero-memory block streaming."""
+        # Audio streaming callback
         if not self.is_playing or self.active_sf is None:
             outdata.fill(0)
             return
 
+        gain = self.effective_gain
         with self._audio_lock:
             if self.active_sf is None:
                 outdata.fill(0)
                 return
 
-            # If head buffer is available and current_frame < head_frames, read from head
             if self.head_buffer is not None and self.current_frame < self.head_frames:
                 avail = min(frames, self.head_frames - self.current_frame)
                 slice_data = self.head_buffer[self.current_frame : self.current_frame + avail]
                 if avail < frames:
-                    outdata[:avail] = slice_data * self.volume
+                    outdata[:avail] = slice_data * gain
                     self.current_frame += avail
                     try:
                         self.active_sf.seek(self.current_frame)
@@ -490,10 +493,10 @@ class CyberAudioEngine:
                     l = len(rem_data)
                     if l > 0:
                         if len(rem_data.shape) == 1:
-                            outdata[avail:avail+l, 0] = rem_data * self.volume
-                            outdata[avail:avail+l, 1] = rem_data * self.volume
+                            outdata[avail:avail+l, 0] = rem_data * gain
+                            outdata[avail:avail+l, 1] = rem_data * gain
                         else:
-                            outdata[avail:avail+l] = rem_data * self.volume
+                            outdata[avail:avail+l] = rem_data * gain
                     if l < rem:
                         outdata[avail+l:] = 0
                         self.track_finished = True
@@ -501,7 +504,7 @@ class CyberAudioEngine:
                     self.current_frame += l
                     self.head_buffer = None
                 else:
-                    outdata[:] = slice_data * self.volume
+                    outdata[:] = slice_data * gain
                     self.current_frame += frames
             else:
                 try:
@@ -512,25 +515,26 @@ class CyberAudioEngine:
                 if l < frames:
                     if l > 0:
                         if len(data.shape) == 1:
-                            outdata[:l, 0] = data * self.volume
-                            outdata[:l, 1] = data * self.volume
+                            outdata[:l, 0] = data * gain
+                            outdata[:l, 1] = data * gain
                         else:
-                            outdata[:l] = data * self.volume
+                            outdata[:l] = data * gain
                     outdata[l:] = 0
                     self.current_frame = self.total_frames
                     self.track_finished = True
                     self.is_playing = False
                 else:
                     if len(data.shape) == 1:
-                        outdata[:, 0] = data * self.volume
-                        outdata[:, 1] = data * self.volume
+                        outdata[:, 0] = data * gain
+                        outdata[:, 1] = data * gain
                     else:
-                        outdata[:] = data * self.volume
+                        outdata[:] = data * gain
                     self.current_frame += frames
 
-        # Extract mono buffer for FFT visualizer (zero-allocation single channel slice)
+        # Mono buffer for visualizer FFT normalized so mouth stays animated at low volume
         n = min(1024, frames)
-        self.latest_buffer[:n] = outdata[:n, 0]
+        norm_factor = max(gain, 0.04) if gain > 0 else 1.0
+        self.latest_buffer[:n] = outdata[:n, 0] / norm_factor
 
     def update_spectrum(self):
         """Vectorized FFT spectral analysis and bass beat energy computation (zero-allocation)."""
