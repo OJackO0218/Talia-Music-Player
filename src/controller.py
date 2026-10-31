@@ -950,13 +950,7 @@ class SettingsDialog(QDialog):
 
 
 
-        self.chk_widescreen = QCheckBox("Widescreen")
 
-        self.chk_widescreen.setChecked(False)
-
-        self.chk_widescreen.toggled.connect(self.panel.on_widescreen_toggled)
-
-        hbox_toggles.addWidget(self.chk_widescreen)
 
         content_layout.addLayout(hbox_toggles)
 
@@ -1418,8 +1412,6 @@ class ControlPanel(QWidget):
 
         self.chk_bass_pop = self.settings_dialog.chk_bass_pop
 
-        self.chk_widescreen = self.settings_dialog.chk_widescreen
-
         self.combo_mode = self.settings_dialog.combo_mode
 
         self.combo_theme = self.settings_dialog.combo_theme
@@ -1472,13 +1464,15 @@ class ControlPanel(QWidget):
 
 
 
-        # Timeline & auto-advance timer (200ms)
+        # Timeline & auto-advance timer (only ticks when ControlPanel is visible!)
 
         self.timeline_timer = QTimer(self)
 
         self.timeline_timer.timeout.connect(self.update_timeline)
 
-        self.timeline_timer.start(200)
+        if self.isVisible():
+
+            self.timeline_timer.start(200)
 
 
 
@@ -3188,9 +3182,11 @@ class ControlPanel(QWidget):
 
         if enabled:
 
-            self.hotkey_timer.setInterval(60)
+            self.hotkey_timer.setInterval(120)
 
-            self.timeline_timer.setInterval(500)
+            if self.isVisible():
+
+                self.timeline_timer.setInterval(500)
 
             if hasattr(self, "btn_eco"):
 
@@ -3210,7 +3206,9 @@ class ControlPanel(QWidget):
 
             self.hotkey_timer.setInterval(50)
 
-            self.timeline_timer.setInterval(200)
+            if self.isVisible():
+
+                self.timeline_timer.setInterval(200)
 
             if hasattr(self, "btn_eco"):
 
@@ -3730,8 +3728,6 @@ class ControlPanel(QWidget):
 
             "bass_pop": bool(self.overlay.enable_bass_pop),
 
-            "widescreen": bool(self.overlay.use_widescreen),
-
             "visualizer_mode": str(self.overlay.visualizer.mode),
 
             "visualizer_palette": str(self.overlay.visualizer.current_theme_name),
@@ -3847,8 +3843,6 @@ class ControlPanel(QWidget):
         self.chk_bass_pop.setChecked(cfg.get("bass_pop", True))
 
         self.overlay.enable_bass_pop = cfg.get("bass_pop", True)
-
-        self.chk_widescreen.setChecked(cfg.get("widescreen", False))
 
 
 
@@ -4054,7 +4048,9 @@ class ControlPanel(QWidget):
 
         if hasattr(self, "timeline_timer"):
 
-            self.timeline_timer.setInterval(200)
+            interval = 500 if getattr(self, "eco_mode", False) else 200
+
+            self.timeline_timer.start(interval)
 
             self.update_timeline()
 
@@ -4070,7 +4066,7 @@ class ControlPanel(QWidget):
 
         if hasattr(self, "timeline_timer"):
 
-            self.timeline_timer.setInterval(600)
+            self.timeline_timer.stop()
 
         if self.overlay and hasattr(self.overlay, "sound_menu_close") and self.overlay.sound_menu_close.isLoaded():
 

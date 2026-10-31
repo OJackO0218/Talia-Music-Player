@@ -255,6 +255,24 @@ class OverlayWindow(QWidget):
         self._cached_scaled_pupil_r = QPixmap()
         self._cached_scaled_eyelids = QPixmap()
 
+        # Position and font rendering caches (zero-allocation paint loop)
+        self._cached_win_pos = None
+        self._cached_osd_key = None
+        self._cached_osd_font = None
+        self._cached_osd_text_w = 0
+        self._cached_osd_band_h = 0
+        self._cached_osd_baseline_offset = 0.0
+        self._osd_band_color = QColor(6, 6, 12, 60)
+        self._osd_shadow_color = QColor(0, 0, 0, 180)
+        self._osd_text_color = QColor(240, 248, 255, 205)
+
+        self._cached_zzz_key = None
+        self._cached_zzz_font = None
+        self._cached_zzz_text_w = 0
+        self._cached_zzz_baseline = 0.0
+        self._zzz_shadow_color = QColor(0, 0, 0, 180)
+        self._last_sleep_frame_idx = -1
+
         self.setMouseTracking(True)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -552,15 +570,19 @@ class OverlayWindow(QWidget):
         import os
         os._exit(0)
 
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._cached_win_pos = self.mapToGlobal(QPoint(0, 0))
+
     def set_eco_mode(self, enabled: bool):
         """Toggles power-saving Eco Mode (< 1% CPU target)."""
         self.eco_mode = enabled
         if hasattr(self.visualizer, "set_eco_mode"):
             self.visualizer.set_eco_mode(enabled)
         if enabled:
-            self.anim_timer.setInterval(33)  # 30 FPS
+            self.anim_timer.setInterval(40)  # 25 FPS in Eco Mode
         else:
-            self.anim_timer.setInterval(16)  # 60 FPS
+            self.anim_timer.setInterval(16)  # 60 FPS in Standard Mode
         self.update()
 
     def set_volume(self, vol: float):
@@ -664,17 +686,14 @@ class OverlayWindow(QWidget):
             cursor_moved = False
         self._last_cursor_pt = cursor_pt
 
-        win_pos = self.mapToGlobal(QPoint(0, 0))
+        if self._cached_win_pos is None:
+            self._cached_win_pos = self.mapToGlobal(QPoint(0, 0))
+        win_pos = self._cached_win_pos
 
         MARGIN = 16
-        if self.use_widescreen:
-            char_size = self.height() - 2 * MARGIN
-            char_offset_x = (self.width() - char_size) // 2
-            char_offset_y = MARGIN
-        else:
-            char_size = min(self.width(), self.height()) - 2 * MARGIN
-            char_offset_x = (self.width() - char_size) // 2
-            char_offset_y = (self.height() - char_size) // 2
+        char_size = min(self.width(), self.height()) - 2 * MARGIN
+        char_offset_x = (self.width() - char_size) // 2
+        char_offset_y = (self.height() - char_size) // 2
 
         scale = char_size / float(CANVAS_BASE_SIZE)
 
@@ -979,13 +998,12 @@ class OverlayWindow(QWidget):
             if abs(self.head_bop_tilt) < 0.02:
                 self.head_bop_tilt = 0.0
 
-        # Dynamic sleep dirty-check: do NOT call self.update() when at rest
+        # Dynamic sleep dirty-check & adaptive framerate throttling
         sway_active = self.is_holding or (self.impulse_timer > 0.0) or (abs(self.current_rotation) > 0.02) or (abs(self.current_shake_x) > 0.05) or (abs(self.current_shake_y) > 0.05)
         fx_active = self.is_starting_up or self.is_shutting_down or (self.hover_glow > 0.005)
         blink_active = self.is_blinking or (self.blink_progress > 0.005)
-        drowsy_changing = (self.drowsy_level > 0.005)
-        sleeping_active = (self.drowsy_level > 0.35)
-        breathing_active = not self.eco_mode
+        drowsy_changing = (self.drowsy_level > 0.005 and self.drowsy_level < 0.995)
+        is_sleeping = (self.drowsy_level > 0.35)
         bop_active = (abs(self.head_bop_y) > 0.05) or (abs(self.head_bop_tilt) > 0.02)
 
         # OSD skip timer and track text scroll
@@ -998,6 +1016,65 @@ class OverlayWindow(QWidget):
 
         if is_audio_active:
             self.track_scroll_x += 0.55
+
+        sleep_frame_changed = False
+        if is_sleeping:
+            current_sleep_idx = int(time.time() * 1.6) % 12
+            if current_sleep_idx != getattr(self, "_last_sleep_frame_idx", -1):
+                self._last_sleep_frame_idx = current_sleep_idx
+                sleep_frame_changed = True
+
+        is_active_interaction = (
+            cursor_moved or
+            self.move_talia_mode or
+            self.is_holding or
+            fx_active or
+            blink_active or
+            drowsy_changing or
+            sway_active or
+            bop_active or
+            osd_active
+        )
+
+        if self.eco_mode:
+            if is_sleeping:
+                # Sleeping in Eco Mode: tick at 80ms, repaint ONLY when Zzz frame changes
+                sleeping_render = sleep_frame_changed
+                if self.anim_timer.interval() != 80:
+                    self.anim_timer.setInterval(80)
+            elif is_active_interaction:
+                sleeping_render = False
+                if self.anim_timer.interval() != 33:
+                    self.anim_timer.setInterval(33)
+            elif is_audio_active:
+                sleeping_render = False
+                if self.anim_timer.interval() != 40:
+                    self.anim_timer.setInterval(40)
+            else:
+                sleeping_render = False
+                if self.anim_timer.interval() != 50:
+                    self.anim_timer.setInterval(50)
+            breathing_active = False
+        else:
+            # Non-Eco Mode
+            if is_sleeping:
+                # Sleeping in Non-Eco Mode: smooth 20 FPS bob (cuts CPU by 67%)
+                sleeping_render = True
+                if self.anim_timer.interval() != 50:
+                    self.anim_timer.setInterval(50)
+                breathing_active = False
+            elif is_active_interaction or is_audio_active:
+                sleeping_render = False
+                # Full 60 FPS buttery smoothness during interaction or playback!
+                if self.anim_timer.interval() != 16:
+                    self.anim_timer.setInterval(16)
+                breathing_active = True
+            else:
+                sleeping_render = False
+                # Untouched desktop idle: 30 FPS breathing (cuts DWM compositing CPU by 50%!)
+                if self.anim_timer.interval() != 33:
+                    self.anim_timer.setInterval(33)
+                breathing_active = True
 
         audio_visual_animating = is_audio_active
 
@@ -1016,7 +1093,7 @@ class OverlayWindow(QWidget):
             fx_active or
             blink_active or
             drowsy_changing or
-            sleeping_active or
+            (is_sleeping and (sleeping_render or sleep_frame_changed)) or
             breathing_active or
             bop_active or
             osd_active
@@ -1106,21 +1183,9 @@ class OverlayWindow(QWidget):
         painter.setOpacity(self.opacity_val)
 
         MARGIN = 16
-        if self.use_widescreen:
-            self._ensure_talia_wide()
-            char_size = self.height() - 2 * MARGIN
-            char_x = (self.width() - char_size) // 2
-            char_y = MARGIN
-            scaled_wide = self.talia_wide.scaled(
-                self.width(), self.height(),
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            painter.drawPixmap(0, 0, scaled_wide)
-        else:
-            char_size = min(self.width(), self.height()) - 2 * MARGIN
-            char_x = (self.width() - char_size) // 2
-            char_y = (self.height() - char_size) // 2
+        char_size = min(self.width(), self.height()) - 2 * MARGIN
+        char_x = (self.width() - char_size) // 2
+        char_y = (self.height() - char_size) // 2
 
         scale = char_size / float(CANVAS_BASE_SIZE)
         self._ensure_scaled_pixmaps(char_size, scale)
@@ -1191,17 +1256,21 @@ class OverlayWindow(QWidget):
                     zzz_text = zzz_frames[frame_idx]
 
                     font_size = max(11, int(mouth_h * 0.38))
-                    zzz_font = QFont("Rajdhani", font_size, QFont.Weight.Bold)
-                    fm = QFontMetrics(zzz_font)
-                    text_w = fm.horizontalAdvance(zzz_text)
+                    zzz_key = (font_size, zzz_text)
+                    if getattr(self, "_cached_zzz_key", None) != zzz_key:
+                        self._cached_zzz_key = zzz_key
+                        self._cached_zzz_font = QFont("Rajdhani", font_size, QFont.Weight.Bold)
+                        fm = QFontMetrics(self._cached_zzz_font)
+                        self._cached_zzz_text_w = fm.horizontalAdvance(zzz_text)
+                        self._cached_zzz_baseline = (mouth_h + fm.ascent() - fm.descent()) / 2.0
 
                     bob_y = math.sin(time.time() * 2.0) * (1.5 * scale)
-                    tx = mouth_x + (mouth_w - text_w) / 2.0
-                    ty = mouth_y + (mouth_h + fm.ascent() - fm.descent()) / 2.0 + bob_y
+                    tx = mouth_x + (mouth_w - self._cached_zzz_text_w) / 2.0
+                    ty = mouth_y + self._cached_zzz_baseline + bob_y
 
-                    painter.setFont(zzz_font)
+                    painter.setFont(self._cached_zzz_font)
                     # Soft dark drop shadow
-                    painter.setPen(QColor(0, 0, 0, 180))
+                    painter.setPen(self._zzz_shadow_color)
                     painter.drawText(QPointF(tx + 1, ty + 1), zzz_text)
 
                     # Soft cyan-moonlight glow
@@ -1245,27 +1314,32 @@ class OverlayWindow(QWidget):
                         title_text = self.audio_engine.get_current_track_title()
                         if title_text and title_text != "No Track Loaded":
                             font_size = max(10, int(mouth_h * 0.17))
-                            osd_font = QFont("Rajdhani", font_size, QFont.Weight.Bold)
-                            fm = QFontMetrics(osd_font)
-                            text_w = fm.horizontalAdvance(title_text)
+                            osd_key = (title_text, font_size)
+                            if self._cached_osd_key != osd_key:
+                                self._cached_osd_key = osd_key
+                                self._cached_osd_font = QFont("Rajdhani", font_size, QFont.Weight.Bold)
+                                fm = QFontMetrics(self._cached_osd_font)
+                                self._cached_osd_text_w = fm.horizontalAdvance(title_text)
+                                self._cached_osd_band_h = fm.height() + 4
+                                self._cached_osd_baseline_offset = (self._cached_osd_band_h + fm.ascent() - fm.descent()) / 2.0
 
-                            band_h = fm.height() + 4
+                            band_h = self._cached_osd_band_h
                             band_y = mouth_y + int(mouth_h * 0.52) - band_h // 2
-                            painter.fillRect(QRect(mouth_x, band_y, mouth_w, band_h), QColor(6, 6, 12, 60))
+                            painter.fillRect(QRect(mouth_x, band_y, mouth_w, band_h), self._osd_band_color)
 
-                            painter.setFont(osd_font)
-                            baseline = band_y + (band_h + fm.ascent() - fm.descent()) / 2.0
+                            painter.setFont(self._cached_osd_font)
+                            baseline = band_y + self._cached_osd_baseline_offset
                             gap = 42
-                            span = text_w + gap
+                            span = self._cached_osd_text_w + gap
                             curr_tx = mouth_x - (self.track_scroll_x % span)
 
                             # Drop shadow
-                            painter.setPen(QColor(0, 0, 0, 180))
+                            painter.setPen(self._osd_shadow_color)
                             painter.drawText(QPointF(curr_tx + 1, baseline + 1), title_text)
                             painter.drawText(QPointF(curr_tx + span + 1, baseline + 1), title_text)
 
                             # Semi-transparent Rajdhani title text
-                            painter.setPen(QColor(240, 248, 255, 205))
+                            painter.setPen(self._osd_text_color)
                             painter.drawText(QPointF(curr_tx, baseline), title_text)
                             painter.drawText(QPointF(curr_tx + span, baseline), title_text)
             except Exception:

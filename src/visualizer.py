@@ -45,6 +45,49 @@ class CyberVisualizer:
             if os.path.exists(bw_p) and self.icon_backward.isNull():
                 self.icon_backward.load(bw_p)
 
+        # Zero-allocation color & pen caches
+        self._inactive_color = QColor(255, 255, 255, 8)
+        self._segment_color_cache = {}
+        self._guide_pen_cache = {}
+
+    def _get_segment_colors(self, theme_name: str, num_segments: int):
+        key = (theme_name, num_segments)
+        if key in self._segment_color_cache:
+            return self._segment_color_cache[key]
+        theme = COLOR_THEMES.get(theme_name, COLOR_THEMES["Cyberpunk Neon"])
+        colors = []
+        for s in range(num_segments):
+            ratio = s / float(num_segments)
+            if ratio < 0.5:
+                c1, c2 = theme["bar_bottom"], theme["bar_mid"]
+                r2 = ratio * 2.0
+                col = QColor(
+                    int(c1.red() * (1 - r2) + c2.red() * r2),
+                    int(c1.green() * (1 - r2) + c2.green() * r2),
+                    int(c1.blue() * (1 - r2) + c2.blue() * r2),
+                    235
+                )
+            else:
+                c1, c2 = theme["bar_mid"], theme["bar_top"]
+                t_ratio = (ratio - 0.5) * 2.0
+                col = QColor(
+                    int(c1.red() * (1 - t_ratio) + c2.red() * t_ratio),
+                    int(c1.green() * (1 - t_ratio) + c2.green() * t_ratio),
+                    int(c1.blue() * (1 - t_ratio) + c2.blue() * t_ratio),
+                    250
+                )
+            colors.append(col)
+        self._segment_color_cache[key] = colors
+        return colors
+
+    def _get_guide_pen(self, theme_name: str):
+        if theme_name in self._guide_pen_cache:
+            return self._guide_pen_cache[theme_name]
+        theme = COLOR_THEMES.get(theme_name, COLOR_THEMES["Cyberpunk Neon"])
+        pen = QPen(QColor(theme["grid"].red(), theme["grid"].green(), theme["grid"].blue(), 45), 1, Qt.PenStyle.DashLine)
+        self._guide_pen_cache[theme_name] = pen
+        return pen
+
     def set_eco_mode(self, enabled: bool):
         self.eco_mode = enabled
 
@@ -232,7 +275,7 @@ class CyberVisualizer:
         painter.restore()
 
     def _draw_cyber_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
-        """Segmented LED equalizer bars with falling peak hold caps."""
+        """Segmented LED equalizer bars with falling peak hold caps (zero-allocation cached rendering)."""
         if (len(bars) > 0 and bars.max() < 0.002) and (len(peaks) > 0 and peaks.max() < 0.002):
             return  # Zero-cost early exit when silent
         num = len(bars)
@@ -246,6 +289,10 @@ class CyberVisualizer:
         num_segments = max(4, min(14, max_h // 4))
         seg_gap = 1 if max_h < 60 else 2
 
+        seg_colors = self._get_segment_colors(self.current_theme_name, num_segments)
+        inactive_col = self._inactive_color
+        peak_col = theme["peak"]
+
         for i in range(num):
             bx = rect.left() + pad_x + i * (bar_w + gap)
             val = float(bars[i])
@@ -255,39 +302,18 @@ class CyberVisualizer:
             for s in range(num_segments):
                 sy = base_y - (s + 1) * (seg_h + seg_gap)
                 if s < active_segs:
-                    # Color ramp based on segment height
-                    ratio = s / float(num_segments)
-                    if ratio < 0.5:
-                        c1, c2 = theme["bar_bottom"], theme["bar_mid"]
-                        r2 = ratio * 2.0
-                        col = QColor(
-                            int(c1.red() * (1 - r2) + c2.red() * r2),
-                            int(c1.green() * (1 - r2) + c2.green() * r2),
-                            int(c1.blue() * (1 - r2) + c2.blue() * r2),
-                            235
-                        )
-                    else:
-                        c1, c2 = theme["bar_mid"], theme["bar_top"]
-                        t_ratio = (ratio - 0.5) * 2.0
-                        col = QColor(
-                            int(c1.red() * (1 - t_ratio) + c2.red() * t_ratio),
-                            int(c1.green() * (1 - t_ratio) + c2.green() * t_ratio),
-                            int(c1.blue() * (1 - t_ratio) + c2.blue() * t_ratio),
-                            250
-                        )
-                    painter.fillRect(bx, sy, bar_w, seg_h, col)
+                    painter.fillRect(bx, sy, bar_w, seg_h, seg_colors[s])
                 else:
-                    # Inactive segment silhouette
-                    painter.fillRect(bx, sy, bar_w, seg_h, QColor(255, 255, 255, 8))
+                    painter.fillRect(bx, sy, bar_w, seg_h, inactive_col)
 
             # Peak hold indicator
             peak_val = float(peaks[i])
             if peak_val > 0.05:
                 py = base_y - int(peak_val * max_h) - 3
-                painter.fillRect(bx, py, bar_w, 2, theme["peak"])
+                painter.fillRect(bx, py, bar_w, 2, peak_col)
 
     def _draw_neon_wave(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine, theme: dict):
-        """Dual-layer glowing neon oscilloscope ECG waveform."""
+        """Dual-layer glowing neon oscilloscope ECG waveform (single polygon pass)."""
         wave = engine.get_waveform(sample_count=80)
         pts_len = len(wave)
         if pts_len < 2:
@@ -296,35 +322,31 @@ class CyberVisualizer:
         cy = float(rect.center().y())
         if max(float(wave.max()), -float(wave.min())) < 0.002:
             # Silent guide line early return (zero-cost when paused)
-            painter.setPen(QPen(QColor(theme["grid"].red(), theme["grid"].green(), theme["grid"].blue(), 45), 1, Qt.PenStyle.DashLine))
+            painter.setPen(self._get_guide_pen(self.current_theme_name))
             painter.drawLine(rect.left(), int(cy), rect.right(), int(cy))
             return
 
         max_amp = float(rect.height() * 0.42)
 
-        poly_glow = QPolygonF()
-        poly_core = QPolygonF()
-
+        poly = QPolygonF()
         dx = float(rect.width()) / float(pts_len - 1)
         for i in range(pts_len):
             x = float(rect.left()) + i * dx
             y = cy + float(wave[i]) * max_amp
-            pt = QPointF(x, y)
-            poly_glow.append(pt)
-            poly_core.append(pt)
+            poly.append(QPointF(x, y))
 
         # Center line guide
-        painter.setPen(QPen(QColor(theme["grid"].red(), theme["grid"].green(), theme["grid"].blue(), 45), 1, Qt.PenStyle.DashLine))
+        painter.setPen(self._get_guide_pen(self.current_theme_name))
         painter.drawLine(rect.left(), int(cy), rect.right(), int(cy))
 
         # Translucent glow envelope
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(QPen(theme["wave_glow"], 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPolyline(poly_glow)
+        painter.drawPolyline(poly)
 
         # Sharp bright core line
         painter.setPen(QPen(theme["wave"], 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPolyline(poly_core)
+        painter.drawPolyline(poly)
 
     def _draw_radial_core(self, painter: QPainter, rect: QRect, bars: np.ndarray, beat: float, theme: dict):
         """Spinning futuristic cyber targeting reticle and audio-reactive core."""

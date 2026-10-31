@@ -109,12 +109,7 @@ def run_audit():
     assert overlay.enable_bass_pop is False
     print("Bass pop OK")
 
-    print("Testing widescreen...")
-    sd.chk_widescreen.setChecked(True)
-    assert overlay.use_widescreen is True
-    sd.chk_widescreen.setChecked(False)
-    assert overlay.use_widescreen is False
-    print("Widescreen OK")
+    # Widescreen removed as requested
 
     print("[PASS] Sliders and toggles verified.")
 

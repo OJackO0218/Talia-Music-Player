@@ -63,7 +63,6 @@ DEFAULT_SETTINGS = {
     "char_size": 300,
     "eye_sensitivity": 1.68,
     "opacity": 1.0,
-    "widescreen": False,
     "bass_pop": True,
     "visualizer_mode": "Neon Wave",
     "visualizer_palette": "Cyberpunk Neon",

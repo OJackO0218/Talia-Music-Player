@@ -163,7 +163,6 @@ default_release_settings = {
     "eye_sensitivity": 1.68,
     "opacity": 1.0,
     "bass_pop": True,
-    "widescreen": False,
     "visualizer_mode": "Neon Wave",
     "visualizer_palette": "Cyberpunk Neon",
     "volume": 0.49,
