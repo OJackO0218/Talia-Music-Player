@@ -431,7 +431,7 @@ class OverlayWindow(QWidget):
             self.sound_pop.play()
         self.update()
 
-    def _trigger_click_feedback(self, color: QColor, rot_degrees: float, alpha: float):
+    def _trigger_click_feedback(self, color: QColor = QColor(255, 255, 255), rot_degrees: float = 0.0, alpha: float = 0.60):
         # Click feedback flash and tilt bounce
         self.flash_color = color
         self.flash_alpha = alpha
@@ -1134,11 +1134,11 @@ class OverlayWindow(QWidget):
             painter.fillRect(char_rect, QColor(255, 255, 255, hover_alpha))
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
-        # 2. Click Tactile Color Flash (0.24s solid hold + smooth exponential fade)
+        # 2. Click feedback flash
         if self.flash_alpha > 0.005:
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
             fc = QColor(self.flash_color)
-            fc.setAlpha(int(255 * min(0.75, self.flash_alpha)))
+            fc.setAlpha(int(255 * min(0.60, self.flash_alpha)))
             painter.fillRect(char_rect, fc)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
@@ -1287,17 +1287,16 @@ class OverlayWindow(QWidget):
         # Handle single, double, or triple clicks
         self.click_count += 1
         if self.click_count == 1:
-            self._trigger_click_feedback(color=QColor(255, 255, 255), rot_degrees=-2.2, alpha=0.65)
+            self._trigger_click_feedback(color=QColor(255, 255, 255), rot_degrees=-2.2, alpha=0.60)
             self.multi_click_timer.start(340)
         elif self.click_count == 2:
             click_x = getattr(self, "last_click_pos", QPoint(self.width() // 2, 0)).x()
             is_right = click_x >= self.width() / 2.0
-            color = QColor(0, 240, 255) if is_right else QColor(255, 30, 80)
             rot = 2.8 if is_right else -2.8
-            self._trigger_click_feedback(color=color, rot_degrees=rot, alpha=0.70)
+            self._trigger_click_feedback(color=QColor(255, 255, 255), rot_degrees=rot, alpha=0.60)
             self.multi_click_timer.start(340)
         elif self.click_count >= 3:
-            self._trigger_click_feedback(color=QColor(255, 215, 0), rot_degrees=-3.0, alpha=0.70)
+            self._trigger_click_feedback(color=QColor(255, 255, 255), rot_degrees=-3.0, alpha=0.60)
             self.multi_click_timer.stop()
             self.click_count = 0
             self._trigger_triple_click()
