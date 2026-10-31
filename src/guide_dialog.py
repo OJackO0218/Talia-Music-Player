@@ -97,17 +97,29 @@ class GuideDialog(QDialog):
         content_layout.setSpacing(14)
 
         guide_items = [
-            ("Press Talia once to play/pause", []),
-            ("Press Talia twice on the right to skip song and twice on the left to backtrack", []),
-            ("Hold Talia to enter Move Mode", [
-                "Scroll mouse wheel to resize Talia",
-                "Drag to reposition anywhere on your desktop",
-                "Hold again to lock in place"
+            ("Click & Mouse Controls", [
+                "1 Click: Play / Pause with white tactile flash.",
+                "2 Clicks: Double-tap right side to skip track, left side to rewind (shows symbols in mouth).",
+                "3 Clicks: Open Minimal Player (playback, queue, search downloader, and settings).",
+                "Scroll Wheel: Adjust volume smoothly (whisper-quiet logarithmic curve down to 1%).",
+                "Right-Click Drag: Quickly drag Talia anywhere without entering Move Mode."
             ]),
-            ("Click Talia 3 times to open Controller", [
-                "Opens the control panel where you can browse library files, search and download songs, adjust lyrics, customize fonts, and tweak visuals."
+            ("Move Mode & Resizing", [
+                "Hold Talia for 0.7s until SFX plays to toggle Move Mode (or press F8).",
+                "In Move Mode: Drag Talia and lyrics freely; scroll mouse wheel to resize scale.",
+                "Hold Talia again or press F8 to lock positions."
             ]),
-            ("Hold Talia for 2 seconds to close the app", []),
+            ("Power Down & Exit", [
+                "Hold Talia for 2 seconds to initiate power-down and close the app."
+            ]),
+            ("Global Keyboard Shortcuts", [
+                "F7 : Toggle Synced Lyrics Overlay on / off",
+                "F8 : Toggle Move Mode (reposition Talia & lyrics)",
+                "F9 : Hide / Show Talia and lyrics overlay",
+                "F10: Switch Local Player Mode vs Desktop Audio Mode",
+                "F11: Toggle Eco Mode (< 1% CPU, 30 FPS)",
+                "Ctrl+[ / Ctrl+] : Nudge lyric sync offset by -0.25s / +0.25s in real time"
+            ]),
         ]
 
         for main_text, sub_items in guide_items:
@@ -137,12 +149,11 @@ class GuideDialog(QDialog):
         note_layout.setSpacing(8)
 
         note_txt = QLabel(
-            "<b>Playback Modes:</b><br>"
-            "• <b>Player Mode:</b> Plays your local music files with synchronized desktop lyrics.<br>"
-            "• <b>Desktop Audio:</b> Connects to system audio (browser, Spotify, games) for live reactive visuals.<br><br>"
-            "<b>Eco Mode (< 1% CPU):</b><br>"
-            "Press <b>F11</b> or toggle Eco Mode in the controller to minimize CPU usage while keeping responsive music playback.<br><br>"
-            "<i>Note: Some songs may not have available or synchronized lyrics.</i>"
+            "<b>Playback Modes & Features:</b><br>"
+            "• <b>Player Mode:</b> Plays your local audio files (.opus, .mp3, .flac) with continuous title marquee in mouth and synced lyrics.<br>"
+            "• <b>Desktop Audio:</b> Connects to PC audio output (browser, Spotify, games, osu!) for live reactive visuals.<br>"
+            "• <b>Automated Lyrics Fetcher:</b> Open Settings &gt; Lyrics and click <i>'Launch Automated Lyric Fetcher'</i> to batch download synced lyrics.<br><br>"
+            "<i>Tip: You can re-open this guide anytime from the Settings dialog under 'Controls Guide'.</i>"
         )
         note_txt.setWordWrap(True)
         note_txt.setStyleSheet("color: #d4d4d8; font-size: 12px; line-height: 1.4;")

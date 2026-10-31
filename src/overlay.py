@@ -50,7 +50,7 @@ class OverlayWindow(QWidget):
         # Display and Mode settings
         self.move_talia_mode = False  # False = Locked & Clickable, True = Movable/Resizable
         self.opacity_val = 1.0
-        self.enable_scanlines = True
+        self.enable_scanlines = False
         self.eco_mode = False
         self.enable_bass_pop = True
         self.bass_pop_scale = 1.0

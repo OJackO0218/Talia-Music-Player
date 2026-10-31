@@ -96,13 +96,6 @@ def run_audit():
         print(f"Sensitivity {es}: overlay sensitivity is {overlay.eye_sensitivity}")
         assert abs(overlay.eye_sensitivity - (es / 100.0)) < 0.01
 
-    print("Testing scanlines...")
-    sd.chk_scanlines.setChecked(True)
-    assert overlay.enable_scanlines is True
-    sd.chk_scanlines.setChecked(False)
-    assert overlay.enable_scanlines is False
-    print("Scanlines OK")
-
     print("Testing bass pop...")
     sd.chk_bass_pop.setChecked(True)
     assert overlay.enable_bass_pop is True

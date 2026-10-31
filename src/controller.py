@@ -462,11 +462,6 @@ class SettingsDialog(QDialog):
 
         # Feature Toggles
         hbox_toggles = QHBoxLayout()
-        self.chk_scanlines = QCheckBox("Scanlines")
-        self.chk_scanlines.setChecked(True)
-        self.chk_scanlines.toggled.connect(self.panel.on_scanlines_toggled)
-        hbox_toggles.addWidget(self.chk_scanlines)
-
         self.chk_bass_pop = QCheckBox("Bass Reaction")
         self.chk_bass_pop.setChecked(True)
         self.chk_bass_pop.toggled.connect(self.panel.on_bass_pop_toggled)
@@ -704,7 +699,7 @@ class ControlPanel(QWidget):
         self.slider_opacity = self.settings_dialog.slider_opacity
         self.slider_eye_sens = self.settings_dialog.slider_eye_sens
         self.lbl_sens_val = self.settings_dialog.lbl_sens_val
-        self.chk_scanlines = self.settings_dialog.chk_scanlines
+        self.chk_scanlines = None
         self.chk_bass_pop = self.settings_dialog.chk_bass_pop
         self.chk_widescreen = self.settings_dialog.chk_widescreen
         self.combo_mode = self.settings_dialog.combo_mode
@@ -1840,7 +1835,6 @@ class ControlPanel(QWidget):
             "char_size": max(MIN_CHAR_SIZE, int(self.overlay.width())),
             "eye_sensitivity": round(float(self.overlay.eye_sensitivity), 2),
             "opacity": round(float(user_opacity), 2),
-            "scanlines": bool(self.overlay.enable_scanlines),
             "bass_pop": bool(self.overlay.enable_bass_pop),
             "widescreen": bool(self.overlay.use_widescreen),
             "visualizer_mode": str(self.overlay.visualizer.mode),
@@ -1866,7 +1860,7 @@ class ControlPanel(QWidget):
     def apply_settings(self, cfg: dict):
         # Apply settings to overlay and controls
         self.is_loading_settings = True
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", False))
+        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
 
         # Size
         size = int(cfg.get("char_size", 300))
@@ -1898,9 +1892,9 @@ class ControlPanel(QWidget):
         self.overlay.opacity_val = raw_op
 
         # Features
-        self.chk_scanlines.setChecked(cfg.get("scanlines", False))
-        self.chk_bass_pop.setChecked(cfg.get("bass_pop", False))
-        self.overlay.enable_bass_pop = cfg.get("bass_pop", False)
+        self.overlay.enable_scanlines = False
+        self.chk_bass_pop.setChecked(cfg.get("bass_pop", True))
+        self.overlay.enable_bass_pop = cfg.get("bass_pop", True)
         self.chk_widescreen.setChecked(cfg.get("widescreen", False))
 
         # Visualizer

@@ -77,7 +77,7 @@ A comprehensive customization hub containing:
 * **Music Folder**: Active directory display, folder picker, explorer shortcut, and library re-scan.
 * **Lyrics Customization**: Font selector dropdown, custom color picker, word highlight glow animation toggle, and manual/auto-sync offset tools.
 * **Visualizer Engine**: Visualizer styles (`Cyber Bars`, `Neon Wave`, `Radial Core`, `Dual Mirror`) and color palette themes.
-* **Character & Display**: Eye sensitivity, character scale, opacity, scanlines, bass pop reaction, and widescreen mode.
+* **Character & Display**: Eye sensitivity, character scale, opacity, bass pop reaction, and widescreen mode.
 * **System Actions**: Save settings, controls guide, asset reloader, and clean application exit.
 
 ---
