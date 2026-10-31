@@ -1174,8 +1174,8 @@ class OverlayWindow(QWidget):
                 if self.drowsy_level > 0.35:
                     self.visualizer.draw_background(painter, mouth_rect)
 
-                    zzz_frames = ["Z", "Zz", "ZzZ", "z", "zZ", "zZz"]
-                    frame_idx = int(time.time() * 2.2) % len(zzz_frames)
+                    zzz_frames = ["Z", "Zz", "ZzZ...", "z", "zZ", "zZz..."]
+                    frame_idx = int(time.time() * 1.1) % len(zzz_frames)
                     zzz_text = zzz_frames[frame_idx]
 
                     font_size = max(11, int(mouth_h * 0.38))
@@ -1183,7 +1183,7 @@ class OverlayWindow(QWidget):
                     fm = QFontMetrics(zzz_font)
                     text_w = fm.horizontalAdvance(zzz_text)
 
-                    bob_y = math.sin(time.time() * 2.8) * (1.5 * scale)
+                    bob_y = math.sin(time.time() * 2.0) * (1.5 * scale)
                     tx = mouth_x + (mouth_w - text_w) / 2.0
                     ty = mouth_y + (mouth_h + fm.ascent() - fm.descent()) / 2.0 + bob_y
 
@@ -1263,9 +1263,9 @@ class OverlayWindow(QWidget):
             painter.setOpacity(self.opacity_val)
 
         # ==========================================================
-        # LAYER 0.5: CYBER MUTE INDICATOR (Inside Mouth Cavity on Pause)
+        # LAYER 0.5: CYBER MUTE INDICATOR (Inside Mouth Cavity on Pause, Awake Only)
         # ==========================================================
-        if self.mute_alpha > 0.005 and not self.mute_icon.isNull() and self.hold_saturation > 0.05:
+        if self.drowsy_level < 0.05 and self.mute_alpha > 0.005 and not self.mute_icon.isNull() and self.hold_saturation > 0.05:
             # Steady crisp cyber HUD glow when paused (zero CPU waste at rest)
             eff_alpha = min(1.0, max(0.0, self.mute_alpha))
             cx = mouth_x + mouth_w // 2
