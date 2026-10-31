@@ -1864,12 +1864,12 @@ class ControlPanel(QWidget):
         return settings_dict
 
     def apply_settings(self, cfg: dict):
-        """Applies loaded settings to the overlay and controls."""
+        # Apply settings to overlay and controls
         self.is_loading_settings = True
-        self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+        self.show_startup_guide = bool(cfg.get("show_startup_guide", False))
 
         # Size
-        size = int(cfg.get("char_size", self.overlay.width()))
+        size = int(cfg.get("char_size", 300))
         size = max(MIN_CHAR_SIZE, min(MAX_CHAR_SIZE, size))
         self.slider_size.setValue(size)
         self.overlay.resize(size, size)
@@ -1887,7 +1887,7 @@ class ControlPanel(QWidget):
             self.overlay.move(def_x, def_y)
 
         # Eye Sensitivity
-        sens = cfg.get("eye_sensitivity", 1.0)
+        sens = cfg.get("eye_sensitivity", 1.68)
         self.slider_eye_sens.setValue(int(sens * 100))
 
         # Opacity
@@ -1898,13 +1898,13 @@ class ControlPanel(QWidget):
         self.overlay.opacity_val = raw_op
 
         # Features
-        self.chk_scanlines.setChecked(cfg.get("scanlines", True))
-        self.chk_bass_pop.setChecked(cfg.get("bass_pop", True))
-        self.overlay.enable_bass_pop = cfg.get("bass_pop", True)
+        self.chk_scanlines.setChecked(cfg.get("scanlines", False))
+        self.chk_bass_pop.setChecked(cfg.get("bass_pop", False))
+        self.overlay.enable_bass_pop = cfg.get("bass_pop", False)
         self.chk_widescreen.setChecked(cfg.get("widescreen", False))
 
         # Visualizer
-        vis_mode = cfg.get("visualizer_mode", "Cyber Bars")
+        vis_mode = cfg.get("visualizer_mode", "Neon Wave")
         if vis_mode in ["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"]:
             self.combo_mode.setCurrentText(vis_mode)
 
@@ -1913,7 +1913,7 @@ class ControlPanel(QWidget):
             self.combo_theme.setCurrentText(palette)
 
         # Volume
-        vol = cfg.get("volume", 0.85)
+        vol = cfg.get("volume", 0.49)
         self.sync_volume(vol)
         self.overlay.set_volume(vol)
 
@@ -1941,7 +1941,7 @@ class ControlPanel(QWidget):
                 self.lyrics_overlay.hide()
             self.update_lyrics_ui()
 
-            lyric_color = cfg.get("lyrics_color", "#ffffff")
+            lyric_color = cfg.get("lyrics_color", "#f472b6")
             self.lyrics_overlay.set_color(lyric_color)
             if hasattr(self, "combo_lyric_color"):
                 matched = None
@@ -1965,7 +1965,7 @@ class ControlPanel(QWidget):
                 self.chk_word_glow.blockSignals(False)
 
             # Lyrics Font
-            lyrics_font = cfg.get("lyrics_font", "Default (Segoe UI / Inter)")
+            lyrics_font = cfg.get("lyrics_font", "Rajdhani")
             if hasattr(self, "settings_dialog"):
                 self.settings_dialog.populate_fonts()
                 if hasattr(self, "combo_font"):

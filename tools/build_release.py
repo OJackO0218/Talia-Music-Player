@@ -125,31 +125,31 @@ dest_fetcher = os.path.join(APP_STAGE, "Talia Lyrics Fetch Automated")
 if os.path.exists(fetcher_dir):
     shutil.copytree(fetcher_dir, dest_fetcher, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
-# Write clean default settings (Eco Mode OFF by default)
+# Write clean default settings (matching user's preferred layout & styling)
 import json
 default_release_settings = {
-    "pos_x": -1,
-    "pos_y": -1,
-    "char_size": 260,
-    "eye_sensitivity": 1.0,
+    "pos_x": 1028,
+    "pos_y": 358,
+    "char_size": 300,
+    "eye_sensitivity": 1.68,
     "opacity": 1.0,
-    "scanlines": True,
-    "bass_pop": True,
+    "scanlines": False,
+    "bass_pop": False,
     "widescreen": False,
-    "visualizer_mode": "Cyber Bars",
+    "visualizer_mode": "Neon Wave",
     "visualizer_palette": "Cyberpunk Neon",
-    "volume": 0.85,
+    "volume": 0.49,
     "audio_mode": "player",
     "music_folder": "",
     "shuffle": False,
     "eco_mode": False,
-    "show_startup_guide": True,
-    "lyrics_x": -1,
-    "lyrics_y": -1,
+    "show_startup_guide": False,
+    "lyrics_x": 218,
+    "lyrics_y": 664,
     "show_lyrics": True,
-    "lyrics_color": "#e879f9",
+    "lyrics_color": "#f472b6",
     "lyrics_word_glow": True,
-    "lyrics_font": "Default (Segoe UI / Inter)",
+    "lyrics_font": "Rajdhani",
     "download_folder": ""
 }
 with open(os.path.join(APP_STAGE, "settings.json"), "w", encoding="utf-8") as f:

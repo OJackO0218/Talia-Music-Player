@@ -40,7 +40,7 @@ SUPPORTED_AUDIO_EXTS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus')
 # Window & Sizing Constants
 # ==========================================================
 CANVAS_BASE_SIZE = 591
-DEFAULT_OVERLAY_SIZE = 260
+DEFAULT_OVERLAY_SIZE = 300
 MIN_CHAR_SIZE = 150
 MAX_CHAR_SIZE = 3840
 
@@ -56,31 +56,33 @@ DEFAULT_ORIGIN_LY = 85
 DEFAULT_ORIGIN_RX = 403
 DEFAULT_ORIGIN_RY = 106
 
-# ==========================================================
-# Persistent Settings Management
-# ==========================================================
+# Persistent settings defaults
 DEFAULT_SETTINGS = {
-    "pos_x": -1,
-    "pos_y": -1,
-    "char_size": DEFAULT_OVERLAY_SIZE,
-    "eye_sensitivity": 1.0,
+    "pos_x": 1028,
+    "pos_y": 358,
+    "char_size": 300,
+    "eye_sensitivity": 1.68,
     "opacity": 1.0,
-    "scanlines": True,
+    "scanlines": False,
     "widescreen": False,
-    "visualizer_mode": "Cyber Bars",
+    "bass_pop": False,
+    "visualizer_mode": "Neon Wave",
     "visualizer_palette": "Cyberpunk Neon",
-    "volume": 0.85,
-    "music_folder": DEFAULT_MUSIC_DIR,
+    "volume": 0.49,
+    "music_folder": "",
     "shuffle": False,
     "lyrics_enabled": True,
-    "lyrics_color": "#e879f9",
+    "lyrics_color": "#f472b6",
     "lyrics_word_glow": True,
-    "lyrics_font": "Default (Segoe UI / Inter)",
+    "lyrics_font": "Rajdhani",
     "lyrics_offsets": {},
-    "show_startup_guide": True,
-    "bass_pop": True,
+    "show_startup_guide": False,
     "eco_mode": False,
-    "audio_mode": "player"  # "player" = Built-in Playlist, "desktop" = Desktop Audio (osu!, Spotify, Games)
+    "audio_mode": "player",
+    "lyrics_x": 218,
+    "lyrics_y": 664,
+    "show_lyrics": True,
+    "download_folder": ""
 }
 
 
