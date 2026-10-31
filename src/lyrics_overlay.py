@@ -117,12 +117,12 @@ class LyricsOverlayWindow(QWidget):
         self.get_available_fonts()
 
     def set_eco_mode(self, enabled: bool):
-        """Toggles power-saving Eco Mode: drops animation timer to 12.5 FPS (80ms)."""
+        """Toggles power-saving Eco Mode: drops animation timer to 30 FPS (33ms)."""
         self.eco_mode = enabled
         if enabled:
-            self.anim_timer.setInterval(80)
+            self.anim_timer.setInterval(33)  # 30 FPS
         else:
-            self.anim_timer.setInterval(16)
+            self.anim_timer.setInterval(16)  # 60 FPS
         self.update()
 
     def set_color(self, hex_code: str):

@@ -456,7 +456,7 @@ class OverlayWindow(QWidget):
         if hasattr(self.visualizer, "set_eco_mode"):
             self.visualizer.set_eco_mode(enabled)
         if enabled:
-            self.anim_timer.setInterval(80)  # 12.5 FPS
+            self.anim_timer.setInterval(33)  # 30 FPS
         else:
             self.anim_timer.setInterval(16)  # 60 FPS
         self.update()
