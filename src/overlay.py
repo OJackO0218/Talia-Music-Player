@@ -125,6 +125,31 @@ class OverlayWindow(QWidget):
         self.flash_alpha = 0.0
         self.flash_hold_timer = 0.0
 
+        # Tier 1 Live2D: Procedural Blinking
+        self.blink_timer = 0.0
+        self.next_blink_interval = 4.0
+        self.is_blinking = False
+        self.blink_duration = 0.15
+        self.blink_progress = 0.0
+
+        # Tier 1 Live2D: Idle Breathing Cycle
+        self.breath_phase = 0.0
+        self.breath_scale_x = 1.0
+        self.breath_scale_y = 1.0
+
+        # Tier 1 Live2D: Audio Head-Bop & Rhythmic Grooving to BPM
+        self.head_bop_y = 0.0
+        self.head_bop_tilt = 0.0
+        self.bop_phase = 0.0       # 0.0 to 2.0 continuous phase (2 beats per left/right sway cycle)
+        self.bop_amplitude = 0.0   # Current dynamic bop depth in pixels
+        self.tilt_amplitude = 0.0  # Current dynamic groove tilt in degrees
+        self.bass_groove_activity = 0.0  # Smooth 0.0 to 1.0 activity gate (only bops when punchy bass is present)
+
+        # Tier 1 Live2D: Drowsy AFK Idle State (after 1 minute of inactivity)
+        self.last_user_activity = time.time()
+        self.drowsy_level = 0.0    # 0.0 = wide awake, 1.0 = fully drowsy (sleepy half-closed eyes)
+        self.is_drowsy = False
+
         # Sinking Shutdown State (3.0s to 3.6s)
         self.is_shutting_down = False
         self.shutdown_start_time = 0.0
@@ -222,9 +247,12 @@ class OverlayWindow(QWidget):
         self._last_scaled_size = -1
         self._cached_scaled_talia = QPixmap()
         self._cached_scaled_talia_gray = QPixmap()
+        self._cached_scaled_talia_closed = QPixmap()
+        self._cached_scaled_talia_closed_gray = QPixmap()
         self._cached_scaled_whites = QPixmap()
         self._cached_scaled_pupil_l = QPixmap()
         self._cached_scaled_pupil_r = QPixmap()
+        self._cached_scaled_eyelids = QPixmap()
 
         self.setMouseTracking(True)
         self.setWindowFlags(
@@ -260,8 +288,23 @@ class OverlayWindow(QWidget):
         self.talia_sprite_gray = None
         self.talia_wide = None
 
+        # Closed Eye Sprite (Used for 100% closed blink and AFK Sleep Mode)
+        p3_closed_path = os.path.join(EYE_PARTS_DIR, "part3_talia_closed.png")
+        if os.path.exists(p3_closed_path):
+            self.talia_closed = QPixmap(p3_closed_path)
+        else:
+            self.talia_closed = QPixmap()
+        self.talia_closed_gray = None
+
         # Layer 3: Eye Whites (Back)
         self.whites = QPixmap(p2_path)
+
+        # Layer 4: Eyelids (Closed skin + lash lines)
+        p4_path = os.path.join(EYE_PARTS_DIR, "part4_eyelids.png")
+        if os.path.exists(p4_path):
+            self.eyelids = QPixmap(p4_path)
+        else:
+            self.eyelids = QPixmap()
 
         # Layer 2: Moving Pupils - Auto-slice left and right pupils from part1_pupils_full.png
         p1_pil = Image.open(p1_path).convert("RGBA")
@@ -319,6 +362,22 @@ class OverlayWindow(QWidget):
             qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
             self.talia_sprite_gray = QPixmap.fromImage(qimg_gray.copy())
         return self.talia_sprite_gray
+
+    def _ensure_talia_closed_gray(self):
+        """Lazily generates grayscale version of Talia closed sprite on demand when powering down."""
+        if self.talia_closed_gray is None or self.talia_closed_gray.isNull():
+            p3_closed_path = os.path.join(EYE_PARTS_DIR, "part3_talia_closed.png")
+            if os.path.exists(p3_closed_path):
+                talia_pil = Image.open(p3_closed_path).convert("RGBA")
+                r, g, b, a = talia_pil.split()
+                gray_rgb = ImageOps.grayscale(talia_pil.convert("RGB"))
+                gray_rgba = Image.merge("RGBA", (gray_rgb, gray_rgb, gray_rgb, a))
+                gray_np = np.array(gray_rgba)
+                qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
+                self.talia_closed_gray = QPixmap.fromImage(qimg_gray.copy())
+            else:
+                self.talia_closed_gray = QPixmap()
+        return self.talia_closed_gray
 
     def _ensure_talia_wide(self):
         """Lazily builds widescreen 16:9 bezel on demand when widescreen mode is enabled."""
@@ -596,7 +655,12 @@ class OverlayWindow(QWidget):
 
         # 1. Update eye tracking relative to Talia's true screen coordinates
         cursor_pt = QCursor.pos()
-        cursor_moved = (cursor_pt != self._last_cursor_pt)
+        if self._last_cursor_pt is not None:
+            cursor_moved = (cursor_pt != self._last_cursor_pt)
+            if cursor_moved:
+                self.last_user_activity = time.time()
+        else:
+            cursor_moved = False
         self._last_cursor_pt = cursor_pt
 
         win_pos = self.mapToGlobal(QPoint(0, 0))
@@ -787,9 +851,133 @@ class OverlayWindow(QWidget):
             if abs(self.current_shake_y) < 0.05:
                 self.current_shake_y = 0.0
 
+        # ==========================================================
+        # TIER 1 LIVE2D: PROCEDURAL BLINKING STATE MACHINE
+        # ==========================================================
+        # Only trigger spontaneous blinks while awake (not in sleep mode)
+        if self.drowsy_level < 0.60:
+            self.blink_timer += 0.016
+            if not self.is_blinking:
+                if self.blink_timer >= self.next_blink_interval:
+                    self.is_blinking = True
+                    self.blink_timer = 0.0
+                    import random
+                    if random.random() < 0.18:
+                        self.next_blink_interval = random.uniform(0.25, 0.45)
+                    else:
+                        self.next_blink_interval = random.uniform(3.5, 6.0)
+            else:
+                t_b = self.blink_timer
+                if t_b <= 0.06:
+                    self.blink_progress = min(1.0, (t_b / 0.06) ** 1.8)
+                elif t_b <= 0.08:
+                    self.blink_progress = 1.0
+                elif t_b <= self.blink_duration:
+                    p_open = (t_b - 0.08) / (self.blink_duration - 0.08)
+                    self.blink_progress = max(0.0, 1.0 - (1.0 - (1.0 - p_open) ** 3))
+                else:
+                    self.is_blinking = False
+                    self.blink_progress = 0.0
+                    self.blink_timer = 0.0
+        else:
+            self.is_blinking = False
+            self.blink_progress = 0.0
+
+        # ==========================================================
+        # TIER 1 LIVE2D: AFK SLEEP / DROWSY STATE
+        # (Only sleeps after 30s of AFK when NO music is playing)
+        # ==========================================================
+        idle_seconds = time.time() - self.last_user_activity
+        if is_audio_active:
+            # Active music keeps Talia awake and alert!
+            self.last_user_activity = time.time()
+            self.is_drowsy = False
+            self.drowsy_level = max(0.0, self.drowsy_level - 0.08)
+        elif idle_seconds >= 30.0:
+            self.is_drowsy = True
+            # Smooth ease into 100% closed sleep state (takes ~1.5s)
+            self.drowsy_level = min(1.0, self.drowsy_level + 0.012)
+        else:
+            self.is_drowsy = False
+            # Snappy alert wake up
+            self.drowsy_level = max(0.0, self.drowsy_level - 0.06)
+
+        # Slow down breathing slightly when drowsy (from 4.0s to 5.8s cycle)
+        breath_cycle_sec = 4.0 + 1.8 * self.drowsy_level
+
+        # ==========================================================
+        # TIER 1 LIVE2D: IDLE BREATHING CYCLE
+        # ==========================================================
+        if not self.eco_mode:
+            self.breath_phase = (self.breath_phase + 0.016 * (2.0 * math.pi / breath_cycle_sec)) % (2.0 * math.pi)
+            sin_breath = math.sin(self.breath_phase)
+            self.breath_scale_y = 1.0 + (0.009 - 0.003 * self.drowsy_level) * sin_breath
+            self.breath_scale_x = 1.0 - (0.003 - 0.001 * self.drowsy_level) * sin_breath
+        else:
+            self.breath_scale_y = 1.0
+            self.breath_scale_x = 1.0
+
+        # ==========================================================
+        # TIER 1 LIVE2D: AUDIO HEAD-BOP & RHYTHMIC NODDING TO BPM
+        # (Only grooves when significant punchy bass is present)
+        # ==========================================================
+        beat_energy = float(getattr(self.audio_engine, "beat_energy", 0.0))
+        estimated_bpm = float(getattr(self.audio_engine, "estimated_bpm", 120.0))
+        is_beat_kick = bool(getattr(self.audio_engine, "is_beat_kick", False))
+
+        # Dynamic bass presence gate: only bops during exciting parts with real punchy bass (> 0.08)
+        if beat_energy > 0.08:
+            self.bass_groove_activity = min(1.0, self.bass_groove_activity + 0.14)
+        else:
+            self.bass_groove_activity = max(0.0, self.bass_groove_activity - 0.035)
+
+        is_grooving = (not self.eco_mode and is_audio_active and self.bass_groove_activity > 0.05 and self.drowsy_level < 0.60)
+
+        if is_grooving:
+            # Advance oscillator according to calculated BPM (frequency = BPM / 60 beats per second)
+            beats_per_sec = max(60.0, min(200.0, estimated_bpm)) / 60.0
+            self.bop_phase = (self.bop_phase + 0.016 * beats_per_sec) % 2.0
+
+            # Phase-Locked Loop (PLL): When a bass kick hits, pull phase toward the downbeat (0.0 or 1.0)
+            if is_beat_kick:
+                nearest_beat = round(self.bop_phase)
+                phase_error = nearest_beat - self.bop_phase
+                self.bop_phase = (self.bop_phase + phase_error * 0.30) % 2.0
+
+            # Dynamic bop depth and groove tilt amplitude scaled by bass groove activity and beat energy
+            target_depth = (1.5 + beat_energy * 5.0) * scale * self.bass_groove_activity
+            target_tilt = (0.5 + beat_energy * 1.6) * self.bass_groove_activity
+
+            self.bop_amplitude += (target_depth - self.bop_amplitude) * 0.22
+            self.tilt_amplitude += (target_tilt - self.tilt_amplitude) * 0.22
+
+            # Downbeat bounce curve: dips down on every beat (phase % 1.0 == 0), rebounds on upbeat
+            beat_subphase = self.bop_phase % 1.0
+            bounce = math.cos(math.pi * beat_subphase) ** 2
+            self.head_bop_y = self.bop_amplitude * bounce
+
+            # Alternating left-right groove tilt (cycles over 2 full beats)
+            self.head_bop_tilt = self.tilt_amplitude * math.sin(math.pi * self.bop_phase)
+        else:
+            # Smooth spring decay to rest when music is quiet, during ambient/vocal breakdown, or drowsy
+            self.bass_groove_activity = max(0.0, self.bass_groove_activity - 0.04)
+            self.bop_amplitude *= 0.75
+            self.tilt_amplitude *= 0.75
+            self.head_bop_y *= 0.70
+            self.head_bop_tilt *= 0.70
+            if abs(self.head_bop_y) < 0.05:
+                self.head_bop_y = 0.0
+            if abs(self.head_bop_tilt) < 0.02:
+                self.head_bop_tilt = 0.0
+
         # Dynamic sleep dirty-check: do NOT call self.update() when at rest
         sway_active = self.is_holding or (self.impulse_timer > 0.0) or (abs(self.current_rotation) > 0.02) or (abs(self.current_shake_x) > 0.05) or (abs(self.current_shake_y) > 0.05)
         fx_active = self.is_starting_up or self.is_shutting_down or (self.hover_glow > 0.005)
+        blink_active = self.is_blinking or (self.blink_progress > 0.005)
+        drowsy_changing = (self.drowsy_level > 0.005)
+        sleeping_active = (self.drowsy_level > 0.35)
+        breathing_active = not self.eco_mode
+        bop_active = (abs(self.head_bop_y) > 0.05) or (abs(self.head_bop_tilt) > 0.02)
 
         # OSD skip timer and track text scroll
         osd_active = self.osd_timer > 0.0
@@ -817,6 +1005,11 @@ class OverlayWindow(QWidget):
             mute_changing or
             sway_active or
             fx_active or
+            blink_active or
+            drowsy_changing or
+            sleeping_active or
+            breathing_active or
+            bop_active or
             osd_active
         )
 
@@ -869,6 +1062,34 @@ class OverlayWindow(QWidget):
             Qt.TransformationMode.SmoothTransformation
         )
 
+        if hasattr(self, "eyelids") and not self.eyelids.isNull():
+            self._cached_scaled_eyelids = self.eyelids.scaled(
+                char_size, char_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+        else:
+            self._cached_scaled_eyelids = QPixmap()
+
+        if hasattr(self, "talia_closed") and self.talia_closed and not self.talia_closed.isNull():
+            self._cached_scaled_talia_closed = self.talia_closed.scaled(
+                char_size, char_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+        else:
+            self._cached_scaled_talia_closed = QPixmap()
+
+        if self.hold_saturation < 1.0 and hasattr(self, "talia_closed") and self.talia_closed and not self.talia_closed.isNull():
+            self._ensure_talia_closed_gray()
+            self._cached_scaled_talia_closed_gray = self.talia_closed_gray.scaled(
+                char_size, char_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+        else:
+            self._cached_scaled_talia_closed_gray = QPixmap()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -900,6 +1121,21 @@ class OverlayWindow(QWidget):
 
         center_x = char_x + char_size / 2.0
         center_y = char_y + char_size / 2.0
+        anchor_bx = char_x + char_size / 2.0
+        anchor_by = char_y + char_size
+
+        # 0. Idle Breathing (Anchored at character bottom-center so chest expands upward)
+        if abs(self.breath_scale_y - 1.0) > 0.0005 or abs(self.breath_scale_x - 1.0) > 0.0005:
+            painter.translate(anchor_bx, anchor_by)
+            painter.scale(self.breath_scale_x, self.breath_scale_y)
+            painter.translate(-anchor_bx, -anchor_by)
+
+        # 0.5. Audio Head-Bop & Nodding (Rhythmic dip & tilt to music bass kick)
+        if abs(self.head_bop_y) > 0.05 or abs(self.head_bop_tilt) > 0.02:
+            painter.translate(0, self.head_bop_y)
+            painter.translate(center_x, center_y)
+            painter.rotate(self.head_bop_tilt)
+            painter.translate(-center_x, -center_y)
 
         # 1. Total Scale (Tactile Button-Press punch * Hover breathing scale * Bass beat pop)
         total_scale = self.button_press_scale * self.hover_scale * self.bass_pop_scale
@@ -934,8 +1170,34 @@ class OverlayWindow(QWidget):
             try:
                 painter.setClipRect(mouth_rect)
 
-                # Skip feedback symbol in full mouth cavity
-                if self.osd_timer > 0.0 and self.osd_symbol in ("forward", "backward"):
+                # 1. Sleep Mode Zzz animation (alternating caps loading screen style)
+                if self.drowsy_level > 0.35:
+                    self.visualizer.draw_background(painter, mouth_rect)
+
+                    zzz_frames = ["Z", "Zz", "ZzZ", "z", "zZ", "zZz"]
+                    frame_idx = int(time.time() * 2.2) % len(zzz_frames)
+                    zzz_text = zzz_frames[frame_idx]
+
+                    font_size = max(11, int(mouth_h * 0.38))
+                    zzz_font = QFont("Rajdhani", font_size, QFont.Weight.Bold)
+                    fm = QFontMetrics(zzz_font)
+                    text_w = fm.horizontalAdvance(zzz_text)
+
+                    bob_y = math.sin(time.time() * 2.8) * (1.5 * scale)
+                    tx = mouth_x + (mouth_w - text_w) / 2.0
+                    ty = mouth_y + (mouth_h + fm.ascent() - fm.descent()) / 2.0 + bob_y
+
+                    painter.setFont(zzz_font)
+                    # Soft dark drop shadow
+                    painter.setPen(QColor(0, 0, 0, 180))
+                    painter.drawText(QPointF(tx + 1, ty + 1), zzz_text)
+
+                    # Soft cyan-moonlight glow
+                    sleep_alpha = int(230 * min(1.0, (self.drowsy_level - 0.35) / 0.65))
+                    painter.setPen(QColor(165, 230, 255, sleep_alpha))
+                    painter.drawText(QPointF(tx, ty), zzz_text)
+                # 2. Skip feedback symbol in full mouth cavity
+                elif self.osd_timer > 0.0 and self.osd_symbol in ("forward", "backward"):
                     self.visualizer.draw_background(painter, mouth_rect)
 
                     alpha_ratio = min(1.0, self.osd_timer / 0.25)
@@ -1058,80 +1320,135 @@ class OverlayWindow(QWidget):
             painter.drawPixmap(ix, iy, self._cached_scaled_mute)
             painter.setOpacity(self.opacity_val)
 
-        # ==========================================================
-        # LAYER 3: EYE WHITES (Sclera Back Layer)
-        # ==========================================================
-        if self.hold_saturation < 1.0:
-            painter.setOpacity(self.opacity_val * (0.35 + 0.65 * self.hold_saturation))
-            painter.drawPixmap(char_x, char_y, self._cached_scaled_whites)
-            painter.setOpacity(self.opacity_val)
+        # Check combined eye closure: max of AFK sleep/drowsy level and spontaneous blink
+        effective_closed = max(self.drowsy_level, self.blink_progress)
+        has_closed_asset = hasattr(self, "_cached_scaled_talia_closed") and not self._cached_scaled_talia_closed.isNull()
+
+        if effective_closed >= 0.98 and has_closed_asset:
+            # ==========================================================
+            # EYES 100% FULLY CLOSED (AFK Sleep Mode / Blink Apex)
+            # Render user's hand-drawn closed-eye artwork directly over the body!
+            # Whites & pupils are completely covered / hidden.
+            # ==========================================================
+            if self.hold_saturation < 1.0:
+                if self._cached_scaled_talia_closed_gray.isNull():
+                    self._ensure_talia_closed_gray()
+                    self._cached_scaled_talia_closed_gray = self.talia_closed_gray.scaled(
+                        char_size, char_size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_closed_gray)
+                painter.setOpacity(self.opacity_val * self.hold_saturation)
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_closed)
+                painter.setOpacity(self.opacity_val)
+            else:
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_closed)
         else:
-            painter.drawPixmap(char_x, char_y, self._cached_scaled_whites)
+            # ==========================================================
+            # LAYER 3: EYE WHITES (Sclera Back Layer with 2.5D Parallax)
+            # ==========================================================
+            # 2.5D Parallax: Sclera cavity slightly shifts counter to pupil gaze for depth
+            depth_shift_x = int(-0.12 * self.current_offset_lx * scale)
+            depth_shift_y = int(-0.12 * self.current_offset_ly * scale)
+            sclera_x = char_x + depth_shift_x
+            sclera_y = char_y + depth_shift_y
 
-        # ==========================================================
-        # LAYER 2: MOVING PUPILS + HIGH-VOLUME CYBER NEON GLOW
-        # ==========================================================
-        pos_lx = int(char_x + (self.origin_lx + self.current_offset_lx) * scale)
-        pos_ly = int(char_y + (self.origin_ly + self.current_offset_ly) * scale)
-        pos_rx = int(char_x + (self.origin_rx + self.current_offset_rx) * scale)
-        pos_ry = int(char_y + (self.origin_ry + self.current_offset_ry) * scale)
+            if self.hold_saturation < 1.0:
+                painter.setOpacity(self.opacity_val * (0.35 + 0.65 * self.hold_saturation))
+                painter.drawPixmap(sclera_x, sclera_y, self._cached_scaled_whites)
+                painter.setOpacity(self.opacity_val)
+            else:
+                painter.drawPixmap(sclera_x, sclera_y, self._cached_scaled_whites)
 
-        # High volume iris bloom (> 50% volume)
-        if not self.eco_mode and self.current_volume > 0.50 and self.hold_saturation > 0.2:
-            glow_intensity = (self.current_volume - 0.50) / 0.50
-            glow_alpha = int(110 * glow_intensity * self.hold_saturation)
-            glow_color = QColor(0, 240, 255, glow_alpha)
+            # ==========================================================
+            # LAYER 2: MOVING PUPILS + HIGH-VOLUME CYBER NEON GLOW
+            # ==========================================================
+            pos_lx = int(char_x + (self.origin_lx + self.current_offset_lx) * scale)
+            pos_ly = int(char_y + (self.origin_ly + self.current_offset_ly) * scale)
+            pos_rx = int(char_x + (self.origin_rx + self.current_offset_rx) * scale)
+            pos_ry = int(char_y + (self.origin_ry + self.current_offset_ry) * scale)
 
-            pw_l = self._cached_scaled_pupil_l.width()
-            ph_l = self._cached_scaled_pupil_l.height()
-            center_lx = pos_lx + pw_l / 2.0
-            center_ly = pos_ly + ph_l / 2.0
+            # High volume iris bloom (> 50% volume)
+            if not self.eco_mode and self.current_volume > 0.50 and self.hold_saturation > 0.2:
+                glow_intensity = (self.current_volume - 0.50) / 0.50
+                glow_alpha = int(110 * glow_intensity * self.hold_saturation)
+                glow_color = QColor(0, 240, 255, glow_alpha)
 
-            pw_r = self._cached_scaled_pupil_r.width()
-            ph_r = self._cached_scaled_pupil_r.height()
-            center_rx = pos_rx + pw_r / 2.0
-            center_ry = pos_ry + ph_r / 2.0
+                pw_l = self._cached_scaled_pupil_l.width()
+                ph_l = self._cached_scaled_pupil_l.height()
+                center_lx = pos_lx + pw_l / 2.0
+                center_ly = pos_ly + ph_l / 2.0
 
-            painter.save()
-            painter.setPen(Qt.PenStyle.NoPen)
-            rad_l = max(pw_l, ph_l) * 0.85
-            grad_l = QRadialGradient(center_lx, center_ly, rad_l)
-            grad_l.setColorAt(0.0, glow_color)
-            grad_l.setColorAt(1.0, QColor(0, 240, 255, 0))
-            painter.setBrush(grad_l)
-            painter.drawEllipse(QPointF(center_lx, center_ly), rad_l, rad_l)
+                pw_r = self._cached_scaled_pupil_r.width()
+                ph_r = self._cached_scaled_pupil_r.height()
+                center_rx = pos_rx + pw_r / 2.0
+                center_ry = pos_ry + ph_r / 2.0
 
-            rad_r = max(pw_r, ph_r) * 0.85
-            grad_r = QRadialGradient(center_rx, center_ry, rad_r)
-            grad_r.setColorAt(0.0, glow_color)
-            grad_r.setColorAt(1.0, QColor(0, 240, 255, 0))
-            painter.setBrush(grad_r)
-            painter.drawEllipse(QPointF(center_rx, center_ry), rad_r, rad_r)
-            painter.restore()
+                painter.save()
+                painter.setPen(Qt.PenStyle.NoPen)
+                rad_l = max(pw_l, ph_l) * 0.85
+                grad_l = QRadialGradient(center_lx, center_ly, rad_l)
+                grad_l.setColorAt(0.0, glow_color)
+                grad_l.setColorAt(1.0, QColor(0, 240, 255, 0))
+                painter.setBrush(grad_l)
+                painter.drawEllipse(QPointF(center_lx, center_ly), rad_l, rad_l)
 
-        painter.drawPixmap(pos_lx, pos_ly, self._cached_scaled_pupil_l)
-        painter.drawPixmap(pos_rx, pos_ry, self._cached_scaled_pupil_r)
+                rad_r = max(pw_r, ph_r) * 0.85
+                grad_r = QRadialGradient(center_rx, center_ry, rad_r)
+                grad_r.setColorAt(0.0, glow_color)
+                grad_r.setColorAt(1.0, QColor(0, 240, 255, 0))
+                painter.setBrush(grad_r)
+                painter.drawEllipse(QPointF(center_rx, center_ry), rad_r, rad_r)
+                painter.restore()
 
-        # ==========================================================
-        # LAYER 1: TALIA MAIN SPRITE (Front Layer - Frames Mouth & Eyes)
-        # ==========================================================
+            painter.drawPixmap(pos_lx, pos_ly, self._cached_scaled_pupil_l)
+            painter.drawPixmap(pos_rx, pos_ry, self._cached_scaled_pupil_r)
 
-
-        if self.hold_saturation < 1.0:
-            # Powering down: Draw grayscale sprite base underneath, color sprite on top with fading opacity
-            if self._cached_scaled_talia_gray.isNull():
-                self._ensure_talia_gray()
-                self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
-                    char_size, char_size,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
+            # ==========================================================
+            # LAYER 2.5: PROCEDURAL EYELIDS (Partial Blink / Falling Asleep)
+            # ==========================================================
+            if effective_closed > 0.005 and not self._cached_scaled_eyelids.isNull():
+                painter.save()
+                p_clip = min(1.0, effective_closed)
+                # Left eye clip descends from Y=55 down to Y=140
+                clip_l = QRectF(
+                    char_x + 80 * scale,
+                    char_y + 55 * scale,
+                    200 * scale,
+                    (140 - 55) * p_clip * scale
                 )
-            painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_gray)
-            painter.setOpacity(self.opacity_val * self.hold_saturation)
-            painter.drawPixmap(char_x, char_y, self._cached_scaled_talia)
-            painter.setOpacity(self.opacity_val)
-        else:
-            painter.drawPixmap(char_x, char_y, self._cached_scaled_talia)
+                # Right eye clip descends from Y=55 down to Y=195
+                clip_r = QRectF(
+                    char_x + 320 * scale,
+                    char_y + 55 * scale,
+                    280 * scale,
+                    (195 - 55) * p_clip * scale
+                )
+                painter.setClipRect(clip_l)
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_eyelids)
+                painter.setClipRect(clip_r)
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_eyelids)
+                painter.restore()
+
+            # ==========================================================
+            # LAYER 1: TALIA MAIN SPRITE (Open Eyes Frame)
+            # ==========================================================
+            if self.hold_saturation < 1.0:
+                # Powering down: Draw grayscale sprite base underneath, color sprite on top with fading opacity
+                if self._cached_scaled_talia_gray.isNull():
+                    self._ensure_talia_gray()
+                    self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
+                        char_size, char_size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_gray)
+                painter.setOpacity(self.opacity_val * self.hold_saturation)
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_talia)
+                painter.setOpacity(self.opacity_val)
+            else:
+                painter.drawPixmap(char_x, char_y, self._cached_scaled_talia)
 
         # ==========================================================
         # LAYER 4: CRT MONITOR SCANLINES (Across Mouth Opening)
@@ -1160,6 +1477,13 @@ class OverlayWindow(QWidget):
             painter.fillRect(char_rect, fc)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
+        # 3. Sleep Mode: 50% Brightness Dimming (smoothly fades down to 50% when sleeping)
+        if self.drowsy_level > 0.005:
+            dim_alpha = int(128 * self.drowsy_level)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
+            painter.fillRect(char_rect, QColor(0, 0, 0, dim_alpha))
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
         # 5px White Outline Outside Talia on Hover (crisp outer perimeter, zero outline on mouth)
         if self.hover_outline_alpha > 0.005:
             painter.save()
@@ -1185,6 +1509,7 @@ class OverlayWindow(QWidget):
             painter.drawRect(char_x - 1, char_y - 1, char_size + 2, char_size + 2)
 
     def mousePressEvent(self, event):
+        self.last_user_activity = time.time()
         if self.is_shutting_down:
             event.accept()
             return
@@ -1399,6 +1724,7 @@ class OverlayWindow(QWidget):
             print("[ACTION] 3 Clicks on Talia: Controller Panel Opened.")
 
     def wheelEvent(self, event):
+        self.last_user_activity = time.time()
         if self.is_shutting_down:
             event.accept()
             return

@@ -74,6 +74,14 @@ class CyberAudioEngine:
         self.track_finished = False
         self.queue = []
 
+        # Real-time BPM & Bass Onset Tracking (Musical Grooving & Head-Bobbing)
+        self.estimated_bpm = 120.0
+        self.last_beat_time = 0.0
+        self.beat_intervals = []
+        self._prev_bass_energy = 0.0
+        self._prev_bass_diff = 0.0
+        self.is_beat_kick = False
+
         # Zero-freeze Stream Reuse & Predictive Preloader
         self._audio_lock = threading.Lock()
         self._preload_cache = {}
@@ -92,6 +100,14 @@ class CyberAudioEngine:
             self._shuffle_order.clear()
             self._shuffle_pos = -1
             self._trigger_preload_next()
+
+    def reset_bpm_tracking(self):
+        """Resets BPM detection state when a new song loads or user seeks."""
+        self.last_beat_time = 0.0
+        self.beat_intervals.clear()
+        self._prev_bass_energy = 0.0
+        self._prev_bass_diff = 0.0
+        self.is_beat_kick = False
 
     def set_eco_mode(self, enabled: bool):
         """Toggles Eco Mode (< 1% CPU target) by reducing internal sampling overhead."""
@@ -335,6 +351,7 @@ class CyberAudioEngine:
                 self.current_frame = 0
                 self.data = True  # Signal that track is loaded
                 self.track_finished = False
+                self.reset_bpm_tracking()
 
             needs_new_stream = (
                 self.stream is None or
@@ -551,6 +568,7 @@ class CyberAudioEngine:
                     self.current_frame = target_frame
                     self.head_buffer = None
                     self.track_finished = False
+                    self.reset_bpm_tracking()
                 except Exception as e:
                     print(f"[AUDIO ERROR] Seek failed: {e}")
 
@@ -664,6 +682,7 @@ class CyberAudioEngine:
         buf_peak = max(float(buf.max()), -float(buf.min()))
         is_idle = (self.audio_mode == "player" and not self.is_playing) or buf_peak < 0.001
         if is_idle:
+            self.is_beat_kick = False
             bars_peak = float(self.smoothed_bars.max()) if len(self.smoothed_bars) > 0 else 0.0
             if self.beat_energy > 0.002 or bars_peak > 0.002:
                 # Fast decay towards zero
@@ -683,10 +702,37 @@ class CyberAudioEngine:
         np.multiply(buf, self.hanning_window, out=self._windowed_buffer)
         fft = np.abs(np.fft.rfft(self._windowed_buffer))
 
-        # 2. Bass energy (20Hz - 250Hz)
+        # 2. Bass energy (20Hz - 250Hz) and Real-time BPM calculation
         bass_mag = float(np.mean(fft[1:8]))
         target_beat = min(1.0, bass_mag / 28.0)
         self.beat_energy = max(target_beat, self.beat_energy * 0.82)
+
+        import time as _time
+        now = _time.time()
+        diff = target_beat - self._prev_bass_energy
+        self.is_beat_kick = False
+
+        # Onset peak detection: sharp rise and refractory minimum 0.22s (max 270 BPM)
+        if diff > 0.05 and self._prev_bass_diff <= diff and (now - self.last_beat_time) > 0.22:
+            self.is_beat_kick = True
+            if self.last_beat_time > 0.0:
+                ibi = now - self.last_beat_time
+                # Normalize double-time or half-time intervals into musical range 75 - 175 BPM
+                while ibi < 0.34:  # > 176 BPM
+                    ibi *= 2.0
+                while ibi > 0.80:  # < 75 BPM
+                    ibi /= 2.0
+                self.beat_intervals.append(ibi)
+                if len(self.beat_intervals) > 10:
+                    self.beat_intervals.pop(0)
+                if len(self.beat_intervals) >= 3:
+                    med_ibi = float(np.median(self.beat_intervals))
+                    instant_bpm = 60.0 / med_ibi
+                    self.estimated_bpm += (instant_bpm - self.estimated_bpm) * 0.35
+            self.last_beat_time = now
+
+        self._prev_bass_diff = diff
+        self._prev_bass_energy = target_beat
 
         # 3. Logarithmic band grouping
         self.raw_bars.fill(0)

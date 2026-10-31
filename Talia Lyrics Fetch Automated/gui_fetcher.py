@@ -68,6 +68,8 @@ class BatchFetchWorker(QThread):
 
 
 class LyricsFetcherWindow(QWidget):
+    lyrics_saved = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Lyrics Fetcher")
@@ -364,11 +366,6 @@ class LyricsFetcherWindow(QWidget):
         btn_browse_cal = QPushButton("Browse File")
         btn_browse_cal.clicked.connect(self._browse_cal_file)
         hbox_file.addWidget(btn_browse_cal)
-
-        btn_smart_cal = QPushButton("Auto-Calibrate")
-        btn_smart_cal.setToolTip("Analyzes vocal entry frequencies (350-2800 Hz) and safely shifts only if genuinely delayed")
-        btn_smart_cal.clicked.connect(self._auto_calibrate_active_file)
-        hbox_file.addWidget(btn_smart_cal)
         layout.addLayout(hbox_file)
 
         # Interactive Audio Player & Tap-to-Sync Row
@@ -431,12 +428,6 @@ class LyricsFetcherWindow(QWidget):
         btn_fetch_verified.setToolTip("Fetches verified synced lyrics with strict duration proximity")
         btn_fetch_verified.clicked.connect(self._fetch_verified_lrc)
         hbox_cands.addWidget(btn_fetch_verified)
-
-        btn_auto_cal = QPushButton("Auto-Calibrate (Vocals)")
-        btn_auto_cal.setToolTip("Aligns timestamps automatically based on singing frequency detection")
-        btn_auto_cal.clicked.connect(self._auto_calibrate_active_file)
-        hbox_cands.addWidget(btn_auto_cal)
-
         layout.addLayout(hbox_cands)
 
         # Quick Offset Tuning Buttons + Direct Offset Input
@@ -716,6 +707,7 @@ class LyricsFetcherWindow(QWidget):
             self._load_cal_track(audio_path)
             self.lbl_cal_status.setText("Status: Saved (backup created)")
             self.lbl_cal_status.setStyleSheet("color: #4ade80;")
+            self.lyrics_saved.emit(os.path.normpath(lrc_path))
         except Exception as e:
             self.lbl_cal_status.setText(f"Status: Save error: {e}")
             self.lbl_cal_status.setStyleSheet("color: #f87171;")
@@ -850,6 +842,7 @@ class LyricsFetcherWindow(QWidget):
                 with open(save_path, "w", encoding="utf-8") as f:
                     f.write(content)
                 self._log(f"Saved custom LRC to: {save_path}")
+                self.lyrics_saved.emit(os.path.normpath(save_path))
             except Exception as e:
                 self._log(f"Failed to save custom LRC: {e}")
 
