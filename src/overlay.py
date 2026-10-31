@@ -1179,12 +1179,15 @@ class OverlayWindow(QWidget):
             try:
                 painter.setClipRect(mouth_rect)
 
-                # 1. Sleep Mode Zzz animation (alternating caps loading screen style)
+                # 1. Sleep Mode Zzz animation (alternating caps loading screen style: z, zz, zzz, zzz., zzz.., zzz...)
                 if self.drowsy_level > 0.35:
                     self.visualizer.draw_background(painter, mouth_rect)
 
-                    zzz_frames = ["Z", "Zz", "ZzZ...", "z", "zZ", "zZz..."]
-                    frame_idx = int(time.time() * 1.1) % len(zzz_frames)
+                    zzz_frames = [
+                        "Z", "Zz", "ZzZ", "ZzZ.", "ZzZ..", "ZzZ...",
+                        "z", "zZ", "zZz", "zZz.", "zZz..", "zZz...",
+                    ]
+                    frame_idx = int(time.time() * 1.6) % len(zzz_frames)
                     zzz_text = zzz_frames[frame_idx]
 
                     font_size = max(11, int(mouth_h * 0.38))
