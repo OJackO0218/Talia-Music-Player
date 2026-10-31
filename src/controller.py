@@ -198,6 +198,13 @@ def create_section_header(title: str) -> QWidget:
     return container
 
 
+class NoScrollComboBox(QComboBox):
+    """Dropdown that ignores mouse wheel events to prevent accidental value changes while scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
 class SettingsDialog(QDialog):
     """Clean, dedicated settings dialog for advanced lyrics, visualizer, and character configuration."""
 
@@ -314,7 +321,7 @@ class SettingsDialog(QDialog):
         lbl_font_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
         hbox_font.addWidget(lbl_font_title)
 
-        self.combo_font = QComboBox()
+        self.combo_font = NoScrollComboBox()
         self.combo_font.currentTextChanged.connect(self.panel.on_font_changed)
         hbox_font.addWidget(self.combo_font, 1)
 
@@ -335,7 +342,7 @@ class SettingsDialog(QDialog):
         lbl_lyric_col.setStyleSheet("color: #a1a1aa; font-weight: 600;")
         hbox_lyric_color.addWidget(lbl_lyric_col)
 
-        self.combo_lyric_color = QComboBox()
+        self.combo_lyric_color = NoScrollComboBox()
         for name in self.panel.lyric_presets.keys():
             self.combo_lyric_color.addItem(name)
         self.combo_lyric_color.addItem("Custom...")
@@ -398,7 +405,7 @@ class SettingsDialog(QDialog):
         lbl_vis_mode.setStyleSheet("color: #a1a1aa; font-weight: 600;")
         hbox_style.addWidget(lbl_vis_mode)
 
-        self.combo_mode = QComboBox()
+        self.combo_mode = NoScrollComboBox()
         self.combo_mode.addItems(["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"])
         self.combo_mode.currentTextChanged.connect(self.panel.on_vis_mode_changed)
         hbox_style.addWidget(self.combo_mode)
@@ -407,7 +414,7 @@ class SettingsDialog(QDialog):
         lbl_vis_theme.setStyleSheet("color: #a1a1aa; font-weight: 600;")
         hbox_style.addWidget(lbl_vis_theme)
 
-        self.combo_theme = QComboBox()
+        self.combo_theme = NoScrollComboBox()
         self.combo_theme.addItems(list(COLOR_THEMES.keys()))
         self.combo_theme.currentTextChanged.connect(self.panel.on_vis_theme_changed)
         hbox_style.addWidget(self.combo_theme)
@@ -958,7 +965,7 @@ class ControlPanel(QWidget):
         lbl_dl_folder.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
         hbox_dl_folder.addWidget(lbl_dl_folder)
 
-        self.combo_dl_folder = QComboBox()
+        self.combo_dl_folder = NoScrollComboBox()
         self.combo_dl_folder.setStyleSheet("""
             QComboBox {
                 background-color: #202024;

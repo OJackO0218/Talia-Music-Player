@@ -32,6 +32,10 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pyinstaller
 
+      - name: Pre-fetch static-ffmpeg binaries
+        run: |
+          python -c "import static_ffmpeg; static_ffmpeg.add_paths()"
+
       - name: Build Standalone Package
         run: |
           python tools/build_release.py

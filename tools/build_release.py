@@ -28,7 +28,15 @@ print("  TALIA CYBERPUNK VISUALIZER - LEAN RELEASE BUILDER")
 print("=======================================================")
 print(f"[*] Project root: {PROJECT_ROOT}")
 
-# 1. Clean previous build staging
+# 1. Ensure static_ffmpeg binaries are fetched before packaging
+print("[*] Ensuring static_ffmpeg binaries are fetched before packaging...")
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception as e:
+    print(f"[!] Warning fetching static_ffmpeg: {e}")
+
+# Clean previous build staging
 if os.path.exists(STAGE_DIR):
     shutil.rmtree(STAGE_DIR, ignore_errors=True)
 os.makedirs(DIST_DIR, exist_ok=True)
@@ -127,6 +135,19 @@ fetcher_dir = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
 dest_fetcher = os.path.join(APP_STAGE, "Talia Lyrics Fetch Automated")
 if os.path.exists(fetcher_dir):
     shutil.copytree(fetcher_dir, dest_fetcher, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+# Ensure ffmpeg.exe and ffprobe.exe are guaranteed present in the package
+target_ffmpeg_bin = os.path.join(APP_STAGE, "_internal", "static_ffmpeg", "bin", "win32")
+os.makedirs(target_ffmpeg_bin, exist_ok=True)
+ffmpeg_bin = shutil.which("ffmpeg")
+if ffmpeg_bin and os.path.exists(ffmpeg_bin):
+    bin_dir = os.path.dirname(os.path.abspath(ffmpeg_bin))
+    for fname in ["ffmpeg.exe", "ffprobe.exe", "installed.crumb"]:
+        src_f = os.path.join(bin_dir, fname)
+        dst_f = os.path.join(target_ffmpeg_bin, fname)
+        if os.path.exists(src_f) and not os.path.exists(dst_f):
+            print(f"[+] Explicitly bundling {fname} into release: {dst_f}")
+            shutil.copy2(src_f, dst_f)
 
 # Write clean default settings (matching user's preferred layout & styling)
 import json

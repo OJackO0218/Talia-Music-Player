@@ -17,15 +17,47 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 _yt_dlp = None
 
+def _find_ffmpeg_dir() -> Optional[str]:
+    """Locates and returns the directory containing ffmpeg and ffprobe binaries."""
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+    except Exception as e:
+        print(f"[FFMPEG INIT] Note: {e}")
+
+    import shutil
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if ffmpeg_exe and os.path.exists(ffmpeg_exe):
+        return os.path.dirname(os.path.abspath(ffmpeg_exe))
+
+    # Search PyInstaller packaged directories
+    candidates = []
+    if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            candidates.append(os.path.join(sys._MEIPASS, "static_ffmpeg", "bin", "win32"))
+            candidates.append(os.path.join(sys._MEIPASS, "bin", "win32"))
+        exe_dir = os.path.dirname(sys.executable)
+        candidates.append(os.path.join(exe_dir, "_internal", "static_ffmpeg", "bin", "win32"))
+        candidates.append(os.path.join(exe_dir, "static_ffmpeg", "bin", "win32"))
+        candidates.append(exe_dir)
+
+    # Search local project directories
+    candidates.append(os.path.join(PROJECT_ROOT, "assets", "bin"))
+    candidates.append(os.path.join(PROJECT_ROOT, "_internal", "static_ffmpeg", "bin", "win32"))
+
+    for c in candidates:
+        if os.path.exists(os.path.join(c, "ffmpeg.exe")) or os.path.exists(os.path.join(c, "ffmpeg")):
+            if c not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = os.pathsep.join([c, os.environ.get("PATH", "")])
+            return c
+
+    return None
+
 def _get_yt_dlp():
     """Lazily loads static_ffmpeg and yt_dlp on first download/search request."""
     global _yt_dlp
     if _yt_dlp is None:
-        try:
-            import static_ffmpeg
-            static_ffmpeg.add_paths()
-        except Exception as e:
-            print(f"[FFMPEG INIT] Note: {e}")
+        _find_ffmpeg_dir()
         import yt_dlp
         _yt_dlp = yt_dlp
     return _yt_dlp
@@ -133,6 +165,7 @@ def download_and_sync_lrc(
             if progress_cb:
                 progress_cb("Converting to Opus 160kbps...")
 
+    ffmpeg_dir = _find_ffmpeg_dir()
     ydl_opts = {
         "format": "bestaudio/best",
         "postprocessors": [{
@@ -146,6 +179,8 @@ def download_and_sync_lrc(
         "no_warnings": True,
         "noplaylist": True,
     }
+    if ffmpeg_dir:
+        ydl_opts["ffmpeg_location"] = ffmpeg_dir
 
     ydl_mod = _get_yt_dlp()
     with ydl_mod.YoutubeDL(ydl_opts) as ydl:
