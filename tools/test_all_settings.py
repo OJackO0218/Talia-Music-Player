@@ -177,8 +177,47 @@ def run_audit():
             with open(settings_file, "w", encoding="utf-8") as f:
                 f.write(original_settings)
 
+    # 8. Spotify-style Balanced Shuffle & History Navigation
+    print("\n--- TEST 8: Spotify-style Balanced Shuffle ---")
+    assert not engine.shuffle
+    panel.toggle_shuffle()
+    assert engine.shuffle is True
+    assert len(engine._shuffle_order) == len(engine.playlist)
+    assert sorted(engine._shuffle_order) == list(range(len(engine.playlist)))
+
+    # Verify no back-to-back duplicate artist collisions where avoidable
+    keys = [engine._extract_cluster_key(engine.playlist[i]) for i in engine._shuffle_order]
+    for i in range(len(keys) - 1):
+        # Unless one artist occupies > 50% of the playlist, consecutive items must differ
+        if keys[i] == keys[i + 1]:
+            assert keys.count(keys[i]) > len(keys) / 2
+
+    # Verify next track navigation in shuffle mode
+    initial_shuffle_pos = engine._shuffle_pos
+    expected_next_idx = engine._shuffle_order[(initial_shuffle_pos + 1) % len(engine._shuffle_order)]
+    engine.next_track()
+    assert engine.current_index == expected_next_idx
+    assert engine._shuffle_pos == (initial_shuffle_pos + 1) % len(engine._shuffle_order)
+
+    # Verify previous track navigation (history traversal)
+    engine.prev_track()
+    assert engine._shuffle_pos == initial_shuffle_pos
+    assert engine.current_index == engine._shuffle_order[initial_shuffle_pos]
+
+    # Verify manual play_index aligns shuffle position
+    if len(engine.playlist) > 2:
+        target_idx = engine._shuffle_order[-1]
+        engine.play_index(target_idx)
+        assert engine.current_index == target_idx
+        assert engine._shuffle_pos == len(engine._shuffle_order) - 1
+
+    panel.toggle_shuffle()
+    assert engine.shuffle is False
+    assert len(engine._shuffle_order) == 0
+    print("[PASS] Spotify-style balanced shuffle and history navigation verified.")
+
     print("\n==========================================")
-    print("  ALL 7 AUDIT SECTIONS PASSED WITH 0 ERRORS")
+    print("  ALL 8 AUDIT SECTIONS PASSED WITH 0 ERRORS")
     print("==========================================")
 
 if __name__ == "__main__":

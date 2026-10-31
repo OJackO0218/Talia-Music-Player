@@ -68,14 +68,30 @@ class CyberAudioEngine:
         self.folder_path = ""
         self.playlist = []
         self.current_index = -1
-        self.shuffle = False
+        self._shuffle = False
+        self._shuffle_order = []
+        self._shuffle_pos = -1
         self.track_finished = False
         self.queue = []
 
         # Zero-freeze Stream Reuse & Predictive Preloader
         self._audio_lock = threading.Lock()
         self._preload_cache = {}
-        self._next_shuffle_idx = None
+
+    @property
+    def shuffle(self) -> bool:
+        return self._shuffle
+
+    @shuffle.setter
+    def shuffle(self, enabled: bool):
+        self._shuffle = bool(enabled)
+        if self._shuffle:
+            self.rebuild_shuffle_order(starting_index=self.current_index)
+            self._trigger_preload_next()
+        else:
+            self._shuffle_order.clear()
+            self._shuffle_pos = -1
+            self._trigger_preload_next()
 
     def set_eco_mode(self, enabled: bool):
         """Toggles Eco Mode (< 1% CPU target) by reducing internal sampling overhead."""
@@ -139,7 +155,6 @@ class CyberAudioEngine:
         """Sets the active playlist directory and refreshes tracks."""
         self.folder_path = folder_path
         self._preload_cache.clear()
-        self._next_shuffle_idx = None
         self.refresh_playlist()
 
     def add_to_queue(self, track_path: str) -> bool:
@@ -166,10 +181,87 @@ class CyberAudioEngine:
         """Clears all upcoming queued songs."""
         self.queue.clear()
 
+    def _extract_cluster_key(self, path: str) -> str:
+        """Extracts artist or folder cluster key for Spotify-style balanced shuffling."""
+        if not path:
+            return "unknown"
+        fname = os.path.splitext(os.path.basename(path))[0]
+        if " - " in fname:
+            part = fname.split(" - ")[0].strip().lower()
+            import re
+            part = re.sub(r'^\d+[\.\s_-]+', '', part).strip()
+            return part or "unknown"
+        parent = os.path.basename(os.path.dirname(path)).strip().lower()
+        return parent or "unknown"
+
+    def rebuild_shuffle_order(self, starting_index: int = -1):
+        """
+        Builds a balanced Spotify-style shuffle order using distributed dithering.
+        Spreads songs by the same artist/folder evenly across the timeline with jitter,
+        preventing back-to-back clusters while keeping natural variety.
+        """
+        if not self.playlist:
+            self._shuffle_order = []
+            self._shuffle_pos = -1
+            return
+
+        n = len(self.playlist)
+        if n == 1:
+            self._shuffle_order = [0]
+            self._shuffle_pos = 0
+            return
+
+        # 1. Group track indices by artist/folder
+        clusters = {}
+        for idx, path in enumerate(self.playlist):
+            key = self._extract_cluster_key(path)
+            if key not in clusters:
+                clusters[key] = []
+            clusters[key].append(idx)
+
+        # 2. Distribute each cluster across [0.0, 1.0) timeline with dither jitter
+        items = []
+        for key, indices in clusters.items():
+            k = len(indices)
+            shuffled = list(indices)
+            random.shuffle(shuffled)
+            step = 1.0 / k
+            offset = random.uniform(0.0, step)
+            for i, track_idx in enumerate(shuffled):
+                base_pos = (i * step) + offset
+                jitter = random.uniform(-0.15 * step, 0.15 * step)
+                pos = (base_pos + jitter) % 1.0
+                items.append((pos, track_idx, key))
+
+        # Sort all tracks by timeline position
+        items.sort(key=lambda x: x[0])
+        order = [x[1] for x in items]
+        keys = [x[2] for x in items]
+
+        # 3. Anti-consecutive collision pass (prevent same artist playing consecutively)
+        for i in range(len(order) - 1):
+            if keys[i] == keys[i + 1]:
+                for j in range(i + 2, min(i + 8, len(order))):
+                    if keys[j] != keys[i]:
+                        order[i + 1], order[j] = order[j], order[i + 1]
+                        keys[i + 1], keys[j] = keys[j], keys[i + 1]
+                        break
+
+        # 4. If starting_index specified, place it at the beginning of the order
+        if 0 <= starting_index < n and starting_index in order:
+            idx_in_order = order.index(starting_index)
+            order.pop(idx_in_order)
+            order.insert(0, starting_index)
+
+        self._shuffle_order = order
+        self._shuffle_pos = 0
+
     def refresh_playlist(self):
         """Recursively scans the folder and all subfolders (Foobar2000 structure) for supported audio files."""
         if not self.folder_path or not os.path.exists(self.folder_path):
             self.playlist = []
+            self._shuffle_order.clear()
+            self._shuffle_pos = -1
             return
 
         current_track = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
@@ -196,11 +288,21 @@ class CyberAudioEngine:
         else:
             self.current_index = -1
 
+        if self._shuffle:
+            self.rebuild_shuffle_order(starting_index=self.current_index)
+
     def play_index(self, idx: int) -> bool:
         """Loads and plays the track at the specified index."""
         if not self.playlist or idx < 0 or idx >= len(self.playlist):
             return False
         self.current_index = idx
+        if self._shuffle:
+            if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
+                self.rebuild_shuffle_order(starting_index=idx)
+            elif idx in self._shuffle_order:
+                self._shuffle_pos = self._shuffle_order.index(idx)
+            else:
+                self.rebuild_shuffle_order(starting_index=idx)
         path = self.playlist[idx]
         return self.load_file(path, auto_play=True)
 
@@ -281,11 +383,11 @@ class CyberAudioEngine:
         if self.queue:
             next_track_path = self.queue[0]
         elif len(self.playlist) > 1:
-            if self.shuffle:
-                if self._next_shuffle_idx is None or self._next_shuffle_idx == self.current_index:
-                    candidates = [i for i in range(len(self.playlist)) if i != self.current_index]
-                    self._next_shuffle_idx = random.choice(candidates) if candidates else 0
-                next_track_path = self.playlist[self._next_shuffle_idx]
+            if self._shuffle:
+                if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
+                    self.rebuild_shuffle_order(starting_index=self.current_index)
+                next_pos = (self._shuffle_pos + 1) % len(self._shuffle_order)
+                next_track_path = self.playlist[self._shuffle_order[next_pos]]
             else:
                 next_track_path = self.playlist[(self.current_index + 1) % len(self.playlist)]
 
@@ -399,13 +501,19 @@ class CyberAudioEngine:
         # 2. Normal sequential / shuffle playback
         if not self.playlist:
             return
-        if self.shuffle:
-            if self._next_shuffle_idx is not None and 0 <= self._next_shuffle_idx < len(self.playlist):
-                idx = self._next_shuffle_idx
-                self._next_shuffle_idx = None
-            else:
-                candidates = [i for i in range(len(self.playlist)) if i != self.current_index]
-                idx = random.choice(candidates) if candidates else 0
+        if self._shuffle:
+            if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
+                self.rebuild_shuffle_order(starting_index=self.current_index)
+
+            self._shuffle_pos += 1
+            if self._shuffle_pos >= len(self._shuffle_order):
+                last_idx = self._shuffle_order[-1] if self._shuffle_order else -1
+                self.rebuild_shuffle_order()
+                if len(self._shuffle_order) > 1 and self._shuffle_order[0] == last_idx:
+                    self._shuffle_order[0], self._shuffle_order[1] = self._shuffle_order[1], self._shuffle_order[0]
+                self._shuffle_pos = 0
+
+            idx = self._shuffle_order[self._shuffle_pos]
         else:
             idx = (self.current_index + 1) % len(self.playlist)
         self.play_index(idx)
@@ -421,7 +529,16 @@ class CyberAudioEngine:
         if self.get_position() > 3.0:
             self.seek(0)
         else:
-            idx = (self.current_index - 1) % len(self.playlist)
+            if self._shuffle:
+                if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
+                    self.rebuild_shuffle_order(starting_index=self.current_index)
+                if self._shuffle_pos > 0:
+                    self._shuffle_pos -= 1
+                else:
+                    self._shuffle_pos = len(self._shuffle_order) - 1
+                idx = self._shuffle_order[self._shuffle_pos]
+            else:
+                idx = (self.current_index - 1) % len(self.playlist)
             self.play_index(idx)
 
     def seek(self, seconds: float):
