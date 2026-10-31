@@ -33,7 +33,12 @@ _temp*
 assets_eyes/
 assets/sounds/legacy/
 build_stage/
-music/Downloaded Songs/
+# Music tracking rule: Only track Cyberpunk Edgerunners and empty Downloaded Songs folder
+music/*
+!music/Cyberpunk Edgerunners/
+!music/Downloaded Songs/
+music/Downloaded Songs/*
+!music/Downloaded Songs/.gitkeep
 
 # OS generated files
 Thumbs.db

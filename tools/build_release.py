@@ -128,7 +128,12 @@ if os.path.exists(ASSETS_DIR):
         if os.path.exists(sub_src):
             shutil.copytree(sub_src, sub_dest, dirs_exist_ok=True)
 if os.path.exists(MUSIC_DIR):
-    shutil.copytree(MUSIC_DIR, dest_music, dirs_exist_ok=True)
+    # Only bundle Cyberpunk Edgerunners music and an empty Downloaded Songs folder in release package
+    cp_src = os.path.join(MUSIC_DIR, "Cyberpunk Edgerunners")
+    cp_dest = os.path.join(dest_music, "Cyberpunk Edgerunners")
+    if os.path.exists(cp_src):
+        shutil.copytree(cp_src, cp_dest, dirs_exist_ok=True)
+    os.makedirs(os.path.join(dest_music, "Downloaded Songs"), exist_ok=True)
 
 # Copy automated lyrics fetcher
 fetcher_dir = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
