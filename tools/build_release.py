@@ -40,7 +40,7 @@ cmd = [
     "--clean",
     "--windowed",
     "--onedir",
-    "--uac-admin",
+    "--optimize", "1",
     "--name", "Talia",
     "--distpath", STAGE_DIR,
     "--icon", ICON_ICO,
@@ -94,6 +94,9 @@ cmd = [
     "--exclude-module", "pandas",
     "--exclude-module", "matplotlib",
     "--exclude-module", "tkinter",
+    "--exclude-module", "setuptools",
+    "--exclude-module", "pkg_resources",
+    "--exclude-module", "werkzeug",
     MAIN_PY
 ]
 

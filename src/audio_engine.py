@@ -8,7 +8,6 @@ import threading
 import ctypes
 import sounddevice as sd
 import soundfile as sf
-import soundcard as sc
 import numpy as np
 
 from config import (
@@ -117,6 +116,7 @@ class CyberAudioEngine:
         """Real-time WASAPI loopback capture worker thread."""
         ctypes.windll.ole32.CoInitialize(None)
         try:
+            import soundcard as sc
             spk = sc.default_speaker()
             mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
             with mic.recorder(samplerate=48000, blocksize=1024) as recorder:

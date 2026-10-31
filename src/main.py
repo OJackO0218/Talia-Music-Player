@@ -36,8 +36,8 @@ except Exception:
 
 
 def main():
-    # 0. Automatically elevate and run as Administrator if not already elevated
-    if "--no-admin" not in sys.argv:
+    # Elevate to Administrator only if explicitly requested via --admin flag
+    if "--admin" in sys.argv:
         try:
             is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
         except Exception:
@@ -45,12 +45,13 @@ def main():
 
         if not is_admin:
             if getattr(sys, "frozen", False):
-                args = " ".join([f'"{a}"' for a in sys.argv[1:]])
+                args = " ".join([f'"{a}"' for a in sys.argv[1:] if a != "--admin"])
                 ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args, None, 1)
             else:
                 python_exe = sys.executable
                 script = os.path.abspath(__file__)
-                ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, f'"{script}"', None, 1)
+                args = " ".join([f'"{a}"' for a in sys.argv[1:] if a != "--admin"])
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, f'"{script}" {args}', None, 1)
             sys.exit(0)
 
     # Ensure only 1 instance of Talia runs at a time (prevents orphaned background instances)

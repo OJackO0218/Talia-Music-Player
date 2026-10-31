@@ -257,17 +257,8 @@ class OverlayWindow(QWidget):
 
         # Layer 1: Talia Main Sprite (Front)
         self.talia_sprite = QPixmap(p3_path)
-
-        # Grayscale version of Talia Sprite for 4s power-down shutdown effect
-        talia_pil = Image.open(p3_path).convert("RGBA")
-        r, g, b, a = talia_pil.split()
-        gray_rgb = ImageOps.grayscale(talia_pil.convert("RGB"))
-        gray_rgba = Image.merge("RGBA", (gray_rgb, gray_rgb, gray_rgb, a))
-        gray_np = np.array(gray_rgba)
-        qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
-        self.talia_sprite_gray = QPixmap.fromImage(qimg_gray.copy())
-
-
+        self.talia_sprite_gray = None
+        self.talia_wide = None
 
         # Layer 3: Eye Whites (Back)
         self.whites = QPixmap(p2_path)
@@ -311,19 +302,36 @@ class OverlayWindow(QWidget):
 
         self._apply_pupil_saturation()
 
-        # Build 16:9 widescreen cockpit bezel edition
-        wide_pil = Image.new("RGBA", (1920, 1080), (10, 10, 15, 255))
-        talia_1080 = talia_pil.resize((1080, 1080), Image.Resampling.LANCZOS)
-        wide_pil.paste(talia_1080, (420, 0), talia_1080)
-
-        wide_np = np.array(wide_pil)
-        qimg_wide = QImage(wide_np.data, 1920, 1080, 1920 * 4, QImage.Format.Format_RGBA8888)
-        self.talia_wide = QPixmap.fromImage(qimg_wide.copy())
-
         # Invalidate scaled pixmap cache
         self._last_scaled_size = -1
         trim_process_memory()
         self.update()
+
+    def _ensure_talia_gray(self):
+        """Lazily generates grayscale Talia sprite on demand when powering down."""
+        if self.talia_sprite_gray is None or self.talia_sprite_gray.isNull():
+            p3_path = os.path.join(EYE_PARTS_DIR, "part3_talia_main_sprite.png")
+            talia_pil = Image.open(p3_path).convert("RGBA")
+            r, g, b, a = talia_pil.split()
+            gray_rgb = ImageOps.grayscale(talia_pil.convert("RGB"))
+            gray_rgba = Image.merge("RGBA", (gray_rgb, gray_rgb, gray_rgb, a))
+            gray_np = np.array(gray_rgba)
+            qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
+            self.talia_sprite_gray = QPixmap.fromImage(qimg_gray.copy())
+        return self.talia_sprite_gray
+
+    def _ensure_talia_wide(self):
+        """Lazily builds widescreen 16:9 bezel on demand when widescreen mode is enabled."""
+        if self.talia_wide is None or self.talia_wide.isNull():
+            p3_path = os.path.join(EYE_PARTS_DIR, "part3_talia_main_sprite.png")
+            talia_pil = Image.open(p3_path).convert("RGBA")
+            wide_pil = Image.new("RGBA", (1920, 1080), (10, 10, 15, 255))
+            talia_1080 = talia_pil.resize((1080, 1080), Image.Resampling.LANCZOS)
+            wide_pil.paste(talia_1080, (420, 0), talia_1080)
+            wide_np = np.array(wide_pil)
+            qimg_wide = QImage(wide_np.data, 1920, 1080, 1920 * 4, QImage.Format.Format_RGBA8888)
+            self.talia_wide = QPixmap.fromImage(qimg_wide.copy())
+        return self.talia_wide
 
     def _apply_pupil_saturation(self):
         """
@@ -836,11 +844,13 @@ class OverlayWindow(QWidget):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
-        self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
-            char_size, char_size,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
+        if self.hold_saturation < 1.0:
+            self._ensure_talia_gray()
+            self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
+                char_size, char_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
 
 
         w_l = max(1, int(self.pupil_l.width() * scale))
@@ -867,6 +877,7 @@ class OverlayWindow(QWidget):
 
         MARGIN = 16
         if self.use_widescreen:
+            self._ensure_talia_wide()
             char_size = self.height() - 2 * MARGIN
             char_x = (self.width() - char_size) // 2
             char_y = MARGIN
@@ -1108,6 +1119,13 @@ class OverlayWindow(QWidget):
 
         if self.hold_saturation < 1.0:
             # Powering down: Draw grayscale sprite base underneath, color sprite on top with fading opacity
+            if self._cached_scaled_talia_gray.isNull():
+                self._ensure_talia_gray()
+                self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
+                    char_size, char_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
             painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_gray)
             painter.setOpacity(self.opacity_val * self.hold_saturation)
             painter.drawPixmap(char_x, char_y, self._cached_scaled_talia)

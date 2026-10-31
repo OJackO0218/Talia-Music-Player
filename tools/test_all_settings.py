@@ -29,6 +29,12 @@ from lyrics_overlay import LyricsOverlayWindow
 from lyrics_manager import LyricsManager
 
 def run_audit():
+    settings_file = os.path.join(PROJECT_ROOT, "settings.json")
+    original_settings = None
+    if os.path.exists(settings_file):
+        with open(settings_file, "r", encoding="utf-8") as f:
+            original_settings = f.read()
+
     print("Initializing QApplication and fonts...")
     app = QApplication.instance() or QApplication(sys.argv)
     init_app_fonts()
@@ -162,8 +168,14 @@ def run_audit():
 
     # 7. Settings persistence
     print("\n--- TEST 7: Settings Persistence ---")
-    panel.save_settings_action()
-    print("[PASS] Settings saved successfully.")
+    try:
+        panel.save_settings_action()
+        assert os.path.exists(settings_file)
+        print("[PASS] Settings saved successfully.")
+    finally:
+        if original_settings is not None:
+            with open(settings_file, "w", encoding="utf-8") as f:
+                f.write(original_settings)
 
     print("\n==========================================")
     print("  ALL 7 AUDIT SECTIONS PASSED WITH 0 ERRORS")

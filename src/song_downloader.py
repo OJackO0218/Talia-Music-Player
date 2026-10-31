@@ -15,12 +15,20 @@ from typing import List, Dict, Optional, Tuple, Callable
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-import yt_dlp
-try:
-    import static_ffmpeg
-    static_ffmpeg.add_paths()
-except Exception as e:
-    print(f"[FFMPEG INIT] Note: {e}")
+_yt_dlp = None
+
+def _get_yt_dlp():
+    """Lazily loads static_ffmpeg and yt_dlp on first download/search request."""
+    global _yt_dlp
+    if _yt_dlp is None:
+        try:
+            import static_ffmpeg
+            static_ffmpeg.add_paths()
+        except Exception as e:
+            print(f"[FFMPEG INIT] Note: {e}")
+        import yt_dlp
+        _yt_dlp = yt_dlp
+    return _yt_dlp
 
 # Resolve path to Talia Lyrics Fetch Automated
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -70,7 +78,8 @@ def search_youtube(query: str, limit: int = 5) -> List[Dict]:
     }
 
     results = []
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    ydl_mod = _get_yt_dlp()
+    with ydl_mod.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(search_term, download=False)
         entries = info.get("entries", [info]) if "entries" in info else [info]
         for e in entries:
@@ -138,7 +147,8 @@ def download_and_sync_lrc(
         "noplaylist": True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    ydl_mod = _get_yt_dlp()
+    with ydl_mod.YoutubeDL(ydl_opts) as ydl:
         meta = ydl.extract_info(video_url, download=True)
         title = meta.get("title", "Track")
 
