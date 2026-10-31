@@ -145,8 +145,9 @@ class OverlayWindow(QWidget):
         self.tilt_amplitude = 0.0  # Current dynamic groove tilt in degrees
         self.bass_groove_activity = 0.0  # Smooth 0.0 to 1.0 activity gate (only bops when punchy bass is present)
 
-        # Tier 1 Live2D: Drowsy AFK Idle State (after 1 minute of inactivity)
+        # Tier 1 Live2D: Drowsy AFK Idle State (after 30s AFK or 1 minute of no music)
         self.last_user_activity = time.time()
+        self.last_music_active_time = time.time()
         self.drowsy_level = 0.0    # 0.0 = wide awake, 1.0 = fully drowsy (sleepy half-closed eyes)
         self.is_drowsy = False
 
@@ -884,23 +885,31 @@ class OverlayWindow(QWidget):
             self.blink_progress = 0.0
 
         # ==========================================================
-        # TIER 1 LIVE2D: AFK SLEEP / DROWSY STATE
-        # (Only sleeps after 30s of AFK when NO music is playing)
+        # TIER 1 LIVE2D: SLEEP / DROWSY STATE
+        # - AFK (no mouse movement): Sleeps after 30 seconds
+        # - Moving mouse but no music from Talia: Sleeps after 1 minute (60s)
+        # - Music actively playing: Never sleeps (stays awake & alert)
         # ==========================================================
-        idle_seconds = time.time() - self.last_user_activity
         if is_audio_active:
             # Active music keeps Talia awake and alert!
+            self.last_music_active_time = time.time()
             self.last_user_activity = time.time()
             self.is_drowsy = False
             self.drowsy_level = max(0.0, self.drowsy_level - 0.08)
-        elif idle_seconds >= 30.0:
-            self.is_drowsy = True
-            # Smooth ease into 100% closed sleep state (takes ~1.5s)
-            self.drowsy_level = min(1.0, self.drowsy_level + 0.012)
         else:
-            self.is_drowsy = False
-            # Snappy alert wake up
-            self.drowsy_level = max(0.0, self.drowsy_level - 0.06)
+            idle_seconds = time.time() - self.last_user_activity
+            no_music_seconds = time.time() - self.last_music_active_time
+
+            # Sleep if AFK >= 30s OR no music from Talia for >= 60s
+            should_sleep = (idle_seconds >= 30.0) or (no_music_seconds >= 60.0)
+            if should_sleep:
+                self.is_drowsy = True
+                # Smooth ease into 100% closed sleep state (takes ~1.5s)
+                self.drowsy_level = min(1.0, self.drowsy_level + 0.012)
+            else:
+                self.is_drowsy = False
+                # Snappy alert wake up
+                self.drowsy_level = max(0.0, self.drowsy_level - 0.06)
 
         # Slow down breathing slightly when drowsy (from 4.0s to 5.8s cycle)
         breath_cycle_sec = 4.0 + 1.8 * self.drowsy_level
@@ -1510,6 +1519,7 @@ class OverlayWindow(QWidget):
 
     def mousePressEvent(self, event):
         self.last_user_activity = time.time()
+        self.last_music_active_time = time.time()
         if self.is_shutting_down:
             event.accept()
             return
@@ -1725,6 +1735,7 @@ class OverlayWindow(QWidget):
 
     def wheelEvent(self, event):
         self.last_user_activity = time.time()
+        self.last_music_active_time = time.time()
         if self.is_shutting_down:
             event.accept()
             return
