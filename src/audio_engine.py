@@ -266,7 +266,7 @@ class CyberAudioEngine:
 
             # Trigger background preload for next track (max 1 track, 15s head)
             self._trigger_preload_next()
-            trim_process_memory()
+            trim_process_memory(force_gc=False)
             return True
         except Exception as e:
             print(f"[AUDIO ERROR] Could not open {file_path}: {e}")

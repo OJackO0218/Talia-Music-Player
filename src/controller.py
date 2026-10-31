@@ -6,12 +6,12 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QScrollArea, QFrame, QApplication, QColorDialog,
     QLineEdit, QMenu, QTextEdit, QPlainTextEdit, QDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QIcon, QColor, QAction
+from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QSize
+from PyQt6.QtGui import QIcon, QColor, QAction, QFont, QFontMetrics, QPainter, QPixmap
 
 from config import (
     user32, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_CONTROL, VK_OEM_4, VK_OEM_6, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    save_settings, PROJECT_ROOT, ICON_PATH, FONTS_DIR, trim_process_memory
+    save_settings, PROJECT_ROOT, ICON_PATH, FONTS_DIR, PNGS_DIR, trim_process_memory
 )
 from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
@@ -509,6 +509,150 @@ class SettingsDialog(QDialog):
         event.ignore()
 
 
+class CyberScrollingTrackLabel(QWidget):
+    """
+    High-performance scrolling track title label using Rajdhani font.
+    Features marquee animation when text overflows, skip forward/backward flash indicators,
+    and automatic timer shutdown when idle or hidden for 0.0% CPU overhead.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.full_text = "No track loaded"
+        self.scroll_x = 0.0
+        self.scroll_speed = 36.0  # px per second
+        self.pause_time = 1.6     # seconds to pause at start and end
+        self.pause_counter = 1.6
+        self.is_scrolling = False
+        self.symbol_mode = None   # None, "forward", or "backward"
+        self.symbol_timer = 0.0   # seconds remaining for symbol display
+
+        # Load forward/backward symbol pixmaps
+        self.icon_forward = QPixmap(os.path.join(PNGS_DIR, "icon_forward.png"))
+        self.icon_backward = QPixmap(os.path.join(PNGS_DIR, "icon_backward.png"))
+
+        self.setFixedHeight(26)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._on_tick)
+        self.timer.setInterval(33)  # 30 FPS smooth scrolling
+
+        # Styled Rajdhani Font
+        self.font = QFont("Rajdhani", 12, QFont.Weight.Bold)
+        self.font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.5)
+
+    def text(self) -> str:
+        return self.full_text
+
+    def setText(self, text: str):
+        cleaned = text.strip() if text else "No track loaded"
+        if cleaned != self.full_text:
+            self.full_text = cleaned
+            self.scroll_x = 0.0
+            self.pause_counter = self.pause_time
+            self._check_scroll_needed()
+            self.update()
+
+    def trigger_symbol(self, direction: str):
+        """Displays the fast-forward or backward symbol for 2.2 seconds."""
+        self.symbol_mode = direction  # 'forward' or 'backward'
+        self.symbol_timer = 2.2
+        if not self.timer.isActive() and self.isVisible():
+            self.timer.start(33)
+        self.update()
+
+    def _check_scroll_needed(self):
+        metrics = QFontMetrics(self.font)
+        text_w = metrics.horizontalAdvance(self.full_text)
+        prefix_w = 24 if self.symbol_mode else 4
+        avail_w = self.width() - prefix_w
+        if text_w > avail_w and self.isVisible():
+            self.is_scrolling = True
+            if not self.timer.isActive():
+                self.timer.start(33)
+        else:
+            self.is_scrolling = False
+            self.scroll_x = 0.0
+            if self.symbol_timer <= 0.0:
+                self.timer.stop()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._check_scroll_needed()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._check_scroll_needed()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.timer.stop()
+
+    def _on_tick(self):
+        dt = 0.033
+        needs_update = False
+
+        # Symbol timer decay
+        if self.symbol_timer > 0.0:
+            self.symbol_timer -= dt
+            if self.symbol_timer <= 0.0:
+                self.symbol_mode = None
+                self.symbol_timer = 0.0
+            needs_update = True
+
+        # Marquee scroll animation
+        if self.is_scrolling:
+            metrics = QFontMetrics(self.font)
+            text_w = metrics.horizontalAdvance(self.full_text)
+            prefix_w = 24 if self.symbol_mode else 4
+            avail_w = max(10, self.width() - prefix_w)
+            max_scroll = max(0, text_w - avail_w)
+
+            if self.pause_counter > 0.0:
+                self.pause_counter -= dt
+            else:
+                self.scroll_x += self.scroll_speed * dt
+                if self.scroll_x >= max_scroll:
+                    self.scroll_x = max_scroll
+                    self.pause_counter = self.pause_time
+                    # Reset back smoothly
+                    self.scroll_x = 0.0
+            needs_update = True
+        elif self.symbol_timer <= 0.0:
+            self.timer.stop()
+
+        if needs_update:
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        metrics = QFontMetrics(self.font)
+        baseline = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
+
+        x_start = 2
+        # Draw forward/backward symbol if active
+        if self.symbol_mode:
+            icon = self.icon_forward if self.symbol_mode == "forward" else self.icon_backward
+            if not icon.isNull():
+                icon_h = min(16, self.height() - 6)
+                icon_w = int(icon.width() * (icon_h / float(icon.height())))
+                iy = int((self.height() - icon_h) / 2.0)
+                painter.drawPixmap(x_start, iy, icon_w, icon_h, icon)
+                x_start += icon_w + 6
+
+        # Draw Rajdhani song title
+        painter.setFont(self.font)
+        painter.setPen(QColor("#f4f4f5"))
+
+        # Clip text within available area
+        avail_w = max(10, self.width() - x_start)
+        painter.setClipRect(x_start, 0, avail_w, self.height())
+
+        curr_x = x_start - max(0.0, self.scroll_x)
+        painter.drawText(QPointF(curr_x, baseline), self.full_text)
+
+
 class ControlPanel(QWidget):
     """Clean, modern controller for Talia Music Player, Visualizer, and Settings."""
 
@@ -652,9 +796,8 @@ class ControlPanel(QWidget):
         # --- SECTION: PLAYBACK & VOLUME ---
         content_layout.addWidget(create_section_header("Playback & Volume"))
 
-        # Track title banner
-        self.lbl_track_title = QLabel("No track loaded")
-        self.lbl_track_title.setStyleSheet("color: #f4f4f5; font-weight: 600; font-size: 12px;")
+        # Track title banner (Cyberpunk Rajdhani marquee)
+        self.lbl_track_title = CyberScrollingTrackLabel()
         content_layout.addWidget(self.lbl_track_title)
 
         # Timeline seeker
@@ -679,21 +822,33 @@ class ControlPanel(QWidget):
         # Playback Transport Buttons (Basic: Rewind, Play/Pause, Next + Shuffle)
         hbox_controls = QHBoxLayout()
         hbox_controls.setSpacing(6)
-        btn_prev = QPushButton("◄◄ Rewind")
+        btn_prev = QPushButton(" Rewind")
+        icon_bw_path = os.path.join(PNGS_DIR, "icon_backward.png")
+        if os.path.exists(icon_bw_path):
+            btn_prev.setIcon(QIcon(icon_bw_path))
+            btn_prev.setIconSize(QSize(13, 13))
+        btn_prev.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
         btn_prev.clicked.connect(self.on_prev_clicked)
         hbox_controls.addWidget(btn_prev)
 
         self.btn_play_pause = QPushButton("Play")
+        self.btn_play_pause.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
         self.btn_play_pause.setObjectName("btnPlayPause")
         self.btn_play_pause.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold;")
         self.btn_play_pause.clicked.connect(self.on_play_pause_clicked)
         hbox_controls.addWidget(self.btn_play_pause)
 
-        btn_next = QPushButton("Next ►►")
+        btn_next = QPushButton(" Next")
+        icon_fw_path = os.path.join(PNGS_DIR, "icon_forward.png")
+        if os.path.exists(icon_fw_path):
+            btn_next.setIcon(QIcon(icon_fw_path))
+            btn_next.setIconSize(QSize(13, 13))
+        btn_next.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
         btn_next.clicked.connect(self.on_next_clicked)
         hbox_controls.addWidget(btn_next)
 
         self.btn_shuffle = QPushButton("Shuffle: Off")
+        self.btn_shuffle.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
         self.btn_shuffle.clicked.connect(self.toggle_shuffle)
         hbox_controls.addWidget(self.btn_shuffle)
         content_layout.addLayout(hbox_controls)
@@ -1191,11 +1346,19 @@ class ControlPanel(QWidget):
         self.audio_engine.next_track()
         self.sync_play_state()
         self.refresh_queue_ui()
+        if hasattr(self, "lbl_track_title"):
+            self.lbl_track_title.trigger_symbol("forward")
+        if self.overlay:
+            self.overlay.trigger_skip_feedback("forward")
 
     def on_prev_clicked(self):
         self.audio_engine.prev_track()
         self.sync_play_state()
         self.refresh_queue_ui()
+        if hasattr(self, "lbl_track_title"):
+            self.lbl_track_title.trigger_symbol("backward")
+        if self.overlay:
+            self.overlay.trigger_skip_feedback("backward")
 
     def toggle_shuffle(self):
         self.audio_engine.shuffle = not self.audio_engine.shuffle
@@ -1818,11 +1981,15 @@ class ControlPanel(QWidget):
         if hasattr(self, "timeline_timer"):
             self.timeline_timer.setInterval(200)
             self.update_timeline()
+        if self.overlay and hasattr(self.overlay, "sound_menu_open") and self.overlay.sound_menu_open.isLoaded():
+            self.overlay.sound_menu_open.play()
 
     def hideEvent(self, event):
         super().hideEvent(event)
         if hasattr(self, "timeline_timer"):
             self.timeline_timer.setInterval(600)
+        if self.overlay and hasattr(self.overlay, "sound_menu_close") and self.overlay.sound_menu_close.isLoaded():
+            self.overlay.sound_menu_close.play()
         trim_process_memory()
 
     def closeEvent(self, event):
@@ -1831,6 +1998,8 @@ class ControlPanel(QWidget):
         if hasattr(self, "settings_dialog") and self.settings_dialog.isVisible():
             self.settings_dialog.hide()
         self.hide()
+        if self.overlay and hasattr(self.overlay, "sound_menu_close") and self.overlay.sound_menu_close.isLoaded():
+            self.overlay.sound_menu_close.play()
         trim_process_memory()
         event.ignore()
 

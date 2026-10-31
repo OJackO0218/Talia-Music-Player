@@ -110,14 +110,29 @@ def save_settings(data: dict) -> bool:
         return False
 
 
-def trim_process_memory():
-    """Forces garbage collection and releases physical RAM working set back to Windows."""
-    import gc
-    gc.collect()
+def trim_process_memory(force_gc: bool = False):
+    """Releases physical RAM working set back to Windows without causing periodic GC stalls."""
+    if force_gc:
+        import gc
+        gc.collect()
     try:
         ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
     except Exception:
         pass
+
+
+def init_app_fonts():
+    """Pre-registers all bundled fonts in assets/fonts/ (including Rajdhani) with QFontDatabase."""
+    from PyQt6.QtGui import QFontDatabase
+    registered = []
+    if os.path.exists(FONTS_DIR):
+        for f in os.listdir(FONTS_DIR):
+            if f.lower().endswith(('.ttf', '.otf', '.woff', '.woff2')):
+                p = os.path.join(FONTS_DIR, f)
+                fid = QFontDatabase.addApplicationFont(p)
+                if fid != -1:
+                    registered.extend(QFontDatabase.applicationFontFamilies(fid))
+    return registered
 
 
 # ==========================================================

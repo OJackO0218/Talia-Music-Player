@@ -15,7 +15,7 @@ from PyQt6.QtGui import (
 
 from config import (
     user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    WS_EX_LAYERED, WS_EX_TRANSPARENT, GWL_EXSTYLE, save_settings, FONTS_DIR
+    WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_TOPMOST, GWL_EXSTYLE, save_settings, FONTS_DIR
 )
 from audio_engine import CyberAudioEngine
 from lyrics_manager import LyricsManager
@@ -94,10 +94,10 @@ class LyricsOverlayWindow(QWidget):
         self.anim_timer.timeout.connect(self._sync_and_animate_tick)
         self.anim_timer.start(16)
 
-        # Topmost enforcement timer (1000ms non-intrusive)
+        # Topmost enforcement timer (5000ms non-intrusive)
         self.topmost_timer = QTimer(self)
         self.topmost_timer.timeout.connect(self.enforce_topmost)
-        self.topmost_timer.start(1000)
+        self.topmost_timer.start(5000)
 
     def get_available_fonts(self) -> list:
         """Scans assets/fonts for any user-supplied .ttf or .otf files and returns list of family names."""
@@ -184,12 +184,14 @@ class LyricsOverlayWindow(QWidget):
         if self.isVisible():
             try:
                 hwnd = int(self.winId())
-                user32.SetWindowPos(
-                    hwnd,
-                    HWND_TOPMOST,
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                )
+                ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                if not (ex_style & WS_EX_TOPMOST):
+                    user32.SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    )
             except Exception:
                 pass
 

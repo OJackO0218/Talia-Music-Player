@@ -6,6 +6,13 @@ import os
 import sys
 import ctypes
 
+# Prevent OpenMP / BLAS from spawning multi-threaded thread pools for micro-FFT ops
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
@@ -13,7 +20,7 @@ if CURRENT_DIR not in sys.path:
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
-from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH, LYRICS_CACHE_DIR, trim_process_memory
+from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH, LYRICS_CACHE_DIR, trim_process_memory, init_app_fonts
 from audio_engine import CyberAudioEngine
 from lyrics_manager import LyricsManager
 from lyrics_overlay import LyricsOverlayWindow
@@ -55,6 +62,7 @@ def main():
     print("[1/4] Starting Talia Cyberpunk Visualizer...")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    init_app_fonts()
 
     # Set application icon for Windows taskbar & alt-tab
     if os.path.exists(ICON_PATH):

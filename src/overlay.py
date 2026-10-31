@@ -21,7 +21,7 @@ from config import (
     MOUTH_BOX_W, MOUTH_BOX_H, DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY,
     DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
     user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW, VK_VOLUME_UP, VK_VOLUME_DOWN,
-    save_settings, trim_process_memory
+    save_settings, trim_process_memory, GWL_EXSTYLE, WS_EX_TOPMOST
 )
 from audio_engine import CyberAudioEngine
 from visualizer import CyberVisualizer
@@ -163,6 +163,38 @@ class OverlayWindow(QWidget):
             self.sound_shutdown.setSource(QUrl.fromLocalFile(shutdown_path))
             self.sound_shutdown.setVolume(0.15)
 
+        # Cyberpunk 2077 Skip & Menu Navigation SFX
+        self.sound_skip_next = QSoundEffect(self)
+        sn_path = os.path.join(SOUNDS_DIR, "skip_next.wav")
+        if os.path.exists(sn_path):
+            self.sound_skip_next.setSource(QUrl.fromLocalFile(sn_path))
+            self.sound_skip_next.setVolume(0.18)
+
+        self.sound_skip_prev = QSoundEffect(self)
+        sp_path = os.path.join(SOUNDS_DIR, "skip_prev.wav")
+        if os.path.exists(sp_path):
+            self.sound_skip_prev.setSource(QUrl.fromLocalFile(sp_path))
+            self.sound_skip_prev.setVolume(0.18)
+
+        self.sound_menu_open = QSoundEffect(self)
+        mo_path = os.path.join(SOUNDS_DIR, "menu_open.wav")
+        if os.path.exists(mo_path):
+            self.sound_menu_open.setSource(QUrl.fromLocalFile(mo_path))
+            self.sound_menu_open.setVolume(0.16)
+
+        self.sound_menu_close = QSoundEffect(self)
+        mc_path = os.path.join(SOUNDS_DIR, "menu_close.wav")
+        if os.path.exists(mc_path):
+            self.sound_menu_close.setSource(QUrl.fromLocalFile(mc_path))
+            self.sound_menu_close.setVolume(0.16)
+
+        # Skip track fast-forward / backward OSD HUD indicators
+        self.icon_forward = QPixmap(os.path.join(PNGS_DIR, "icon_forward.png"))
+        self.icon_backward = QPixmap(os.path.join(PNGS_DIR, "icon_backward.png"))
+        self.osd_symbol = None      # 'forward' or 'backward'
+        self.osd_timer = 0.0        # Countdown timer (2.2s)
+        self.osd_title = ""
+
         # Cyber Mute Indicator (Displays when music is paused)
         self.mute_icon = QPixmap()
         mute_path = os.path.join(PNGS_DIR, "mute_icon.png")
@@ -205,10 +237,10 @@ class OverlayWindow(QWidget):
         self.load_assets()
         self.init_position()
 
-        # Continuous topmost enforcement (1000ms, non-intrusive)
+        # Continuous topmost enforcement (5000ms, non-intrusive)
         self.topmost_timer = QTimer(self)
         self.topmost_timer.timeout.connect(self.enforce_topmost)
-        self.topmost_timer.start(1000)
+        self.topmost_timer.start(5000)
 
         # 60 FPS Animation & Eye-tracking loop (16ms)
         self.anim_timer = QTimer(self)
@@ -488,11 +520,13 @@ class OverlayWindow(QWidget):
         if self.panel and (self.panel.isVisible() or self.panel.isActiveWindow() or self.panel.underMouse()):
             return
         hwnd = int(self.winId())
-        user32.SetWindowPos(
-            hwnd, HWND_TOPMOST,
-            0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-        )
+        ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        if not (ex_style & WS_EX_TOPMOST):
+            user32.SetWindowPos(
+                hwnd, HWND_TOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            )
 
     def set_move_talia_mode(self, enabled: bool):
         self.move_talia_mode = enabled
@@ -748,6 +782,14 @@ class OverlayWindow(QWidget):
         sway_active = self.is_holding or (self.impulse_timer > 0.0) or (abs(self.current_rotation) > 0.02) or (abs(self.current_shake_x) > 0.05) or (abs(self.current_shake_y) > 0.05)
         fx_active = self.is_starting_up or self.is_shutting_down or (self.hover_glow > 0.005)
 
+        # OSD Skip feedback timer
+        osd_active = self.osd_timer > 0.0
+        if self.osd_timer > 0.0:
+            self.osd_timer -= 0.016
+            if self.osd_timer <= 0.0:
+                self.osd_timer = 0.0
+                self.osd_symbol = None
+
         # In Eco Mode with static music symbol, only repaint audio if not in eco mode
         audio_visual_animating = is_audio_active and not self.eco_mode
 
@@ -763,7 +805,8 @@ class OverlayWindow(QWidget):
             flash_changing or
             mute_changing or
             sway_active or
-            fx_active
+            fx_active or
+            osd_active
         )
 
         if needs_render:
@@ -874,7 +917,7 @@ class OverlayWindow(QWidget):
             vis_opacity = self.opacity_val * self.hold_saturation
             painter.setOpacity(vis_opacity)
             try:
-                self.visualizer.draw(painter, mouth_rect, self.audio_engine)
+                self.visualizer.draw(painter, mouth_rect, self.audio_engine, getattr(self, "osd_symbol", None))
             except Exception:
                 pass
             painter.setOpacity(self.opacity_val)
@@ -1042,6 +1085,45 @@ class OverlayWindow(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             outline_rect = QRectF(char_x - 2.5, char_y - 2.5, char_size + 5.0, char_size + 5.0)
             painter.drawRect(outline_rect)
+            painter.restore()
+
+        # ==========================================================
+        # LAYER 6: CYBERPUNK SKIP TRACK OSD (Fast-forward / Backward symbol + Rajdhani Song Title)
+        # ==========================================================
+        if self.osd_timer > 0.0 and self.osd_symbol:
+            painter.save()
+            alpha_ratio = min(1.0, self.osd_timer / 0.5)
+            badge_alpha = int(220 * alpha_ratio)
+            border_col = QColor(0, 240, 255, int(210 * alpha_ratio)) if self.osd_symbol == "forward" else QColor(255, 0, 128, int(210 * alpha_ratio))
+
+            osd_font = QFont("Rajdhani", max(9, int(char_size * 0.040)), QFont.Weight.Bold)
+            fm = QFontMetrics(osd_font)
+            title_text = self.osd_title or self.audio_engine.get_current_track_title()
+            text_w = fm.horizontalAdvance(title_text)
+
+            badge_h = max(24, int(char_size * 0.088))
+            icon_dim = max(14, int(badge_h * 0.62))
+            badge_w = min(self.width() - 20, icon_dim + text_w + 24)
+
+            bx = (self.width() - badge_w) // 2
+            by = min(self.height() - badge_h - 4, int(char_y + char_size * 0.76))
+
+            # Translucent Cyber HUD glass capsule
+            painter.setBrush(QColor(8, 8, 16, badge_alpha))
+            painter.setPen(QPen(border_col, 1.2))
+            painter.drawRoundedRect(QRect(bx, by, badge_w, badge_h), 6, 6)
+
+            # Icon
+            icon = self.icon_forward if self.osd_symbol == "forward" else self.icon_backward
+            if not icon.isNull():
+                iy = by + (badge_h - icon_dim) // 2
+                painter.drawPixmap(bx + 8, iy, icon_dim, icon_dim, icon)
+
+            # Rajdhani song title
+            painter.setFont(osd_font)
+            painter.setPen(QColor(245, 248, 255, int(255 * alpha_ratio)))
+            text_rect = QRect(bx + icon_dim + 14, by, badge_w - icon_dim - 20, badge_h)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, fm.elidedText(title_text, Qt.TextElideMode.ElideRight, text_rect.width()))
             painter.restore()
 
         # Restore painter matrix transform
@@ -1219,6 +1301,21 @@ class OverlayWindow(QWidget):
             self.panel.sync_play_state()
         print("[ACTION] 1 Click on Talia: Play/Pause toggled.")
 
+    def trigger_skip_feedback(self, direction: str):
+        """Displays on-screen Cyberpunk fast-forward or backward symbol and Rajdhani song title."""
+        self.osd_symbol = direction
+        self.osd_timer = 2.4
+        self.osd_title = self.audio_engine.get_current_track_title()
+        if direction == "forward":
+            if hasattr(self, "sound_skip_next") and self.sound_skip_next.isLoaded():
+                self.sound_skip_next.play()
+        else:
+            if hasattr(self, "sound_skip_prev") and self.sound_skip_prev.isLoaded():
+                self.sound_skip_prev.play()
+        if self.panel and hasattr(self.panel, "lbl_track_title"):
+            self.panel.lbl_track_title.trigger_symbol(direction)
+        self.update()
+
     def _trigger_double_click(self):
         """2 Clicks on Talia: Double tap right side = Next track, left side = Rewind."""
         click_x = getattr(self, "last_click_pos", QPoint(self.width() // 2, 0)).x()
@@ -1227,26 +1324,32 @@ class OverlayWindow(QWidget):
         if is_right:
             if self.audio_engine.audio_mode == "desktop":
                 self.audio_engine.next_track()
+                self.trigger_skip_feedback("forward")
                 return
             if not self.audio_engine.playlist:
                 return
             self.audio_engine.next_track()
+            self.trigger_skip_feedback("forward")
             if self.panel:
                 self.panel.sync_play_state()
             print("[ACTION] Double Click RIGHT on Talia: Next Track.")
         else:
             if self.audio_engine.audio_mode == "desktop":
                 self.audio_engine.prev_track()
+                self.trigger_skip_feedback("backward")
                 return
             if not self.audio_engine.playlist:
                 return
             self.audio_engine.prev_track()
+            self.trigger_skip_feedback("backward")
             if self.panel:
                 self.panel.sync_play_state()
             print("[ACTION] Double Click LEFT on Talia: Previous Track.")
 
     def _trigger_triple_click(self):
         """3 Clicks on Talia: Open / Show Controller Panel."""
+        if hasattr(self, "sound_menu_open") and self.sound_menu_open.isLoaded():
+            self.sound_menu_open.play()
         if self.panel:
             self.panel.show()
             self.panel.raise_()

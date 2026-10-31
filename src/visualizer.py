@@ -34,10 +34,21 @@ class CyberVisualizer:
         self._cached_scaled_note_size = -1
         self._cached_scaled_note = QPixmap()
 
+        # Fast forward & backward symbols
+        self.icon_forward = QPixmap()
+        self.icon_backward = QPixmap()
+        for cand_dir in [PNGS_DIR, os.path.join(os.path.dirname(PNGS_DIR), "icons"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons")]:
+            fw_p = os.path.join(cand_dir, "icon_forward.png")
+            bw_p = os.path.join(cand_dir, "icon_backward.png")
+            if os.path.exists(fw_p) and self.icon_forward.isNull():
+                self.icon_forward.load(fw_p)
+            if os.path.exists(bw_p) and self.icon_backward.isNull():
+                self.icon_backward.load(bw_p)
+
     def set_eco_mode(self, enabled: bool):
         self.eco_mode = enabled
 
-    def draw(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine):
+    def draw(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine, osd_symbol: str = None):
         """Draws the selected visualizer inside the target bounding rect."""
         painter.save()
         try:
@@ -54,7 +65,7 @@ class CyberVisualizer:
                         is_active = bool(getattr(engine, "beat_energy", 0.0) > 0.002 or (bars is not None and len(bars) > 0 and bars.max() > 0.002))
                     else:
                         is_active = bool(getattr(engine, "is_playing", False) and not getattr(engine, "is_paused", False))
-                self._draw_eco_mode(painter, rect, theme, show_symbol=is_active)
+                self._draw_eco_mode(painter, rect, theme, show_symbol=is_active or bool(osd_symbol), override_symbol=osd_symbol)
                 return
 
             # 1 & 2. Hardware-accelerated Cached Background & Grid (single blit)
@@ -107,7 +118,7 @@ class CyberVisualizer:
         finally:
             painter.restore()
 
-    def _draw_eco_mode(self, painter: QPainter, rect: QRect, theme: dict, show_symbol: bool = True):
+    def _draw_eco_mode(self, painter: QPainter, rect: QRect, theme: dict, show_symbol: bool = True, override_symbol: str = None):
         """Renders ultra-low CPU black background with crisp white music symbol and sleek cyber HUD accents."""
         # 1. Pitch black background inside mouth cavity
         painter.fillRect(rect, QColor(8, 8, 12, 255))
@@ -142,7 +153,7 @@ class CyberVisualizer:
         painter.drawLine(bx2, by2, bx2 - blen, by2)
         painter.drawLine(bx2, by2, bx2, by2 - blen)
 
-        # 3. Soft ambient glow behind music note
+        # 3. Soft ambient glow behind music note or skip symbol
         glow_rad = icon_dim * 0.85
         glow = QRadialGradient(float(cx), float(cy), float(glow_rad))
         glow.setColorAt(0.0, QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 45))
@@ -152,19 +163,24 @@ class CyberVisualizer:
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(float(cx), float(cy)), glow_rad, glow_rad)
 
-        # 4. White Music Note Icon
-        if not self.music_note_icon.isNull():
-            if self._cached_scaled_note_size != icon_dim:
-                self._cached_scaled_note = self.music_note_icon.scaled(
-                    icon_dim, icon_dim,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-                self._cached_scaled_note_size = icon_dim
+        # 4. Icon rendering (Skip Forward / Backward or Music Note)
+        active_pixmap = None
+        if override_symbol == "forward" and not self.icon_forward.isNull():
+            active_pixmap = self.icon_forward
+        elif override_symbol == "backward" and not self.icon_backward.isNull():
+            active_pixmap = self.icon_backward
+        elif not self.music_note_icon.isNull():
+            active_pixmap = self.music_note_icon
 
-            ix = cx - self._cached_scaled_note.width() // 2
-            iy = cy - self._cached_scaled_note.height() // 2
-            painter.drawPixmap(ix, iy, self._cached_scaled_note)
+        if active_pixmap is not None:
+            scaled = active_pixmap.scaled(
+                icon_dim, icon_dim,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            ix = cx - scaled.width() // 2
+            iy = cy - scaled.height() // 2
+            painter.drawPixmap(ix, iy, scaled)
         else:
             # Vector fallback: crisp white beamed eighth note
             self._draw_vector_music_note(painter, cx, cy, icon_dim)

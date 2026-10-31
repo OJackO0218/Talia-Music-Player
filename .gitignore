@@ -31,6 +31,8 @@ _temp*
 
 # Scratch & unneeded raw extraction assets
 assets_eyes/
+assets/sounds/legacy/
+build_stage/
 music/Downloaded Songs/
 
 # OS generated files
