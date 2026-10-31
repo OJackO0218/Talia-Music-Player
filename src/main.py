@@ -13,7 +13,7 @@ if CURRENT_DIR not in sys.path:
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
-from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH, LYRICS_CACHE_DIR
+from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH, LYRICS_CACHE_DIR, trim_process_memory
 from audio_engine import CyberAudioEngine
 from lyrics_manager import LyricsManager
 from lyrics_overlay import LyricsOverlayWindow
@@ -100,6 +100,8 @@ def main():
     # Show startup controls & shortcuts guide if enabled
     if saved_cfg.get("show_startup_guide", True):
         panel.show_guide_dialog()
+
+    trim_process_memory()
 
     print("[4/4] Talia is ready!")
     print("\n=======================================================")

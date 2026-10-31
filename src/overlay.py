@@ -21,7 +21,7 @@ from config import (
     MOUTH_BOX_W, MOUTH_BOX_H, DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY,
     DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
     user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW, VK_VOLUME_UP, VK_VOLUME_DOWN,
-    save_settings
+    save_settings, trim_process_memory
 )
 from audio_engine import CyberAudioEngine
 from visualizer import CyberVisualizer
@@ -289,6 +289,7 @@ class OverlayWindow(QWidget):
 
         # Invalidate scaled pixmap cache
         self._last_scaled_size = -1
+        trim_process_memory()
         self.update()
 
     def _apply_pupil_saturation(self):
@@ -668,7 +669,10 @@ class OverlayWindow(QWidget):
         # Check audio active state
         is_audio_active = (self.audio_engine.audio_mode == "player" and self.audio_engine.is_playing)
         if self.audio_engine.audio_mode == "desktop":
-            is_audio_active = (getattr(self.audio_engine, "beat_energy", 0.0) > 0.002 or np.max(getattr(self.audio_engine, "smoothed_bars", [0])) > 0.002)
+            bars = getattr(self.audio_engine, "smoothed_bars", None)
+            is_audio_active = (getattr(self.audio_engine, "beat_energy", 0.0) > 0.002) or (
+                bars is not None and len(bars) > 0 and bars.max() > 0.002
+            )
 
         # 3.5. Beat Pop effect (Talia pulses with the music bass kick)
         if not self.eco_mode and self.enable_bass_pop and is_audio_active:

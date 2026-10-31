@@ -360,18 +360,17 @@ class LyricsManager:
 
             ts, text = self.lines[idx]
             time_into_line = effective_time - ts
+            word_count = max(1, len(text.split()))
 
             # Calculate active duration to next line
             if idx + 1 < len(self.lines):
                 next_ts = self.lines[idx + 1][0]
                 gap = max(0.5, next_ts - ts)
-                word_count = max(1, len(text.split()))
                 est_dur = max(2.0, word_count * 0.42)
                 singing_dur = min(gap * 0.85, est_dur)
                 if gap > 5.5 and time_into_line > 4.5:
                     return -1, "", 0.0, 0.0
             else:
-                word_count = max(1, len(text.split()))
                 singing_dur = max(2.5, word_count * 0.45)
 
             return idx, text, time_into_line, singing_dur

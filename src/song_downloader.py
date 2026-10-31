@@ -34,14 +34,16 @@ try:
 except ImportError:
     fetch_lyrics_for_file = None
 
-
-def trim_process_memory():
-    """Forces garbage collection and trims Windows working set to guarantee < 200 MB RAM."""
-    gc.collect()
-    try:
-        ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
-    except Exception:
-        pass
+try:
+    from config import trim_process_memory
+except ImportError:
+    def trim_process_memory():
+        """Forces garbage collection and trims Windows working set to guarantee < 200 MB RAM."""
+        gc.collect()
+        try:
+            ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
+        except Exception:
+            pass
 
 
 def sanitize_filename(name: str) -> str:

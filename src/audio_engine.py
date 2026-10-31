@@ -12,7 +12,7 @@ import soundcard as sc
 import numpy as np
 
 from config import (
-    SUPPORTED_AUDIO_EXTS, user32,
+    SUPPORTED_AUDIO_EXTS, user32, trim_process_memory,
     VK_MEDIA_PLAY_PAUSE, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK
 )
 
@@ -46,6 +46,7 @@ class CyberAudioEngine:
 
         # Pre-computed FFT arrays for 60 FPS zero-allocation performance
         self.hanning_window = np.hanning(1024).astype(np.float32)
+        self._windowed_buffer = np.zeros(1024, dtype=np.float32)
         # Logarithmic grouping indices for 513 FFT bins (0 - 22.05 kHz)
         self.indices = np.logspace(np.log10(1), np.log10(512), num_bars + 1).astype(int)
         # High-frequency pink noise compensation curve
@@ -265,8 +266,7 @@ class CyberAudioEngine:
 
             # Trigger background preload for next track (max 1 track, 15s head)
             self._trigger_preload_next()
-            import gc
-            gc.collect()
+            trim_process_memory()
             return True
         except Exception as e:
             print(f"[AUDIO ERROR] Could not open {file_path}: {e}")
@@ -301,7 +301,10 @@ class CyberAudioEngine:
             frames_to_read = min(info.frames, int(sr * 15.0))
             audio, _ = sf.read(path, frames=frames_to_read, dtype='float32')
             if len(audio.shape) == 1:
-                audio = np.column_stack((audio, audio))
+                stereo = np.empty((len(audio), 2), dtype=np.float32)
+                stereo[:, 0] = audio
+                stereo[:, 1] = audio
+                audio = stereo
             # Cache strictly 1 track maximum
             self._preload_cache.clear()
             self._preload_cache[path] = (audio, sr, info.frames, audio.shape[1])
@@ -537,9 +540,11 @@ class CyberAudioEngine:
                 return self._cached_eco_spectrum
 
         buf = self.latest_buffer
-        is_idle = (self.audio_mode == "player" and not self.is_playing) or np.max(np.abs(buf)) < 0.001
+        buf_peak = max(float(buf.max()), -float(buf.min()))
+        is_idle = (self.audio_mode == "player" and not self.is_playing) or buf_peak < 0.001
         if is_idle:
-            if self.beat_energy > 0.002 or np.max(self.smoothed_bars) > 0.002:
+            bars_peak = float(self.smoothed_bars.max()) if len(self.smoothed_bars) > 0 else 0.0
+            if self.beat_energy > 0.002 or bars_peak > 0.002:
                 # Fast exponential decay towards zero
                 self.smoothed_bars *= 0.82
                 self.peak_bars *= 0.88
@@ -553,9 +558,9 @@ class CyberAudioEngine:
                 self._cached_eco_spectrum = res
             return res
 
-        # 1. Apply pre-computed Hanning window & Real FFT
-        windowed = buf * self.hanning_window
-        fft = np.abs(np.fft.rfft(windowed))
+        # 1. Apply pre-computed Hanning window & Real FFT (zero allocation)
+        np.multiply(buf, self.hanning_window, out=self._windowed_buffer)
+        fft = np.abs(np.fft.rfft(self._windowed_buffer))
 
         # 2. Bass & kick drum energy (20Hz - 250Hz)
         bass_mag = float(np.mean(fft[1:8]))
@@ -572,12 +577,13 @@ class CyberAudioEngine:
         # Apply high-frequency boost and normalize to [0.0, 1.0] in-place
         np.clip((self.raw_bars * self.boost_weights) / 28.0, 0.0, 1.0, out=self.raw_bars)
 
-        # 4. Vectorized attack & release smoothing
+        # 4. Vectorized attack & release smoothing (single subtraction)
         rising = self.raw_bars > self.smoothed_bars
+        diff = self.raw_bars - self.smoothed_bars
         self.smoothed_bars = np.where(
             rising,
-            self.smoothed_bars + (self.raw_bars - self.smoothed_bars) * 0.65,  # Fast attack
-            self.smoothed_bars + (self.raw_bars - self.smoothed_bars) * 0.16   # Smooth release
+            self.smoothed_bars + diff * 0.65,  # Fast attack
+            self.smoothed_bars + diff * 0.16   # Smooth release
         )
 
         # 5. Vectorized peak hold with gravity acceleration

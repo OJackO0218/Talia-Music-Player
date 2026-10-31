@@ -11,7 +11,7 @@ from PyQt6.QtGui import QIcon, QColor, QAction
 
 from config import (
     user32, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_CONTROL, VK_OEM_4, VK_OEM_6, COLOR_THEMES, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    save_settings, PROJECT_ROOT, ICON_PATH, FONTS_DIR
+    save_settings, PROJECT_ROOT, ICON_PATH, FONTS_DIR, trim_process_memory
 )
 from audio_engine import CyberAudioEngine
 from overlay import OverlayWindow
@@ -505,6 +505,7 @@ class SettingsDialog(QDialog):
 
     def closeEvent(self, event):
         self.hide()
+        trim_process_memory()
         event.ignore()
 
 
@@ -1252,33 +1253,34 @@ class ControlPanel(QWidget):
         if self.is_user_scrubbing:
             return
 
-        if self.audio_engine.audio_mode == "desktop":
-            self.lbl_time_cur.setText("LIVE")
-            self.lbl_time_dur.setText("LOOP")
-            self.slider_seek.setValue(1000)
-            return
-
         pos = self.audio_engine.get_position()
         dur = self.audio_engine.get_duration()
 
-        if dur > 0:
-            pct = int((pos / dur) * 1000)
-            self.slider_seek.setValue(pct)
-        else:
-            self.slider_seek.setValue(0)
+        if self.isVisible():
+            if self.audio_engine.audio_mode == "desktop":
+                self.lbl_time_cur.setText("LIVE")
+                self.lbl_time_dur.setText("LOOP")
+                self.slider_seek.setValue(1000)
+            else:
+                if dur > 0:
+                    pct = int((pos / dur) * 1000)
+                    self.slider_seek.setValue(pct)
+                else:
+                    self.slider_seek.setValue(0)
 
-        m_pos, s_pos = int(pos // 60), int(pos % 60)
-        m_dur, s_dur = int(dur // 60), int(dur % 60)
-        self.lbl_time_cur.setText(f"{m_pos:02d}:{s_pos:02d}")
-        self.lbl_time_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
+                m_pos, s_pos = int(pos // 60), int(pos % 60)
+                m_dur, s_dur = int(dur // 60), int(dur % 60)
+                self.lbl_time_cur.setText(f"{m_pos:02d}:{s_pos:02d}")
+                self.lbl_time_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
 
         # Auto-advance to next track when song finishes
-        is_finished = self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.08)
-        if is_finished:
-            self.audio_engine.track_finished = False
-            self.audio_engine.next_track()
-            self.sync_play_state()
-            self.refresh_queue_ui()
+        if self.audio_engine.audio_mode != "desktop":
+            is_finished = self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.08)
+            if is_finished:
+                self.audio_engine.track_finished = False
+                self.audio_engine.next_track()
+                self.sync_play_state()
+                self.refresh_queue_ui()
 
     def choose_music_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Music Folder", self.audio_engine.folder_path)
@@ -1811,12 +1813,25 @@ class ControlPanel(QWidget):
             self.btn_save_settings.setStyleSheet("background-color: #166534; color: #4ade80; border: 1px solid #22c55e;")
             QTimer.singleShot(1500, self._reset_save_btn)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "timeline_timer"):
+            self.timeline_timer.setInterval(200)
+            self.update_timeline()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "timeline_timer"):
+            self.timeline_timer.setInterval(600)
+        trim_process_memory()
+
     def closeEvent(self, event):
         cfg = self.get_current_settings_dict()
         save_settings(cfg)
         if hasattr(self, "settings_dialog") and self.settings_dialog.isVisible():
             self.settings_dialog.hide()
         self.hide()
+        trim_process_memory()
         event.ignore()
 
     # -------------------------------------------------------------

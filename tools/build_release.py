@@ -157,7 +157,9 @@ readme_txt = """=======================================================
 =======================================================
 
 HOW TO RUN:
-Double-click "Talia.exe" to start!
+1. Extract the ZIP archive (Click "Extract all" in Windows Explorer).
+2. Open the extracted folder and double-click "Talia.exe" to start!
+   (Note: Do not run directly inside the unextracted zip, extract first!)
 No installation, Python, or configuration required.
 
 CONTROLS:

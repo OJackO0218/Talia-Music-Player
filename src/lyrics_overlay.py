@@ -20,6 +20,16 @@ from config import (
 from audio_engine import CyberAudioEngine
 from lyrics_manager import LyricsManager
 
+# Pre-allocated QPointF offset arrays for zero-allocation shadow and bloom rendering
+SHADOW_OFFSETS_STD = [
+    QPointF(-2.0, 0.0), QPointF(2.0, 0.0), QPointF(0.0, -2.0), QPointF(0.0, 2.0),
+    QPointF(-1.0, -1.0), QPointF(1.0, 1.0), QPointF(0.0, 3.0)
+]
+SHADOW_OFFSET_ECO = QPointF(1.5, 1.5)
+BLOOM_OFFSETS = [
+    QPointF(-1.0, 0.0), QPointF(1.0, 0.0), QPointF(0.0, -1.0), QPointF(0.0, 1.0)
+]
+
 
 class LyricsOverlayWindow(QWidget):
     """Floating transparent desktop lyrics widget with customizable neon colors and click-through passthrough."""
@@ -183,6 +193,16 @@ class LyricsOverlayWindow(QWidget):
             except Exception:
                 pass
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.is_enabled and not self.anim_timer.isActive():
+            interval = 33 if getattr(self, "eco_mode", False) else 16
+            self.anim_timer.start(interval)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.anim_timer.stop()
+
     def set_move_mode(self, enabled: bool):
         """Toggles Move/Repositioning mode. When enabled, displays '(lyrics subtitle is here)' and allows dragging."""
         self.move_mode = enabled
@@ -204,7 +224,8 @@ class LyricsOverlayWindow(QWidget):
 
     def _sync_and_animate_tick(self):
         """Runs at 60 FPS: syncs current playback position with lyrics and drives pop-up physics."""
-        if not self.is_enabled:
+        if not self.is_enabled or not self.isVisible():
+            self.anim_timer.stop()
             return
 
         # In Move Mode: always show '(lyrics subtitle is here)' as requested
@@ -393,10 +414,10 @@ class LyricsOverlayWindow(QWidget):
                     painter.setPen(QColor(self.shadow_color.red(), self.shadow_color.green(), self.shadow_color.blue(), sh_alpha))
                     if self.eco_mode:
                         # Single-pass drop shadow in Eco Mode
-                        painter.drawText(pos_pt + QPointF(1.5, 1.5), word)
+                        painter.drawText(pos_pt + SHADOW_OFFSET_ECO, word)
                     else:
-                        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1), (0, 3)]:
-                            painter.drawText(pos_pt + QPointF(float(dx), float(dy)), word)
+                        for offset in SHADOW_OFFSETS_STD:
+                            painter.drawText(pos_pt + offset, word)
 
                     # Layer 2: Radial Bloom Glow (dim when upcoming, peak flare when actively sung, full bloom when sung)
                     if not self.eco_mode and p_word > 0.05:
@@ -404,8 +425,8 @@ class LyricsOverlayWindow(QWidget):
                         bloom_alpha = min(255, max(0, int(160 * eff_opacity * min(1.0, p_word) * (1.0 + self.glow_flash + active_flash))))
                         bl_color = QColor(self.bloom_color.red(), self.bloom_color.green(), self.bloom_color.blue(), bloom_alpha)
                         painter.setPen(bl_color)
-                        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                            painter.drawText(pos_pt + QPointF(float(dx), float(dy)), word)
+                        for offset in BLOOM_OFFSETS:
+                            painter.drawText(pos_pt + offset, word)
 
                     # Layer 3: Vibrant Foreground Text
                     if p_word <= 0.0:
@@ -446,13 +467,19 @@ class LyricsOverlayWindow(QWidget):
         # Layer 1: High-contrast ambient shadow for 100% legibility on light & dark screens
         sh_color = QColor(self.shadow_color.red(), self.shadow_color.green(), self.shadow_color.blue(), min(255, max(0, int(230 * eff_opacity))))
         painter.setPen(sh_color)
-        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1), (0, 3)]:
-            painter.drawText(draw_rect.translated(dx, dy), Qt.AlignmentFlag.AlignCenter, text_to_draw)
+        if self.eco_mode:
+            painter.drawText(draw_rect.translated(int(SHADOW_OFFSET_ECO.x()), int(SHADOW_OFFSET_ECO.y())), Qt.AlignmentFlag.AlignCenter, text_to_draw)
+        else:
+            for offset in SHADOW_OFFSETS_STD:
+                painter.drawText(draw_rect.translated(int(offset.x()), int(offset.y())), Qt.AlignmentFlag.AlignCenter, text_to_draw)
 
         # Layer 2: Radial Bloom Glow in selected theme color
         bloom_alpha = min(255, max(0, int(140 * eff_opacity * (1.0 + self.glow_flash))))
         bl_color = QColor(self.bloom_color.red(), self.bloom_color.green(), self.bloom_color.blue(), bloom_alpha)
         painter.setPen(bl_color)
+        if not self.eco_mode:
+            for offset in BLOOM_OFFSETS:
+                painter.drawText(draw_rect.translated(int(offset.x()), int(offset.y())), Qt.AlignmentFlag.AlignCenter, text_to_draw)
         for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             painter.drawText(draw_rect.translated(dx, dy), Qt.AlignmentFlag.AlignCenter, text_to_draw)
 

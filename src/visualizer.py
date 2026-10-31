@@ -50,7 +50,8 @@ class CyberVisualizer:
                 is_active = False
                 if engine is not None:
                     if getattr(engine, "audio_mode", "player") == "desktop":
-                        is_active = bool(getattr(engine, "beat_energy", 0.0) > 0.002 or np.max(getattr(engine, "smoothed_bars", [0])) > 0.002)
+                        bars = getattr(engine, "smoothed_bars", None)
+                        is_active = bool(getattr(engine, "beat_energy", 0.0) > 0.002 or (bars is not None and len(bars) > 0 and bars.max() > 0.002))
                     else:
                         is_active = bool(getattr(engine, "is_playing", False) and not getattr(engine, "is_paused", False))
                 self._draw_eco_mode(painter, rect, theme, show_symbol=is_active)
@@ -198,7 +199,7 @@ class CyberVisualizer:
 
     def _draw_cyber_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
         """Segmented LED equalizer bars with falling peak hold caps."""
-        if np.max(bars) < 0.002 and np.max(peaks) < 0.002:
+        if (len(bars) > 0 and bars.max() < 0.002) and (len(peaks) > 0 and peaks.max() < 0.002):
             return  # Zero-cost early exit when silent
         num = len(bars)
         pad_x = max(2, int(rect.width() * 0.03))
@@ -259,7 +260,7 @@ class CyberVisualizer:
             return
 
         cy = float(rect.center().y())
-        if np.max(np.abs(wave)) < 0.002:
+        if max(float(wave.max()), -float(wave.min())) < 0.002:
             # Silent guide line early return (zero-cost when paused)
             painter.setPen(QPen(QColor(theme["grid"].red(), theme["grid"].green(), theme["grid"].blue(), 45), 1, Qt.PenStyle.DashLine))
             painter.drawLine(rect.left(), int(cy), rect.right(), int(cy))
@@ -339,7 +340,7 @@ class CyberVisualizer:
         painter.setPen(QPen(theme["bar_top"], 1))
         painter.drawLine(cx, rect.top() + 8, cx, rect.bottom() - 8)
 
-        if np.max(bars) < 0.002 and np.max(peaks) < 0.002:
+        if (len(bars) > 0 and bars.max() < 0.002) and (len(peaks) > 0 and peaks.max() < 0.002):
             return
 
         base_y = rect.bottom() - 10

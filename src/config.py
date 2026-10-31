@@ -110,6 +110,16 @@ def save_settings(data: dict) -> bool:
         return False
 
 
+def trim_process_memory():
+    """Forces garbage collection and releases physical RAM working set back to Windows."""
+    import gc
+    gc.collect()
+    try:
+        ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
+    except Exception:
+        pass
+
+
 # ==========================================================
 # Win32 API Bindings & Constants
 # ==========================================================
