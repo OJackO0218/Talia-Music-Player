@@ -45,6 +45,7 @@ cmd = [
     "--distpath", STAGE_DIR,
     "--icon", ICON_ICO,
     "--paths", SRC_DIR,
+    "--paths", os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated"),
     # Collect required audio backends and downloader
     "--collect-data", "sounddevice",
     "--collect-data", "soundfile",
@@ -62,6 +63,8 @@ cmd = [
     "--hidden-import", "lyrics_manager",
     "--hidden-import", "guide_dialog",
     "--hidden-import", "song_downloader",
+    "--hidden-import", "gui_fetcher",
+    "--hidden-import", "fetch_lyrics",
     "--hidden-import", "PyQt6.QtMultimedia",
     "--hidden-import", "sounddevice",
     "--hidden-import", "soundfile",

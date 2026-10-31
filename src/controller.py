@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
@@ -1496,9 +1497,8 @@ class ControlPanel(QWidget):
 
     def on_widescreen_toggled(self, checked):
         self.overlay.use_widescreen = checked
-        self.overlay.visualizer.use_widescreen = checked
-        self.overlay.calculate_mouth_target_rect()
-        self.overlay.reposition_eye_sockets()
+        if hasattr(self.overlay.visualizer, "use_widescreen"):
+            self.overlay.visualizer.use_widescreen = checked
         self.on_size_change()
 
     def on_opacity_change(self, val=None):
@@ -1752,34 +1752,30 @@ class ControlPanel(QWidget):
         subprocess.run(["explorer", os.path.normpath(FONTS_DIR)])
 
     def open_lyric_fetcher(self):
-        # Launch automated lyrics fetcher
+        # Open automated lyric fetcher GUI
         try:
-            candidates = [
-                os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated", "gui_fetcher.py"),
-                os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated", "fetch_lyrics.py"),
-                os.path.join(os.path.dirname(PROJECT_ROOT), "Talia Lyrics Fetch Automated", "gui_fetcher.py")
-            ]
-            script_path = None
-            for p in candidates:
-                if os.path.exists(p):
-                    script_path = p
-                    break
-
-            bat_path = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated", "run_fetcher.bat")
-
-            if script_path and os.path.exists(script_path):
-                py_bin = sys.executable if not getattr(sys, "frozen", False) else "python"
-                subprocess.Popen([py_bin, script_path], cwd=os.path.dirname(script_path))
-                print(f"[ACTION] Launched lyric fetcher: {script_path}")
-            elif os.path.exists(bat_path):
-                subprocess.Popen(["cmd.exe", "/c", bat_path], cwd=os.path.dirname(bat_path))
-                print(f"[ACTION] Launched lyric fetcher bat: {bat_path}")
-            else:
-                folder = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
-                if os.path.exists(folder):
-                    os.startfile(folder)
+            fetcher_dir = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
+            if fetcher_dir not in sys.path:
+                sys.path.insert(0, fetcher_dir)
+            from gui_fetcher import LyricsFetcherWindow
+            if not hasattr(self, "_lyrics_fetcher_win") or self._lyrics_fetcher_win is None:
+                self._lyrics_fetcher_win = LyricsFetcherWindow()
+            self._lyrics_fetcher_win.show()
+            self._lyrics_fetcher_win.raise_()
+            self._lyrics_fetcher_win.activateWindow()
+            print("[ACTION] Opened Lyrics Fetcher Window.")
         except Exception as e:
-            print(f"[ERROR] Failed to open lyric fetcher: {e}")
+            print(f"[ERROR] In-process lyric fetcher launch failed: {e}")
+            try:
+                bat_path = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated", "run_fetcher.bat")
+                if os.path.exists(bat_path):
+                    subprocess.Popen(["cmd.exe", "/c", bat_path], cwd=os.path.dirname(bat_path))
+                else:
+                    folder = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
+                    if os.path.exists(folder):
+                        os.startfile(folder)
+            except Exception as e2:
+                print(f"[ERROR] Fallback lyric fetcher launch failed: {e2}")
 
     def reload_custom_fonts(self):
         if hasattr(self, "settings_dialog"):

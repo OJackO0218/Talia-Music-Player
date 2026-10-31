@@ -48,6 +48,16 @@ class CyberVisualizer:
     def set_eco_mode(self, enabled: bool):
         self.eco_mode = enabled
 
+    def set_mode(self, mode: str):
+        # Set visualizer mode
+        self.mode = mode
+
+    def set_theme(self, theme_name: str):
+        # Set visualizer color theme
+        self.current_theme_name = theme_name
+        self._cached_grid_pixmap = None
+        self._cached_grid_key = None
+
     def draw_background(self, painter: QPainter, rect: QRect):
         # Draw background and grid inside mouth
         theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
