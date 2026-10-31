@@ -45,12 +45,14 @@ cmd = [
     "--distpath", STAGE_DIR,
     "--icon", ICON_ICO,
     "--paths", SRC_DIR,
-    # Collect required audio backends
+    # Collect required audio backends and downloader
     "--collect-data", "sounddevice",
     "--collect-data", "soundfile",
     "--collect-data", "soundcard",
     "--collect-binaries", "sounddevice",
     "--collect-binaries", "soundfile",
+    "--collect-all", "yt_dlp",
+    "--collect-all", "static_ffmpeg",
     # Targeted imports
     "--hidden-import", "PyQt6.QtMultimedia",
     "--hidden-import", "sounddevice",
@@ -58,6 +60,10 @@ cmd = [
     "--hidden-import", "soundcard",
     "--hidden-import", "numpy",
     "--hidden-import", "PIL",
+    "--hidden-import", "yt_dlp",
+    "--hidden-import", "static_ffmpeg",
+    "--hidden-import", "syncedlyrics",
+    "--hidden-import", "song_downloader",
     # Exclude heavy unused modules to keep build fast (<60s) and lean
     "--exclude-module", "cv2",
     "--exclude-module", "PyQt6.QtWebEngineCore",
@@ -95,7 +101,7 @@ dest_music = os.path.join(APP_STAGE, "music")
 if os.path.exists(ASSETS_DIR):
     shutil.copytree(ASSETS_DIR, dest_assets, dirs_exist_ok=True)
     # Also provide direct root fallbacks for eye_parts, icons, sounds for 100% path safety
-    for sub in ["eye_parts", "icons", "sounds"]:
+    for sub in ["eye_parts", "icons", "sounds", "fonts"]:
         sub_src = os.path.join(ASSETS_DIR, sub)
         sub_dest = os.path.join(APP_STAGE, sub)
         if os.path.exists(sub_src):
@@ -132,7 +138,9 @@ default_release_settings = {
     "lyrics_y": -1,
     "show_lyrics": True,
     "lyrics_color": "#e879f9",
-    "lyrics_word_glow": True
+    "lyrics_word_glow": True,
+    "lyrics_font": "Default (Segoe UI / Inter)",
+    "download_folder": ""
 }
 with open(os.path.join(APP_STAGE, "settings.json"), "w", encoding="utf-8") as f:
     json.dump(default_release_settings, f, indent=4)
@@ -148,7 +156,7 @@ No installation, Python, or configuration required.
 CONTROLS:
 - 1 Click on Talia: Play / Pause.
 - 2 Clicks on Talia: Double tap right side to skip, double tap left side to rewind.
-- 3 Clicks on Talia: Open Controller Settings Panel.
+- 3 Clicks on Talia: Open Minimal Player Window (Playback, Library, Song Search & Settings).
 - Hold until SFX plays (0.7s): Initiates Move Mode (Drag Talia and lyrics, scroll to resize).
 - Hold for 2s: Sinking power-down sequence and exit.
 - Scroll Wheel on Talia: Adjusts volume (or scales Talia when Move Mode is active).
@@ -156,6 +164,7 @@ CONTROLS:
 - [F8]: Toggle Move Mode (reposition Talia and lyrics).
 - [F9]: Hide / Show Talia and lyrics.
 - [F10]: Switch Desktop Audio Mode vs Local Player.
+- [F11]: Toggle Eco Mode (30 FPS, ultra-low CPU).
 
 Enjoy!
 """

@@ -584,8 +584,9 @@ class ControlPanel(QWidget):
         self.hotkey_timer.timeout.connect(self.check_hotkeys)
         self.hotkey_timer.start(50)
 
-        # Eco Mode state
+        # Eco Mode & Download Destination state
         self.eco_mode = False
+        self.saved_dl_folder = ""
 
         # Timeline & auto-advance timer (200ms)
         self.timeline_timer = QTimer(self)
@@ -799,6 +800,38 @@ class ControlPanel(QWidget):
         # --- SECTION: SONG SEARCH & AUTO-DOWNLOAD ---
         content_layout.addWidget(create_section_header("Download Songs"))
 
+        # Download Destination Folder Dropdown Row
+        hbox_dl_folder = QHBoxLayout()
+        hbox_dl_folder.setSpacing(6)
+        lbl_dl_folder = QLabel("Save to:")
+        lbl_dl_folder.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
+        hbox_dl_folder.addWidget(lbl_dl_folder)
+
+        self.combo_dl_folder = QComboBox()
+        self.combo_dl_folder.setStyleSheet("""
+            QComboBox {
+                background-color: #202024;
+                border: 1px solid #3f3f46;
+                border-radius: 4px;
+                color: #f4f4f5;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            QComboBox:hover {
+                border-color: #52525b;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #18181b;
+                color: #f4f4f5;
+                border: 1px solid #3f3f46;
+                selection-background-color: #3b82f6;
+                selection-color: #ffffff;
+            }
+        """)
+        self.combo_dl_folder.currentIndexChanged.connect(self.on_dl_folder_changed)
+        hbox_dl_folder.addWidget(self.combo_dl_folder, 1)
+        content_layout.addLayout(hbox_dl_folder)
+
         # Search Input row
         hbox_dl_search = QHBoxLayout()
         hbox_dl_search.setSpacing(6)
@@ -903,6 +936,8 @@ class ControlPanel(QWidget):
             self.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
         if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "lbl_folder_path"):
             self.settings_dialog.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
+        if hasattr(self, "combo_dl_folder"):
+            self.refresh_dl_folders()
         search_txt = self.search_input.text() if hasattr(self, "search_input") else ""
         self.filter_tracks(search_txt)
         self.refresh_queue_ui()
@@ -1631,6 +1666,7 @@ class ControlPanel(QWidget):
             settings_dict["lyrics_word_glow"] = bool(getattr(self.lyrics_overlay, "word_glow", True))
             font_val = self.combo_font.currentText() if hasattr(self, "combo_font") else "Default (Segoe UI / Inter)"
             settings_dict["lyrics_font"] = font_val
+        settings_dict["download_folder"] = str(getattr(self, "saved_dl_folder", ""))
         return settings_dict
 
     def apply_settings(self, cfg: dict):
@@ -1752,6 +1788,10 @@ class ControlPanel(QWidget):
         eco = bool(cfg.get("eco_mode", False))
         self.set_eco_mode(eco)
 
+        # Download Destination Folder
+        self.saved_dl_folder = str(cfg.get("download_folder", ""))
+        self.refresh_dl_folders()
+
         self.overlay.update()
         self.is_loading_settings = False
 
@@ -1828,6 +1868,88 @@ class ControlPanel(QWidget):
     def on_dl_item_double_clicked(self, item):
         self.on_dl_download_clicked()
 
+    def on_dl_folder_changed(self, index: int):
+        if not hasattr(self, "combo_dl_folder"):
+            return
+        data = self.combo_dl_folder.itemData(index)
+        if data == "__BROWSE__":
+            current_base = self.audio_engine.folder_path or PROJECT_ROOT
+            chosen = QFileDialog.getExistingDirectory(
+                self,
+                "Select Destination Folder for Downloads",
+                current_base
+            )
+            if chosen and os.path.isdir(chosen):
+                self.saved_dl_folder = os.path.normpath(chosen)
+                self.refresh_dl_folders()
+                if not getattr(self, "is_loading_settings", False):
+                    cfg = self.get_current_settings_dict()
+                    save_settings(cfg)
+            else:
+                self.refresh_dl_folders()
+        elif data:
+            self.saved_dl_folder = str(data)
+            if not getattr(self, "is_loading_settings", False):
+                cfg = self.get_current_settings_dict()
+                save_settings(cfg)
+
+    def refresh_dl_folders(self):
+        """Populates the download destination folder dropdown with standard and custom locations."""
+        if not hasattr(self, "combo_dl_folder"):
+            return
+
+        current_selected = getattr(self, "saved_dl_folder", "")
+        self.combo_dl_folder.blockSignals(True)
+        self.combo_dl_folder.clear()
+
+        music_dir = self.audio_engine.folder_path
+        if not music_dir or not os.path.exists(music_dir):
+            music_dir = os.path.join(PROJECT_ROOT, "music")
+        os.makedirs(music_dir, exist_ok=True)
+
+        default_sub = os.path.normpath(os.path.join(music_dir, "Downloaded Songs"))
+        os.makedirs(default_sub, exist_ok=True)
+
+        # 1. Default Downloaded Songs
+        self.combo_dl_folder.addItem("📁 Downloaded Songs", default_sub)
+
+        # 2. Main Library Root
+        root_name = os.path.basename(os.path.normpath(music_dir)) or "Music"
+        self.combo_dl_folder.addItem(f"📁 Library Root ({root_name})", os.path.normpath(music_dir))
+
+        # 3. Existing subfolders in music_dir
+        try:
+            for item in sorted(os.listdir(music_dir), key=lambda s: s.lower()):
+                full_p = os.path.normpath(os.path.join(music_dir, item))
+                if os.path.isdir(full_p) and full_p != default_sub:
+                    self.combo_dl_folder.addItem(f"📁 {item}", full_p)
+        except Exception:
+            pass
+
+        # 4. Custom directory if outside music_dir
+        if current_selected and os.path.exists(current_selected):
+            norm_custom = os.path.normpath(current_selected)
+            found = False
+            for idx in range(self.combo_dl_folder.count()):
+                if os.path.normpath(str(self.combo_dl_folder.itemData(idx))) == norm_custom:
+                    found = True
+                    break
+            if not found:
+                custom_name = os.path.basename(norm_custom) or norm_custom
+                self.combo_dl_folder.addItem(f"📁 Custom: {custom_name}", norm_custom)
+
+        # 5. Browse option
+        self.combo_dl_folder.addItem("➕ Browse Custom Folder...", "__BROWSE__")
+
+        # Select target
+        target = os.path.normpath(current_selected) if (current_selected and os.path.exists(current_selected)) else default_sub
+        for idx in range(self.combo_dl_folder.count()):
+            if os.path.normpath(str(self.combo_dl_folder.itemData(idx))) == target:
+                self.combo_dl_folder.setCurrentIndex(idx)
+                break
+
+        self.combo_dl_folder.blockSignals(False)
+
     def on_dl_download_clicked(self):
         items = self.list_dl_results.selectedItems()
         if not items:
@@ -1838,14 +1960,27 @@ class ControlPanel(QWidget):
 
         url = data.get("url")
         title = data.get("title", "Track")
-        music_dir = self.audio_engine.folder_path
+
+        target_dir = None
+        if hasattr(self, "combo_dl_folder"):
+            selected_path = self.combo_dl_folder.currentData()
+            if selected_path and selected_path != "__BROWSE__" and os.path.isdir(selected_path):
+                target_dir = selected_path
+
+        if not target_dir:
+            music_dir = self.audio_engine.folder_path or os.path.join(PROJECT_ROOT, "music")
+            target_dir = os.path.join(music_dir, "Downloaded Songs")
+
+        os.makedirs(target_dir, exist_ok=True)
+
         self.btn_dl_action.setEnabled(False)
         self.btn_dl_search.setEnabled(False)
-        self.lbl_dl_status.setText(f"Downloading '{title}'...")
+        folder_label = os.path.basename(target_dir) or "Music"
+        self.lbl_dl_status.setText(f"Downloading '{title}' to {folder_label}...")
         self.lbl_dl_status.setStyleSheet("color: #3b82f6; font-size: 11px;")
         self.lbl_dl_status.setVisible(True)
 
-        self.downloader.download_and_sync_async(url, music_dir)
+        self.downloader.download_and_sync_async(url, target_dir)
 
     def _on_download_progress(self, msg):
         self.lbl_dl_status.setText(msg)
@@ -1861,10 +1996,15 @@ class ControlPanel(QWidget):
             # Automatically refresh playlist to include the new track
             self.audio_engine.refresh_playlist()
             self.refresh_tracklist()
+            self.refresh_dl_folders()
 
             # Highlight the newly downloaded track in list_tracks
             if opus_path and os.path.exists(opus_path):
                 norm_opus = os.path.normpath(opus_path)
+                existing = [os.path.normpath(p) for p in self.audio_engine.playlist]
+                if norm_opus not in existing:
+                    self.audio_engine.playlist.append(norm_opus)
+                    self.populate_playlist_ui()
                 for r in range(self.list_tracks.count()):
                     it = self.list_tracks.item(r)
                     orig_idx = it.data(Qt.ItemDataRole.UserRole)

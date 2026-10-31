@@ -97,15 +97,14 @@ def search_youtube(query: str, limit: int = 5) -> List[Dict]:
 
 def download_and_sync_lrc(
     video_url: str,
-    music_dir: str,
+    target_dir: str,
     progress_cb: Optional[Callable[[str], None]] = None
 ) -> Tuple[bool, str, str]:
-    """Downloads audio, converts to Opus 160kbps in 'Downloaded Songs', and auto-fetches synced LRC."""
-    if not os.path.exists(music_dir):
-        os.makedirs(music_dir, exist_ok=True)
+    """Downloads audio, converts to Opus 160kbps in target_dir, and auto-fetches synced LRC."""
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir, exist_ok=True)
 
-    download_dir = os.path.join(music_dir, "Downloaded Songs")
-    os.makedirs(download_dir, exist_ok=True)
+    download_dir = target_dir
 
     if progress_cb:
         progress_cb("Connecting to YouTube stream...")
@@ -218,8 +217,8 @@ class SongDownloaderService(QObject):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def download_and_sync_async(self, video_url: str, music_dir: str):
-        """Asynchronously downloads audio, converts to Opus 160kbps in 'Downloaded Songs', and fetches LRC."""
+    def download_and_sync_async(self, video_url: str, target_dir: str):
+        """Asynchronously downloads audio, converts to Opus 160kbps in target_dir, and fetches LRC."""
         if self._is_downloading:
             self.download_progress.emit("Another download is currently in progress...")
             return
@@ -230,7 +229,7 @@ class SongDownloaderService(QObject):
             try:
                 ok, opus_path, msg = download_and_sync_lrc(
                     video_url,
-                    music_dir,
+                    target_dir,
                     progress_cb=self.download_progress.emit
                 )
                 self.download_finished.emit(ok, opus_path, msg)
