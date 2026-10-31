@@ -1010,7 +1010,11 @@ class ControlPanel(QWidget):
             try:
                 rel = os.path.relpath(q_path, base_dir)
                 rel_dir = os.path.dirname(rel)
-                sub_txt = f"  ({rel_dir.replace('\\', ' / ')})" if rel_dir and rel_dir != "." else ""
+                if rel_dir and rel_dir != ".":
+                    clean_dir = rel_dir.replace("\\", " / ")
+                    sub_txt = f"  ({clean_dir})"
+                else:
+                    sub_txt = ""
             except Exception:
                 sub_txt = ""
             q_item = QListWidgetItem(f"#{i+1:02d}  {filename}{sub_txt}")

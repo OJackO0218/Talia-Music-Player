@@ -54,6 +54,14 @@ cmd = [
     "--collect-all", "yt_dlp",
     "--collect-all", "static_ffmpeg",
     # Targeted imports
+    "--hidden-import", "controller",
+    "--hidden-import", "overlay",
+    "--hidden-import", "audio_engine",
+    "--hidden-import", "visualizer",
+    "--hidden-import", "lyrics_overlay",
+    "--hidden-import", "lyrics_manager",
+    "--hidden-import", "guide_dialog",
+    "--hidden-import", "song_downloader",
     "--hidden-import", "PyQt6.QtMultimedia",
     "--hidden-import", "sounddevice",
     "--hidden-import", "soundfile",
@@ -63,7 +71,6 @@ cmd = [
     "--hidden-import", "yt_dlp",
     "--hidden-import", "static_ffmpeg",
     "--hidden-import", "syncedlyrics",
-    "--hidden-import", "song_downloader",
     # Exclude heavy unused modules to keep build fast (<60s) and lean
     "--exclude-module", "cv2",
     "--exclude-module", "PyQt6.QtWebEngineCore",
