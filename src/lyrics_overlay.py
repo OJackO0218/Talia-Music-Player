@@ -94,10 +94,12 @@ class LyricsOverlayWindow(QWidget):
         self.anim_timer.timeout.connect(self._sync_and_animate_tick)
         self.anim_timer.start(16)
 
-        # Topmost enforcement timer (5000ms non-intrusive)
+        self._last_fg_hwnd = 0
+
+        # Topmost enforcement timer (1000ms heartbeat, non-intrusive)
         self.topmost_timer = QTimer(self)
         self.topmost_timer.timeout.connect(self.enforce_topmost)
-        self.topmost_timer.start(5000)
+        self.topmost_timer.start(1000)
 
     def get_available_fonts(self) -> list:
         """Scans assets/fonts for any user-supplied .ttf or .otf files and returns list of family names."""
@@ -181,19 +183,18 @@ class LyricsOverlayWindow(QWidget):
 
     def enforce_topmost(self):
         """Ensures the floating lyrics stay visible above background apps without stealing focus."""
-        if self.isVisible():
-            try:
-                hwnd = int(self.winId())
-                ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                if not (ex_style & WS_EX_TOPMOST):
-                    user32.SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                    )
-            except Exception:
-                pass
+        if not self.isVisible():
+            return
+        try:
+            hwnd = int(self.winId())
+            user32.SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            )
+        except Exception:
+            pass
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -229,6 +230,15 @@ class LyricsOverlayWindow(QWidget):
         if not self.is_enabled or not self.isVisible():
             self.anim_timer.stop()
             return
+
+        # Ensure floating lyrics stay topmost over full-screen / borderless games when foreground changes
+        try:
+            curr_fg = user32.GetForegroundWindow()
+            if curr_fg != self._last_fg_hwnd:
+                self._last_fg_hwnd = curr_fg
+                self.enforce_topmost()
+        except Exception:
+            pass
 
         # In Move Mode: always show '(lyrics subtitle is here)' as requested
         if self.move_mode:

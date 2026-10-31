@@ -285,10 +285,12 @@ class OverlayWindow(QWidget):
         self.load_assets()
         self.init_position()
 
-        # Continuous topmost enforcement (5000ms, non-intrusive)
+        self._last_fg_hwnd = 0
+
+        # Continuous topmost enforcement (1000ms heartbeat, non-intrusive)
         self.topmost_timer = QTimer(self)
         self.topmost_timer.timeout.connect(self.enforce_topmost)
-        self.topmost_timer.start(5000)
+        self.topmost_timer.start(1000)
 
         # 60 FPS Animation & Eye-tracking loop (16ms)
         self.anim_timer = QTimer(self)
@@ -607,17 +609,20 @@ class OverlayWindow(QWidget):
     def enforce_topmost(self):
         if not self.isVisible():
             return
-        # If Controller window is visible or active, NEVER steal topmost or fight Z-order!
-        if self.panel and (self.panel.isVisible() or self.panel.isActiveWindow() or self.panel.underMouse()):
+        # If Controller window is active/focused or being hovered, avoid fighting Z-order over it
+        if self.panel and (self.panel.isActiveWindow() or self.panel.underMouse()):
             return
-        hwnd = int(self.winId())
-        ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        if not (ex_style & WS_EX_TOPMOST):
+        try:
+            hwnd = int(self.winId())
             user32.SetWindowPos(
                 hwnd, HWND_TOPMOST,
                 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
             )
+            if hasattr(self, "lyrics_overlay") and self.lyrics_overlay and self.lyrics_overlay.isVisible():
+                self.lyrics_overlay.enforce_topmost()
+        except Exception:
+            pass
 
     def set_move_talia_mode(self, enabled: bool):
         self.move_talia_mode = enabled
@@ -642,6 +647,15 @@ class OverlayWindow(QWidget):
     def on_anim_tick(self):
         if not self.isVisible():
             return
+
+        # Ensure Talia stays topmost over full-screen / borderless games when foreground changes
+        try:
+            curr_fg = user32.GetForegroundWindow()
+            if curr_fg != self._last_fg_hwnd:
+                self._last_fg_hwnd = curr_fg
+                self.enforce_topmost()
+        except Exception:
+            pass
 
         # Snappy Rise-Up Entrance Animation (<= 0.20s max)
         if self.is_starting_up:
