@@ -60,6 +60,11 @@ class LyricsOverlayWindow(QWidget):
         self.word_glow = True          # Spotify-style karaoke progressive word-by-word lighting
         self.line_progress = 0.0       # 0.0 -> 1.0 singing progress across the active line
 
+        # Pause fade-out state (turns off after 10 seconds of pause)
+        self.pause_start_time = None
+        self._pause_timed_out = False
+        self._last_paused_pos = None
+
         # Dragging state (only active when move_mode is True)
         self.is_dragging = False
         self.drag_start_pos = QPoint()
@@ -247,6 +252,8 @@ class LyricsOverlayWindow(QWidget):
                 self.displayed_text = target_text
                 self.pop_progress = 1.0
                 self.line_opacity = 1.0
+            self.pause_start_time = None
+            self._pause_timed_out = False
         else:
             # When Move Mode is OFF, remove '(lyrics subtitle is here)' immediately
             if self.displayed_text == "(lyrics subtitle is here)":
@@ -259,7 +266,14 @@ class LyricsOverlayWindow(QWidget):
                 current_time = self.audio_engine.get_position()
                 line_idx, text, time_into_line, singing_dur = self.lyrics_manager.get_current_line_info(current_time)
 
-                if line_idx != self.current_line_idx:
+                if self._pause_timed_out:
+                    self._pause_timed_out = False
+                    self.current_line_idx = line_idx
+                    self.displayed_text = text.strip()
+                    self.line_opacity = 1.0
+                    self.pop_progress = 1.0
+                    self.glow_flash = 0.20
+                elif line_idx != self.current_line_idx:
                     self.current_line_idx = line_idx
                     self.displayed_text = text.strip()
                     # Trigger kinetic pop-up animation on new line
@@ -271,10 +285,40 @@ class LyricsOverlayWindow(QWidget):
                     self.line_progress = min(1.0, max(0.0, time_into_line / singing_dur))
                 else:
                     self.line_progress = 1.0
+
+                self.pause_start_time = None
+                self._last_paused_pos = None
+
+            elif self.audio_engine.audio_mode == "player" and not self.audio_engine.is_playing:
+                # Paused state: check if timeline was scrubbed while paused
+                current_time = self.audio_engine.get_position()
+                if self._last_paused_pos is None:
+                    self._last_paused_pos = current_time
+                elif abs(current_time - self._last_paused_pos) > 0.5:
+                    # Scrubbed timeline: refresh lyric for current position and reset 10s timer
+                    self._last_paused_pos = current_time
+                    self.pause_start_time = time.time()
+                    self._pause_timed_out = False
+                    line_idx, text, time_into_line, singing_dur = self.lyrics_manager.get_current_line_info(current_time)
+                    self.current_line_idx = line_idx
+                    self.displayed_text = text.strip()
+                    if singing_dur > 0.0:
+                        self.line_progress = min(1.0, max(0.0, time_into_line / singing_dur))
+                    else:
+                        self.line_progress = 1.0
+
+                if self.pause_start_time is None:
+                    self.pause_start_time = time.time()
+                elif (time.time() - self.pause_start_time) >= 10.0:
+                    self._pause_timed_out = True
+
             elif self.audio_engine.audio_mode == "desktop":
                 self.displayed_text = ""
                 self.current_line_idx = -1
                 self.line_progress = 0.0
+                self.pause_start_time = None
+                self._pause_timed_out = False
+                self._last_paused_pos = None
 
         # Advance pop-up progress (0.0 -> 1.0 over ~200ms)
         if self.pop_progress < 1.0:
@@ -287,7 +331,7 @@ class LyricsOverlayWindow(QWidget):
             self.glow_flash = 0.0
 
         # Target opacity with snap-to-settle
-        has_text = bool(self.displayed_text)
+        has_text = bool(self.displayed_text) and not self._pause_timed_out
         target_opacity = 1.0 if has_text else 0.0
         opacity_diff = abs(target_opacity - self.line_opacity)
         self.line_opacity += (target_opacity - self.line_opacity) * 0.18
