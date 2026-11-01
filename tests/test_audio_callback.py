@@ -1,0 +1,111 @@
+"""Regression tests for the real-time callback's memory-only data path."""
+
+import numpy as np
+
+from audio_engine import CyberAudioEngine
+
+
+class FakeFeeder:
+    """Stand-in for AudioFeeder so the callback can be tested without a device."""
+
+    def __init__(self, chunks=(), exhausted=False):
+        self._chunks = list(chunks)
+        self._exhausted = exhausted
+
+    def get_chunk(self):
+        if self._chunks:
+            return self._chunks.pop(0)
+        return None
+
+    @property
+    def exhausted(self):
+        return self._exhausted
+
+
+def _engine_with(feeder):
+    engine = CyberAudioEngine()
+    engine.feeder = feeder
+    engine.is_playing = True
+    engine.total_frames = 100_000
+    engine.current_frame = 0
+    engine.set_volume(1.0)
+    return engine
+
+
+def test_callback_uses_leftover_when_chunk_is_shorter_than_buffer():
+    chunk = np.ones((1500, 2), dtype=np.float32)
+    engine = _engine_with(FakeFeeder([chunk]))
+
+    first = np.zeros((1024, 2), dtype=np.float32)
+    engine._audio_callback(first, 1024, None, None)
+    np.testing.assert_allclose(first, 1.0)
+    assert engine._leftover.shape == (476, 2)
+    assert engine.current_frame == 1024
+
+    second = np.zeros((1024, 2), dtype=np.float32)
+    engine._audio_callback(second, 1024, None, None)
+    np.testing.assert_allclose(second[:476], 1.0)
+    np.testing.assert_allclose(second[476:], 0.0)
+    assert engine._leftover is None
+    assert engine.current_frame == 1500
+
+
+def test_callback_duplicates_mono_chunks_to_stereo():
+    chunk = np.full((256,), 0.5, dtype=np.float32)
+    engine = _engine_with(FakeFeeder([chunk]))
+
+    out = np.zeros((256, 2), dtype=np.float32)
+    engine._audio_callback(out, 256, None, None)
+
+    np.testing.assert_allclose(out[:, 0], 0.5)
+    np.testing.assert_allclose(out[:, 1], 0.5)
+
+
+def test_callback_marks_finished_only_after_feeder_is_exhausted():
+    engine = _engine_with(FakeFeeder([], exhausted=False))
+    out = np.zeros((256, 2), dtype=np.float32)
+
+    engine._audio_callback(out, 256, None, None)
+    assert not engine.track_finished
+    assert engine.is_playing
+
+    engine.feeder._exhausted = True
+    engine._audio_callback(out, 256, None, None)
+    assert engine.track_finished
+    assert not engine.is_playing
+    assert engine.current_frame == engine.total_frames
+
+
+def test_callback_survives_feeder_cleared_mid_call():
+    """A track switch on the UI thread may clear engine.feeder while we read."""
+
+    class VanishingFeeder(FakeFeeder):
+        def __init__(self, engine, chunk):
+            super().__init__([chunk])
+            self.engine = engine
+
+        def get_chunk(self):
+            self.engine.feeder = None
+            return super().get_chunk()
+
+    engine = CyberAudioEngine()
+    engine.is_playing = True
+    engine.total_frames = 100_000
+    engine.set_volume(1.0)
+    engine.feeder = VanishingFeeder(engine, np.ones((256, 2), dtype=np.float32))
+
+    out = np.zeros((256, 2), dtype=np.float32)
+    engine._audio_callback(out, 256, None, None)
+
+    np.testing.assert_allclose(out, 1.0)
+    assert engine.current_frame == 256
+
+
+def test_callback_is_silent_when_not_playing():
+    engine = _engine_with(FakeFeeder([np.ones((256, 2), dtype=np.float32)]))
+    engine.is_playing = False
+    out = np.ones((256, 2), dtype=np.float32)
+
+    engine._audio_callback(out, 256, None, None)
+
+    np.testing.assert_allclose(out, 0.0)

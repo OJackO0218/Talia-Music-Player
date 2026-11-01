@@ -1,0 +1,5 @@
+# Development-only dependencies. Install with:
+#   python -m pip install -r requirements-dev.txt
+pytest==9.2.0
+black==26.10.1
+ruff==0.17.3

@@ -2,29 +2,58 @@
 Transparent Live2D-rigged character overlay with 60 FPS eye-tracking and mouth visualizer.
 """
 
-import os
+import logging
 import math
+import os
+import random
 import time
-import numpy as np
-from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 
-from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt, QPoint, QPointF, QTimer, QRect, QRectF, QUrl
+import numpy as np
+from PIL import Image, ImageEnhance, ImageOps
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
-    QPixmap, QPainter, QColor, QPen, QImage, QCursor, QRadialGradient, QBrush,
-    QFont, QFontMetrics
+    QBrush,
+    QColor,
+    QCursor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+    QRadialGradient,
 )
 from PyQt6.QtMultimedia import QSoundEffect
+from PyQt6.QtWidgets import QApplication, QWidget
 
-from config import (
-    DEFAULT_OVERLAY_SIZE,
-    EYE_PARTS_DIR, SOUNDS_DIR, PNGS_DIR, CANVAS_BASE_SIZE, MOUTH_BOX_X, MOUTH_BOX_Y,
-    MOUTH_BOX_W, MOUTH_BOX_H, DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY,
-    DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY, MIN_CHAR_SIZE, MAX_CHAR_SIZE,
-    user32, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW, VK_VOLUME_UP, VK_VOLUME_DOWN,
-    save_settings, trim_process_memory, GWL_EXSTYLE, WS_EX_TOPMOST
-)
 from audio_engine import CyberAudioEngine
+from config import (
+    CANVAS_BASE_SIZE,
+    DEFAULT_ORIGIN_LX,
+    DEFAULT_ORIGIN_LY,
+    DEFAULT_ORIGIN_RX,
+    DEFAULT_ORIGIN_RY,
+    DEFAULT_OVERLAY_SIZE,
+    EYE_PARTS_DIR,
+    HWND_TOPMOST,
+    MAX_CHAR_SIZE,
+    MIN_CHAR_SIZE,
+    MOUTH_BOX_H,
+    MOUTH_BOX_W,
+    MOUTH_BOX_X,
+    MOUTH_BOX_Y,
+    PNGS_DIR,
+    SOUNDS_DIR,
+    SWP_NOACTIVATE,
+    SWP_NOMOVE,
+    SWP_NOSIZE,
+    SWP_SHOWWINDOW,
+    VK_VOLUME_DOWN,
+    VK_VOLUME_UP,
+    save_settings,
+    trim_process_memory,
+    user32,
+)
 from visualizer import CyberVisualizer
 
 
@@ -36,6 +65,9 @@ def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
     h, w = arr.shape[:2]
     qimg = QImage(arr.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
     return QPixmap.fromImage(qimg.copy())
+
+
+log = logging.getLogger(__name__)
 
 
 class OverlayWindow(QWidget):
@@ -63,7 +95,6 @@ class OverlayWindow(QWidget):
         self.current_offset_ly = 0.0
         self.target_offset_lx = 0.0
         self.target_offset_ly = 0.0
-
         self.current_offset_rx = 0.0
         self.current_offset_ry = 0.0
         self.target_offset_rx = 0.0
@@ -73,7 +104,6 @@ class OverlayWindow(QWidget):
         self.drag_position = QPoint()
         self.press_pos = QPoint()
         self.is_dragging = False
-
         self.click_count = 0
         self.multi_click_timer = QTimer(self)
         self.multi_click_timer.setSingleShot(True)
@@ -87,7 +117,6 @@ class OverlayWindow(QWidget):
         self.hold_timer = QTimer(self)
         self.hold_timer.setInterval(25)
         self.hold_timer.timeout.connect(self._on_hold_tick)
-
         self.restore_timer = QTimer(self)
         self.restore_timer.setInterval(20)
         self.restore_timer.timeout.connect(self._on_restore_tick)
@@ -140,15 +169,17 @@ class OverlayWindow(QWidget):
         # Tier 1 Live2D: Audio Head-Bop & Rhythmic Grooving to BPM
         self.head_bop_y = 0.0
         self.head_bop_tilt = 0.0
-        self.bop_phase = 0.0       # 0.0 to 2.0 continuous phase (2 beats per left/right sway cycle)
-        self.bop_amplitude = 0.0   # Current dynamic bop depth in pixels
+        self.bop_phase = 0.0  # 0.0 to 2.0 continuous phase (2 beats per left/right sway cycle)
+        self.bop_amplitude = 0.0  # Current dynamic bop depth in pixels
         self.tilt_amplitude = 0.0  # Current dynamic groove tilt in degrees
-        self.bass_groove_activity = 0.0  # Smooth 0.0 to 1.0 activity gate (only bops when punchy bass is present)
+        self.bass_groove_activity = (
+            0.0  # Smooth 0.0 to 1.0 activity gate (only bops when punchy bass is present)
+        )
 
         # Tier 1 Live2D: Drowsy AFK Idle State (after 30s AFK or 1 minute of no music)
         self.last_user_activity = time.time()
         self.last_music_active_time = time.time()
-        self.drowsy_level = 0.0    # 0.0 = wide awake, 1.0 = fully drowsy (sleepy half-closed eyes)
+        self.drowsy_level = 0.0  # 0.0 = wide awake, 1.0 = fully drowsy (sleepy half-closed eyes)
         self.is_drowsy = False
 
         # Sinking Shutdown State (3.0s to 3.6s)
@@ -170,43 +201,36 @@ class OverlayWindow(QWidget):
         if os.path.exists(pop_path):
             self.sound_pop.setSource(QUrl.fromLocalFile(pop_path))
             self.sound_pop.setVolume(0.24)
-
         self.sound_btn = QSoundEffect(self)
         btn_path = os.path.join(SOUNDS_DIR, "click_button.wav")
         if os.path.exists(btn_path):
             self.sound_btn.setSource(QUrl.fromLocalFile(btn_path))
             self.sound_btn.setVolume(0.20)
-
         self.sound_hold = QSoundEffect(self)
         hold_path = os.path.join(SOUNDS_DIR, "hold_ramp.wav")
         if os.path.exists(hold_path):
             self.sound_hold.setSource(QUrl.fromLocalFile(hold_path))
             self.sound_hold.setVolume(0.20)
-
         self.sound_shutdown = QSoundEffect(self)
         shutdown_path = os.path.join(SOUNDS_DIR, "shutdown_heavy.wav")
         if os.path.exists(shutdown_path):
             self.sound_shutdown.setSource(QUrl.fromLocalFile(shutdown_path))
             self.sound_shutdown.setVolume(0.25)
-
         self.sound_skip_next = QSoundEffect(self)
         sn_path = os.path.join(SOUNDS_DIR, "skip_next.wav")
         if os.path.exists(sn_path):
             self.sound_skip_next.setSource(QUrl.fromLocalFile(sn_path))
             self.sound_skip_next.setVolume(0.30)
-
         self.sound_skip_prev = QSoundEffect(self)
         sp_path = os.path.join(SOUNDS_DIR, "skip_prev.wav")
         if os.path.exists(sp_path):
             self.sound_skip_prev.setSource(QUrl.fromLocalFile(sp_path))
             self.sound_skip_prev.setVolume(0.30)
-
         self.sound_menu_open = QSoundEffect(self)
         mo_path = os.path.join(SOUNDS_DIR, "menu_open.wav")
         if os.path.exists(mo_path):
             self.sound_menu_open.setSource(QUrl.fromLocalFile(mo_path))
             self.sound_menu_open.setVolume(0.25)
-
         self.sound_menu_close = QSoundEffect(self)
         mc_path = os.path.join(SOUNDS_DIR, "menu_close.wav")
         if os.path.exists(mc_path):
@@ -265,14 +289,12 @@ class OverlayWindow(QWidget):
         self._osd_band_color = QColor(6, 6, 12, 60)
         self._osd_shadow_color = QColor(0, 0, 0, 180)
         self._osd_text_color = QColor(240, 248, 255, 205)
-
         self._cached_zzz_key = None
         self._cached_zzz_font = None
         self._cached_zzz_text_w = 0
         self._cached_zzz_baseline = 0.0
         self._zzz_shadow_color = QColor(0, 0, 0, 180)
         self._last_sleep_frame_idx = -1
-
         self.setMouseTracking(True)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -281,10 +303,8 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-
         self.load_assets()
         self.init_position()
-
         self._last_fg_hwnd = 0
 
         # Continuous topmost enforcement (1000ms heartbeat, non-intrusive)
@@ -299,7 +319,7 @@ class OverlayWindow(QWidget):
 
     def load_assets(self):
         """Loads and auto-slices the 3-layer eye rig from PNG files."""
-        print(f"[ASSET LOADER] Reading art from: {EYE_PARTS_DIR}")
+        log.info(f"[ASSET LOADER] Reading art from: {EYE_PARTS_DIR}")
         p1_path = os.path.join(EYE_PARTS_DIR, "part1_pupils_full.png")
         p2_path = os.path.join(EYE_PARTS_DIR, "part2_eye_whites_full.png")
         p3_path = os.path.join(EYE_PARTS_DIR, "part3_talia_main_sprite.png")
@@ -340,7 +360,9 @@ class OverlayWindow(QWidget):
                 yl_max, xl_max = coords_l[:, 0].max(), coords_l[:, 1].max()
                 self.origin_lx = int(xl_min)
                 self.origin_ly = int(yl_min)
-                self.raw_pupil_l_pil = Image.fromarray(p1_np[yl_min:yl_max+1, xl_min:xl_max+1])
+                self.raw_pupil_l_pil = Image.fromarray(
+                    p1_np[yl_min : yl_max + 1, xl_min : xl_max + 1]
+                )
             else:
                 self.origin_lx, self.origin_ly = DEFAULT_ORIGIN_LX, DEFAULT_ORIGIN_LY
                 self.raw_pupil_l_pil = None
@@ -354,7 +376,9 @@ class OverlayWindow(QWidget):
                 yr_max, xr_max = coords_r[:, 0].max(), coords_r[:, 1].max()
                 self.origin_rx = int(xr_min)
                 self.origin_ry = int(yr_min)
-                self.raw_pupil_r_pil = Image.fromarray(p1_np[yr_min:yr_max+1, xr_min:xr_max+1])
+                self.raw_pupil_r_pil = Image.fromarray(
+                    p1_np[yr_min : yr_max + 1, xr_min : xr_max + 1]
+                )
             else:
                 self.origin_rx, self.origin_ry = DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY
                 self.raw_pupil_r_pil = None
@@ -363,7 +387,6 @@ class OverlayWindow(QWidget):
             self.origin_rx, self.origin_ry = DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY
             self.raw_pupil_l_pil = None
             self.raw_pupil_r_pil = None
-
         self._apply_pupil_saturation()
 
         # Invalidate scaled pixmap cache
@@ -425,7 +448,6 @@ class OverlayWindow(QWidget):
             self.pupil_l = QPixmap()
             self.pupil_r = QPixmap()
             return
-
         vol = min(1.0, max(0.0, self.current_volume))
         if vol <= 0.5:
             ratio = vol / 0.5
@@ -456,11 +478,9 @@ class OverlayWindow(QWidget):
         """Ticks while holding mouse button. After 1s enables drag mode; after 3.0s initiates 0.6s sinking shutdown."""
         if self.is_shutting_down:
             return
-
         if not self.is_holding or self.has_dragged:
             self.hold_timer.stop()
             return
-
         elapsed = time.time() - self.press_time
         if elapsed >= 2.0:
             # If move_talia_mode is currently ON: do NOT shut down! Instead, exit Move Mode!
@@ -478,7 +498,7 @@ class OverlayWindow(QWidget):
                         save_settings(cfg)
                     except Exception:
                         pass
-                print("[ACTION] Held while in Move Mode: Talia locked and position saved!")
+                log.info("[ACTION] Held while in Move Mode: Talia locked and position saved!")
                 return
             # Full 2.0 seconds held in locked mode: Initiate 0.6s dramatic sinking power-down sequence!
             self.is_shutting_down = True
@@ -502,7 +522,9 @@ class OverlayWindow(QWidget):
 
             # Between 0.7s and 2.0s: Desaturate the entire character towards grayscale
             # If user releases anytime between 0.7s and 2.0s, Move Talia (Drag Mode) is toggled!
-            progress = (elapsed - 0.7) / 1.3  # 0.0 to 1.0 across the 1.3-second transition (from 0.7s to 2.0s)
+            progress = (
+                elapsed - 0.7
+            ) / 1.3  # 0.0 to 1.0 across the 1.3-second transition (from 0.7s to 2.0s)
             self.hold_saturation = max(0.0, 1.0 - progress)
             self._apply_pupil_saturation()
             self.update()
@@ -514,12 +536,16 @@ class OverlayWindow(QWidget):
         self.impulse_rock_intensity = 1.8  # ~1.8 degrees smooth tilt
         self.impulse_sway_intensity = max(3.0, char_size * 0.007)  # ~6px sway
         self.impulse_timer = 0.22
-        self.hover_glow = 0.30  # 50% brighter transient tactile glow flash (decays back to original)
+        self.hover_glow = (
+            0.30  # 50% brighter transient tactile glow flash (decays back to original)
+        )
         if hasattr(self, "sound_pop") and self.sound_pop.isLoaded():
             self.sound_pop.play()
         self.update()
 
-    def _trigger_click_feedback(self, color: QColor = QColor(255, 255, 255), rot_degrees: float = 0.0, alpha: float = 0.60):
+    def _trigger_click_feedback(
+        self, color: QColor = QColor(255, 255, 255), rot_degrees: float = 0.0, alpha: float = 0.60
+    ):
         # Click feedback flash and tilt bounce
         self.flash_color = color
         self.flash_alpha = alpha
@@ -553,7 +579,9 @@ class OverlayWindow(QWidget):
 
     def close_application(self):
         """Powers down Talia, auto-saves persistent settings, and terminates application instantly."""
-        print("[SHUTDOWN] Talia powered down after 2.0s hold. Saving settings and exiting instantly...")
+        log.info(
+            "[SHUTDOWN] Talia powered down after 2.0s hold. Saving settings and exiting instantly..."
+        )
         if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
             self.sound_hold.stop()
         try:
@@ -562,7 +590,6 @@ class OverlayWindow(QWidget):
                 save_settings(cfg)
         except Exception:
             pass
-
         self.audio_engine.shutdown()
         self.anim_timer.stop()
         self.topmost_timer.stop()
@@ -570,6 +597,7 @@ class OverlayWindow(QWidget):
         self.hide()
         QApplication.quit()
         import os
+
         os._exit(0)
 
     def moveEvent(self, event):
@@ -592,10 +620,8 @@ class OverlayWindow(QWidget):
         self.current_volume = max(0.0, min(1.0, float(vol)))
         self.audio_engine.set_volume(self.current_volume)
         self._apply_pupil_saturation()
-
         if self.panel:
             self.panel.sync_volume(self.current_volume)
-
         self.update()
 
     def init_position(self):
@@ -615,11 +641,19 @@ class OverlayWindow(QWidget):
         try:
             hwnd = int(self.winId())
             user32.SetWindowPos(
-                hwnd, HWND_TOPMOST,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
-            if hasattr(self, "lyrics_overlay") and self.lyrics_overlay and self.lyrics_overlay.isVisible():
+            if (
+                hasattr(self, "lyrics_overlay")
+                and self.lyrics_overlay
+                and self.lyrics_overlay.isVisible()
+            ):
                 self.lyrics_overlay.enforce_topmost()
         except Exception:
             pass
@@ -664,7 +698,6 @@ class OverlayWindow(QWidget):
                 if hasattr(self, "sound_pop"):
                     self.sound_pop.stop()
                     self.sound_pop.play()
-
             elapsed = time.time() - self.startup_start_time
             p = min(1.0, elapsed / self.startup_duration)
             p_ease = 1.0 - ((1.0 - p) ** 3)  # Snappy cubic ease-out
@@ -680,7 +713,7 @@ class OverlayWindow(QWidget):
             p_ease = p * p  # Accelerating gravity sink
             sink_offset = int((self.height() + 120) * p_ease)
             self.move(self.shutdown_start_pos.x(), self.shutdown_start_pos.y() + sink_offset)
-            self.opacity_val = max(0.0, 1.0 - (p ** 1.3))
+            self.opacity_val = max(0.0, 1.0 - (p**1.3))
             self.hold_saturation = 0.0
             self.current_rotation *= 0.70
             self.current_shake_x = 0.0
@@ -693,30 +726,30 @@ class OverlayWindow(QWidget):
         # 1. Update eye tracking relative to Talia's true screen coordinates
         cursor_pt = QCursor.pos()
         if self._last_cursor_pt is not None:
-            cursor_moved = (cursor_pt != self._last_cursor_pt)
+            cursor_moved = cursor_pt != self._last_cursor_pt
             if cursor_moved:
                 self.last_user_activity = time.time()
         else:
             cursor_moved = False
         self._last_cursor_pt = cursor_pt
-
         if self._cached_win_pos is None:
             self._cached_win_pos = self.mapToGlobal(QPoint(0, 0))
         win_pos = self._cached_win_pos
-
         MARGIN = 16
         char_size = min(self.width(), self.height()) - 2 * MARGIN
         char_offset_x = (self.width() - char_size) // 2
         char_offset_y = (self.height() - char_size) // 2
-
         scale = char_size / float(CANVAS_BASE_SIZE)
 
         # Exact center of left and right eyes in Global Screen Coordinates
         eye_lx = win_pos.x() + char_offset_x + (self.origin_lx + self.pupil_l.width() / 2.0) * scale
-        eye_ly = win_pos.y() + char_offset_y + (self.origin_ly + self.pupil_l.height() / 2.0) * scale
-
+        eye_ly = (
+            win_pos.y() + char_offset_y + (self.origin_ly + self.pupil_l.height() / 2.0) * scale
+        )
         eye_rx = win_pos.x() + char_offset_x + (self.origin_rx + self.pupil_r.width() / 2.0) * scale
-        eye_ry = win_pos.y() + char_offset_y + (self.origin_ry + self.pupil_r.height() / 2.0) * scale
+        eye_ry = (
+            win_pos.y() + char_offset_y + (self.origin_ry + self.pupil_r.height() / 2.0) * scale
+        )
 
         # Travel limits scaled by eye sensitivity
         max_travel_x = 18.0 * self.eye_sensitivity
@@ -751,13 +784,11 @@ class OverlayWindow(QWidget):
         delta_ly = abs(self.target_offset_ly - self.current_offset_ly)
         delta_rx = abs(self.target_offset_rx - self.current_offset_rx)
         delta_ry = abs(self.target_offset_ry - self.current_offset_ry)
-        eye_moving = (delta_lx > 0.05 or delta_ly > 0.05 or delta_rx > 0.05 or delta_ry > 0.05)
-
+        eye_moving = delta_lx > 0.05 or delta_ly > 0.05 or delta_rx > 0.05 or delta_ry > 0.05
         self.current_offset_lx += (self.target_offset_lx - self.current_offset_lx) * 0.25
         self.current_offset_ly += (self.target_offset_ly - self.current_offset_ly) * 0.25
         self.current_offset_rx += (self.target_offset_rx - self.current_offset_rx) * 0.25
         self.current_offset_ry += (self.target_offset_ry - self.current_offset_ry) * 0.25
-
         if not eye_moving:
             self.current_offset_lx = self.target_offset_lx
             self.current_offset_ly = self.target_offset_ly
@@ -771,7 +802,6 @@ class OverlayWindow(QWidget):
         center_y = global_char_y + char_size / 2.0
         dist_to_center = math.hypot(cursor_pt.x() - center_x, cursor_pt.y() - center_y)
         is_hovering = dist_to_center <= (char_size * 0.48)
-
         if is_hovering and not self.was_hovered:
             self._trigger_hover_feedback(char_size)
             self.was_hovered = True
@@ -799,7 +829,9 @@ class OverlayWindow(QWidget):
             self.hover_scale = target_hover_scale
 
         # 3. Button press tactile spring bounce back
-        button_changing = (self.button_press_delay > 0.0) or (abs(self.button_press_scale - 1.0) > 0.001)
+        button_changing = (self.button_press_delay > 0.0) or (
+            abs(self.button_press_scale - 1.0) > 0.001
+        )
         if self.button_press_delay > 0.0:
             self.button_press_delay -= 0.016
         elif abs(self.button_press_scale - 1.0) > 0.001:
@@ -808,7 +840,7 @@ class OverlayWindow(QWidget):
             self.button_press_scale = 1.0
 
         # Check audio active state
-        is_audio_active = (self.audio_engine.audio_mode == "player" and self.audio_engine.is_playing)
+        is_audio_active = self.audio_engine.audio_mode == "player" and self.audio_engine.is_playing
         if self.audio_engine.audio_mode == "desktop":
             bars = getattr(self.audio_engine, "smoothed_bars", None)
             is_audio_active = (getattr(self.audio_engine, "beat_energy", 0.0) > 0.002) or (
@@ -854,7 +886,7 @@ class OverlayWindow(QWidget):
             if elapsed < 1.3:
                 # 0.0s to 1.6s: Gentle, subtle rocking (tilt +/- 0.7 to 1.4 deg, sway 2-4px)
                 progress = elapsed / 1.3
-                rot_amp = (0.7 + progress * 0.7)
+                rot_amp = 0.7 + progress * 0.7
                 sway_amp = (2.0 + progress * 2.0) * (char_size / 850.0)
                 self.current_rotation = math.sin(t * 16.0) * rot_amp
                 self.current_shake_x = math.sin(t * 16.0 + 0.3) * sway_amp
@@ -862,7 +894,7 @@ class OverlayWindow(QWidget):
             else:
                 # 1.3s to 2.0s: Escalating rocking towards 2.0s shutdown
                 progress_hard = min(1.0, (elapsed - 1.3) / 0.7)
-                rot_amp = (1.4 + progress_hard * 4.0)
+                rot_amp = 1.4 + progress_hard * 4.0
                 sway_amp = (4.0 + progress_hard * 12.0) * (char_size / 850.0)
                 self.current_rotation = math.sin(t * 26.0) * rot_amp
                 self.current_shake_x = math.sin(t * 26.0 + 0.3) * sway_amp
@@ -896,6 +928,7 @@ class OverlayWindow(QWidget):
                     self.is_blinking = True
                     self.blink_timer = 0.0
                     import random
+
                     if random.random() < 0.18:
                         self.next_blink_interval = random.uniform(0.25, 0.45)
                     else:
@@ -951,7 +984,9 @@ class OverlayWindow(QWidget):
         # TIER 1 LIVE2D: IDLE BREATHING CYCLE
         # ==========================================================
         if not self.eco_mode:
-            self.breath_phase = (self.breath_phase + 0.016 * (2.0 * math.pi / breath_cycle_sec)) % (2.0 * math.pi)
+            self.breath_phase = (self.breath_phase + 0.016 * (2.0 * math.pi / breath_cycle_sec)) % (
+                2.0 * math.pi
+            )
             sin_breath = math.sin(self.breath_phase)
             self.breath_scale_y = 1.0 + (0.009 - 0.003 * self.drowsy_level) * sin_breath
             self.breath_scale_x = 1.0 - (0.003 - 0.001 * self.drowsy_level) * sin_breath
@@ -972,9 +1007,12 @@ class OverlayWindow(QWidget):
             self.bass_groove_activity = min(1.0, self.bass_groove_activity + 0.14)
         else:
             self.bass_groove_activity = max(0.0, self.bass_groove_activity - 0.035)
-
-        is_grooving = (not self.eco_mode and is_audio_active and self.bass_groove_activity > 0.05 and self.drowsy_level < 0.60)
-
+        is_grooving = (
+            not self.eco_mode
+            and is_audio_active
+            and self.bass_groove_activity > 0.05
+            and self.drowsy_level < 0.60
+        )
         if is_grooving:
             # Advance oscillator according to calculated BPM (frequency = BPM / 60 beats per second)
             beats_per_sec = max(60.0, min(200.0, estimated_bpm)) / 60.0
@@ -989,7 +1027,6 @@ class OverlayWindow(QWidget):
             # Dynamic bop depth and groove tilt amplitude scaled by bass groove activity and beat energy
             target_depth = (1.5 + beat_energy * 5.0) * scale * self.bass_groove_activity
             target_tilt = (0.5 + beat_energy * 1.6) * self.bass_groove_activity
-
             self.bop_amplitude += (target_depth - self.bop_amplitude) * 0.22
             self.tilt_amplitude += (target_tilt - self.tilt_amplitude) * 0.22
 
@@ -1013,11 +1050,17 @@ class OverlayWindow(QWidget):
                 self.head_bop_tilt = 0.0
 
         # Dynamic sleep dirty-check & adaptive framerate throttling
-        sway_active = self.is_holding or (self.impulse_timer > 0.0) or (abs(self.current_rotation) > 0.02) or (abs(self.current_shake_x) > 0.05) or (abs(self.current_shake_y) > 0.05)
+        sway_active = (
+            self.is_holding
+            or (self.impulse_timer > 0.0)
+            or (abs(self.current_rotation) > 0.02)
+            or (abs(self.current_shake_x) > 0.05)
+            or (abs(self.current_shake_y) > 0.05)
+        )
         fx_active = self.is_starting_up or self.is_shutting_down or (self.hover_glow > 0.005)
         blink_active = self.is_blinking or (self.blink_progress > 0.005)
-        drowsy_changing = (self.drowsy_level > 0.005 and self.drowsy_level < 0.995)
-        is_sleeping = (self.drowsy_level > 0.35)
+        drowsy_changing = self.drowsy_level > 0.005 and self.drowsy_level < 0.995
+        is_sleeping = self.drowsy_level > 0.35
         bop_active = (abs(self.head_bop_y) > 0.05) or (abs(self.head_bop_tilt) > 0.02)
 
         # OSD skip timer and track text scroll
@@ -1032,35 +1075,33 @@ class OverlayWindow(QWidget):
         if self.audio_engine.audio_mode != "desktop":
             dur = self.audio_engine.get_duration()
             pos = self.audio_engine.get_position()
-            if self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)):
+            if self.audio_engine.track_finished or (
+                dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)
+            ):
                 self.audio_engine.track_finished = False
                 self.audio_engine.next_track()
                 if self.panel:
                     self.panel.sync_play_state()
                     self.panel.update_timeline()
-
         if is_audio_active:
             self.track_scroll_x += 0.55
-
         sleep_frame_changed = False
         if is_sleeping:
             current_sleep_idx = int(time.time() * 1.6) % 12
             if current_sleep_idx != getattr(self, "_last_sleep_frame_idx", -1):
                 self._last_sleep_frame_idx = current_sleep_idx
                 sleep_frame_changed = True
-
         is_active_interaction = (
-            cursor_moved or
-            self.move_talia_mode or
-            self.is_holding or
-            fx_active or
-            blink_active or
-            drowsy_changing or
-            sway_active or
-            bop_active or
-            osd_active
+            cursor_moved
+            or self.move_talia_mode
+            or self.is_holding
+            or fx_active
+            or blink_active
+            or drowsy_changing
+            or sway_active
+            or bop_active
+            or osd_active
         )
-
         if self.eco_mode:
             if is_sleeping:
                 # Sleeping in Eco Mode: tick at 80ms, repaint ONLY when Zzz frame changes
@@ -1100,30 +1141,27 @@ class OverlayWindow(QWidget):
                 if self.anim_timer.interval() != 33:
                     self.anim_timer.setInterval(33)
                 breathing_active = True
-
         audio_visual_animating = is_audio_active
-
         needs_render = (
-            self.move_talia_mode or
-            audio_visual_animating or
-            cursor_moved or
-            eye_moving or
-            outline_changing or
-            scale_changing or
-            button_changing or
-            bass_changing or
-            flash_changing or
-            mute_changing or
-            sway_active or
-            fx_active or
-            blink_active or
-            drowsy_changing or
-            (is_sleeping and (sleeping_render or sleep_frame_changed)) or
-            breathing_active or
-            bop_active or
-            osd_active
+            self.move_talia_mode
+            or audio_visual_animating
+            or cursor_moved
+            or eye_moving
+            or outline_changing
+            or scale_changing
+            or button_changing
+            or bass_changing
+            or flash_changing
+            or mute_changing
+            or sway_active
+            or fx_active
+            or blink_active
+            or drowsy_changing
+            or (is_sleeping and (sleeping_render or sleep_frame_changed))
+            or breathing_active
+            or bop_active
+            or osd_active
         )
-
         if needs_render:
             self.update()
             self._was_rendering = True
@@ -1133,70 +1171,73 @@ class OverlayWindow(QWidget):
 
     def _ensure_scaled_pixmaps(self, char_size: int, scale: float):
         """Optimized caching: rescales pixmaps only when character size or eye volume saturation changes."""
-        if self._last_scaled_size == char_size and getattr(self, "_last_scaled_volume", None) == self.current_volume:
+        if (
+            self._last_scaled_size == char_size
+            and getattr(self, "_last_scaled_volume", None) == self.current_volume
+        ):
             return
-
         self._last_scaled_size = char_size
         self._last_scaled_volume = self.current_volume
         self._cached_scaled_whites = self.whites.scaled(
-            char_size, char_size,
+            char_size,
+            char_size,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
+            Qt.TransformationMode.SmoothTransformation,
         )
         self._cached_scaled_talia = self.talia_sprite.scaled(
-            char_size, char_size,
+            char_size,
+            char_size,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
+            Qt.TransformationMode.SmoothTransformation,
         )
         if self.hold_saturation < 1.0:
             self._ensure_talia_gray()
             self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
-                char_size, char_size,
+                char_size,
+                char_size,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.SmoothTransformation,
             )
-
-
         w_l = max(1, int(self.pupil_l.width() * scale))
         h_l = max(1, int(self.pupil_l.height() * scale))
         self._cached_scaled_pupil_l = self.pupil_l.scaled(
-            w_l, h_l,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
+            w_l, h_l, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
-
         w_r = max(1, int(self.pupil_r.width() * scale))
         h_r = max(1, int(self.pupil_r.height() * scale))
         self._cached_scaled_pupil_r = self.pupil_r.scaled(
-            w_r, h_r,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
+            w_r, h_r, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
-
         if hasattr(self, "eyelids") and not self.eyelids.isNull():
             self._cached_scaled_eyelids = self.eyelids.scaled(
-                char_size, char_size,
+                char_size,
+                char_size,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.SmoothTransformation,
             )
         else:
             self._cached_scaled_eyelids = QPixmap()
-
         if hasattr(self, "talia_closed") and self.talia_closed and not self.talia_closed.isNull():
             self._cached_scaled_talia_closed = self.talia_closed.scaled(
-                char_size, char_size,
+                char_size,
+                char_size,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.SmoothTransformation,
             )
         else:
             self._cached_scaled_talia_closed = QPixmap()
-
-        if self.hold_saturation < 1.0 and hasattr(self, "talia_closed") and self.talia_closed and not self.talia_closed.isNull():
+        if (
+            self.hold_saturation < 1.0
+            and hasattr(self, "talia_closed")
+            and self.talia_closed
+            and not self.talia_closed.isNull()
+        ):
             self._ensure_talia_closed_gray()
             self._cached_scaled_talia_closed_gray = self.talia_closed_gray.scaled(
-                char_size, char_size,
+                char_size,
+                char_size,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.SmoothTransformation,
             )
         else:
             self._cached_scaled_talia_closed_gray = QPixmap()
@@ -1206,18 +1247,15 @@ class OverlayWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.setOpacity(self.opacity_val)
-
         MARGIN = 16
         char_size = min(self.width(), self.height()) - 2 * MARGIN
         char_x = (self.width() - char_size) // 2
         char_y = (self.height() - char_size) // 2
-
         scale = char_size / float(CANVAS_BASE_SIZE)
         self._ensure_scaled_pixmaps(char_size, scale)
 
         # Save painter state and apply 2D matrix transformations for tactile button press, rotation, and sway
         painter.save()
-
         center_x = char_x + char_size / 2.0
         center_y = char_y + char_size / 2.0
         anchor_bx = char_x + char_size / 2.0
@@ -1261,7 +1299,6 @@ class OverlayWindow(QWidget):
         mouth_w = int(MOUTH_BOX_W * scale)
         mouth_h = int(MOUTH_BOX_H * scale)
         mouth_rect = QRect(mouth_x, mouth_y, mouth_w, mouth_h)
-
         if self.hold_saturation > 0.05:
             vis_opacity = self.opacity_val * self.hold_saturation
             painter.setOpacity(vis_opacity)
@@ -1272,14 +1309,22 @@ class OverlayWindow(QWidget):
                 # 1. Sleep Mode Zzz animation (alternating caps loading screen style: z, zz, zzz, zzz., zzz.., zzz...)
                 if self.drowsy_level > 0.35:
                     self.visualizer.draw_background(painter, mouth_rect)
-
                     zzz_frames = [
-                        "Z", "Zz", "ZzZ", "ZzZ.", "ZzZ..", "ZzZ...",
-                        "z", "zZ", "zZz", "zZz.", "zZz..", "zZz...",
+                        "Z",
+                        "Zz",
+                        "ZzZ",
+                        "ZzZ.",
+                        "ZzZ..",
+                        "ZzZ...",
+                        "z",
+                        "zZ",
+                        "zZz",
+                        "zZz.",
+                        "zZz..",
+                        "zZz...",
                     ]
                     frame_idx = int(time.time() * 1.6) % len(zzz_frames)
                     zzz_text = zzz_frames[frame_idx]
-
                     font_size = max(11, int(mouth_h * 0.38))
                     zzz_key = (font_size, zzz_text)
                     if getattr(self, "_cached_zzz_key", None) != zzz_key:
@@ -1288,11 +1333,9 @@ class OverlayWindow(QWidget):
                         fm = QFontMetrics(self._cached_zzz_font)
                         self._cached_zzz_text_w = fm.horizontalAdvance(zzz_text)
                         self._cached_zzz_baseline = (mouth_h + fm.ascent() - fm.descent()) / 2.0
-
                     bob_y = math.sin(time.time() * 2.0) * (1.5 * scale)
                     tx = mouth_x + (mouth_w - self._cached_zzz_text_w) / 2.0
                     ty = mouth_y + self._cached_zzz_baseline + bob_y
-
                     painter.setFont(self._cached_zzz_font)
                     # Soft dark drop shadow
                     painter.setPen(self._zzz_shadow_color)
@@ -1305,7 +1348,6 @@ class OverlayWindow(QWidget):
                 # 2. Skip feedback symbol in full mouth cavity
                 elif self.osd_timer > 0.0 and self.osd_symbol in ("forward", "backward"):
                     self.visualizer.draw_background(painter, mouth_rect)
-
                     alpha_ratio = min(1.0, self.osd_timer / 0.25)
                     icon = self.icon_forward if self.osd_symbol == "forward" else self.icon_backward
                     if not icon.isNull():
@@ -1314,19 +1356,37 @@ class OverlayWindow(QWidget):
                         ih = icon_dim
                         ix = mouth_x + (mouth_w - iw) // 2
                         iy = mouth_y + (mouth_h - ih) // 2
-
-                        glow_color = QColor(0, 240, 255) if self.osd_symbol == "forward" else QColor(255, 0, 128)
+                        glow_color = (
+                            QColor(0, 240, 255)
+                            if self.osd_symbol == "forward"
+                            else QColor(255, 0, 128)
+                        )
                         cx = float(mouth_x + mouth_w / 2.0)
                         cy = float(mouth_y + mouth_h / 2.0)
                         rad = float(max(iw, ih) * 0.70)
                         glow = QRadialGradient(cx, cy, rad)
-                        glow.setColorAt(0.0, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), int(95 * alpha_ratio)))
-                        glow.setColorAt(0.60, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), int(25 * alpha_ratio)))
+                        glow.setColorAt(
+                            0.0,
+                            QColor(
+                                glow_color.red(),
+                                glow_color.green(),
+                                glow_color.blue(),
+                                int(95 * alpha_ratio),
+                            ),
+                        )
+                        glow.setColorAt(
+                            0.60,
+                            QColor(
+                                glow_color.red(),
+                                glow_color.green(),
+                                glow_color.blue(),
+                                int(25 * alpha_ratio),
+                            ),
+                        )
                         glow.setColorAt(1.0, QColor(0, 0, 0, 0))
                         painter.setBrush(glow)
                         painter.setPen(Qt.PenStyle.NoPen)
                         painter.drawEllipse(QPointF(cx, cy), rad, rad)
-
                         painter.setOpacity(vis_opacity * alpha_ratio)
                         painter.drawPixmap(ix, iy, iw, ih, icon)
                         painter.setOpacity(vis_opacity)
@@ -1342,16 +1402,20 @@ class OverlayWindow(QWidget):
                             osd_key = (title_text, font_size)
                             if self._cached_osd_key != osd_key:
                                 self._cached_osd_key = osd_key
-                                self._cached_osd_font = QFont("Rajdhani", font_size, QFont.Weight.Bold)
+                                self._cached_osd_font = QFont(
+                                    "Rajdhani", font_size, QFont.Weight.Bold
+                                )
                                 fm = QFontMetrics(self._cached_osd_font)
                                 self._cached_osd_text_w = fm.horizontalAdvance(title_text)
                                 self._cached_osd_band_h = fm.height() + 4
-                                self._cached_osd_baseline_offset = (self._cached_osd_band_h + fm.ascent() - fm.descent()) / 2.0
-
+                                self._cached_osd_baseline_offset = (
+                                    self._cached_osd_band_h + fm.ascent() - fm.descent()
+                                ) / 2.0
                             band_h = self._cached_osd_band_h
                             band_y = mouth_y + int(mouth_h * 0.52) - band_h // 2
-                            painter.fillRect(QRect(mouth_x, band_y, mouth_w, band_h), self._osd_band_color)
-
+                            painter.fillRect(
+                                QRect(mouth_x, band_y, mouth_w, band_h), self._osd_band_color
+                            )
                             painter.setFont(self._cached_osd_font)
                             baseline = band_y + self._cached_osd_baseline_offset
                             gap = 42
@@ -1376,7 +1440,12 @@ class OverlayWindow(QWidget):
         # ==========================================================
         # LAYER 0.5: CYBER MUTE INDICATOR (Inside Mouth Cavity on Pause, Awake Only)
         # ==========================================================
-        if self.drowsy_level < 0.05 and self.mute_alpha > 0.005 and not self.mute_icon.isNull() and self.hold_saturation > 0.05:
+        if (
+            self.drowsy_level < 0.05
+            and self.mute_alpha > 0.005
+            and not self.mute_icon.isNull()
+            and self.hold_saturation > 0.05
+        ):
             # Steady crisp cyber HUD glow when paused (zero CPU waste at rest)
             eff_alpha = min(1.0, max(0.0, self.mute_alpha))
             cx = mouth_x + mouth_w // 2
@@ -1400,7 +1469,6 @@ class OverlayWindow(QWidget):
             by1 = cy - icon_dim // 2 - bracket_pad
             by2 = cy + icon_dim // 2 + bracket_pad
             blen = max(4, int(icon_dim * 0.18))
-
             bpen = QPen(QColor(255, 45, 75, int(180 * eff_alpha)), max(1, int(1.5 * scale)))
             painter.setPen(bpen)
             # Top-left
@@ -1419,12 +1487,12 @@ class OverlayWindow(QWidget):
             # 3. Mute Icon Pixmap
             if self._cached_scaled_mute_size != icon_dim:
                 self._cached_scaled_mute = self.mute_icon.scaled(
-                    icon_dim, icon_dim,
+                    icon_dim,
+                    icon_dim,
                     Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
+                    Qt.TransformationMode.SmoothTransformation,
                 )
                 self._cached_scaled_mute_size = icon_dim
-
             ix = cx - self._cached_scaled_mute.width() // 2
             iy = cy - self._cached_scaled_mute.height() // 2
             painter.setOpacity(self.opacity_val * eff_alpha * self.hold_saturation)
@@ -1433,8 +1501,10 @@ class OverlayWindow(QWidget):
 
         # Check combined eye closure: max of AFK sleep/drowsy level and spontaneous blink
         effective_closed = max(self.drowsy_level, self.blink_progress)
-        has_closed_asset = hasattr(self, "_cached_scaled_talia_closed") and not self._cached_scaled_talia_closed.isNull()
-
+        has_closed_asset = (
+            hasattr(self, "_cached_scaled_talia_closed")
+            and not self._cached_scaled_talia_closed.isNull()
+        )
         if effective_closed >= 0.98 and has_closed_asset:
             # ==========================================================
             # EYES 100% FULLY CLOSED (AFK Sleep Mode / Blink Apex)
@@ -1445,9 +1515,10 @@ class OverlayWindow(QWidget):
                 if self._cached_scaled_talia_closed_gray.isNull():
                     self._ensure_talia_closed_gray()
                     self._cached_scaled_talia_closed_gray = self.talia_closed_gray.scaled(
-                        char_size, char_size,
+                        char_size,
+                        char_size,
                         Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
+                        Qt.TransformationMode.SmoothTransformation,
                     )
                 painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_closed_gray)
                 painter.setOpacity(self.opacity_val * self.hold_saturation)
@@ -1464,7 +1535,6 @@ class OverlayWindow(QWidget):
             depth_shift_y = int(-0.12 * self.current_offset_ly * scale)
             sclera_x = char_x + depth_shift_x
             sclera_y = char_y + depth_shift_y
-
             if self.hold_saturation < 1.0:
                 painter.setOpacity(self.opacity_val * (0.35 + 0.65 * self.hold_saturation))
                 painter.drawPixmap(sclera_x, sclera_y, self._cached_scaled_whites)
@@ -1485,17 +1555,14 @@ class OverlayWindow(QWidget):
                 glow_intensity = (self.current_volume - 0.50) / 0.50
                 glow_alpha = int(110 * glow_intensity * self.hold_saturation)
                 glow_color = QColor(0, 240, 255, glow_alpha)
-
                 pw_l = self._cached_scaled_pupil_l.width()
                 ph_l = self._cached_scaled_pupil_l.height()
                 center_lx = pos_lx + pw_l / 2.0
                 center_ly = pos_ly + ph_l / 2.0
-
                 pw_r = self._cached_scaled_pupil_r.width()
                 ph_r = self._cached_scaled_pupil_r.height()
                 center_rx = pos_rx + pw_r / 2.0
                 center_ry = pos_ry + ph_r / 2.0
-
                 painter.save()
                 painter.setPen(Qt.PenStyle.NoPen)
                 rad_l = max(pw_l, ph_l) * 0.85
@@ -1504,7 +1571,6 @@ class OverlayWindow(QWidget):
                 grad_l.setColorAt(1.0, QColor(0, 240, 255, 0))
                 painter.setBrush(grad_l)
                 painter.drawEllipse(QPointF(center_lx, center_ly), rad_l, rad_l)
-
                 rad_r = max(pw_r, ph_r) * 0.85
                 grad_r = QRadialGradient(center_rx, center_ry, rad_r)
                 grad_r.setColorAt(0.0, glow_color)
@@ -1512,7 +1578,6 @@ class OverlayWindow(QWidget):
                 painter.setBrush(grad_r)
                 painter.drawEllipse(QPointF(center_rx, center_ry), rad_r, rad_r)
                 painter.restore()
-
             painter.drawPixmap(pos_lx, pos_ly, self._cached_scaled_pupil_l)
             painter.drawPixmap(pos_rx, pos_ry, self._cached_scaled_pupil_r)
 
@@ -1527,14 +1592,14 @@ class OverlayWindow(QWidget):
                     char_x + 80 * scale,
                     char_y + 55 * scale,
                     200 * scale,
-                    (140 - 55) * p_clip * scale
+                    (140 - 55) * p_clip * scale,
                 )
                 # Right eye clip descends from Y=55 down to Y=195
                 clip_r = QRectF(
                     char_x + 320 * scale,
                     char_y + 55 * scale,
                     280 * scale,
-                    (195 - 55) * p_clip * scale
+                    (195 - 55) * p_clip * scale,
                 )
                 painter.setClipRect(clip_l)
                 painter.drawPixmap(char_x, char_y, self._cached_scaled_eyelids)
@@ -1550,9 +1615,10 @@ class OverlayWindow(QWidget):
                 if self._cached_scaled_talia_gray.isNull():
                     self._ensure_talia_gray()
                     self._cached_scaled_talia_gray = self.talia_sprite_gray.scaled(
-                        char_size, char_size,
+                        char_size,
+                        char_size,
                         Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
+                        Qt.TransformationMode.SmoothTransformation,
                     )
                 painter.drawPixmap(char_x, char_y, self._cached_scaled_talia_gray)
                 painter.setOpacity(self.opacity_val * self.hold_saturation)
@@ -1639,24 +1705,25 @@ class OverlayWindow(QWidget):
             self.button_press_delay = 0.0
             self.restore_timer.stop()
             self.hold_timer.start(25)
-
             if hasattr(self, "sound_hold") and self.sound_hold.isLoaded():
                 self.sound_hold.stop()
                 self.sound_hold.play()
-
             if self.move_talia_mode:
-                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self.drag_position = (
+                    event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                )
                 self.is_dragging = True
             else:
                 self.is_dragging = False
-
             event.accept()
 
     def mouseMoveEvent(self, event):
         if self.is_shutting_down:
             event.accept()
             return
-        if (event.buttons() & Qt.MouseButton.RightButton) and getattr(self, "is_right_dragging", False):
+        if (event.buttons() & Qt.MouseButton.RightButton) and getattr(
+            self, "is_right_dragging", False
+        ):
             self.move(event.globalPosition().toPoint() - self.right_drag_pos)
             event.accept()
             return
@@ -1666,10 +1733,8 @@ class OverlayWindow(QWidget):
                 self.has_dragged = True
                 if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
                     self.sound_hold.stop()
-
             if self.move_talia_mode:
                 self.move(event.globalPosition().toPoint() - self.drag_position)
-
             event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -1685,17 +1750,15 @@ class OverlayWindow(QWidget):
                         cfg = self.panel.get_current_settings_dict()
                         save_settings(cfg)
                     except Exception as e:
-                        print(f"[ERROR] Could not auto-save: {e}")
+                        log.info(f"[ERROR] Could not auto-save: {e}")
                 event.accept()
                 return
         if event.button() == Qt.MouseButton.LeftButton:
             elapsed = time.time() - self.press_time
             self.is_holding = False
             self.hold_timer.stop()
-
             if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
                 self.sound_hold.stop()
-
             if self.has_dragged:
                 # User dragged Talia in Move Mode
                 self.is_dragging = False
@@ -1705,10 +1768,9 @@ class OverlayWindow(QWidget):
                         cfg = self.panel.get_current_settings_dict()
                         save_settings(cfg)
                     except Exception as e:
-                        print(f"[ERROR] Could not auto-save: {e}")
+                        log.info(f"[ERROR] Could not auto-save: {e}")
                 event.accept()
                 return
-
             if 0.7 <= elapsed < 2.0:
                 # User held for 0.7+ seconds and let go: TOGGLE DRAG MODE!
                 self.hold_saturation = 1.0
@@ -1721,9 +1783,13 @@ class OverlayWindow(QWidget):
                         cfg = self.panel.get_current_settings_dict()
                         save_settings(cfg)
                     except Exception as e:
-                        print(f"[ERROR] Could not auto-save: {e}")
-                status = "ON (Drag to Move / Scroll to Resize)" if new_mode else "OFF (Locked & Clickable)"
-                print(f"[ACTION] Held for 0.7s: Move Talia Mode is now {status}!")
+                        log.info(f"[ERROR] Could not auto-save: {e}")
+                status = (
+                    "ON (Drag to Move / Scroll to Resize)"
+                    if new_mode
+                    else "OFF (Locked & Clickable)"
+                )
+                log.info(f"[ACTION] Held for 0.7s: Move Talia Mode is now {status}!")
             elif elapsed < 0.38:
                 # Short tap/click: count for 1x, 2x, 3x multi-click
                 if self.hold_saturation < 1.0:
@@ -1734,7 +1800,6 @@ class OverlayWindow(QWidget):
                 # Held between 0.38s and 0.7s: restore color if needed
                 if self.hold_saturation < 1.0:
                     self._start_restore_color_animation()
-
             self.is_dragging = False
             event.accept()
 
@@ -1779,7 +1844,7 @@ class OverlayWindow(QWidget):
             self.audio_engine.toggle_play_pause()
         if self.panel:
             self.panel.sync_play_state()
-        print("[ACTION] 1 Click on Talia: Play/Pause toggled.")
+        log.info("[ACTION] 1 Click on Talia: Play/Pause toggled.")
 
     def trigger_skip_feedback(self, direction: str):
         # Trigger skip sound and show symbol in mouth
@@ -1800,7 +1865,6 @@ class OverlayWindow(QWidget):
         """2 Clicks on Talia: Double tap right side = Next track, left side = Rewind."""
         click_x = getattr(self, "last_click_pos", QPoint(self.width() // 2, 0)).x()
         is_right = click_x >= self.width() / 2.0
-
         if is_right:
             if self.audio_engine.audio_mode == "desktop":
                 self.audio_engine.next_track()
@@ -1812,7 +1876,7 @@ class OverlayWindow(QWidget):
             self.trigger_skip_feedback("forward")
             if self.panel:
                 self.panel.sync_play_state()
-            print("[ACTION] Double Click RIGHT on Talia: Next Track.")
+            log.info("[ACTION] Double Click RIGHT on Talia: Next Track.")
         else:
             if self.audio_engine.audio_mode == "desktop":
                 self.audio_engine.prev_track()
@@ -1824,7 +1888,7 @@ class OverlayWindow(QWidget):
             self.trigger_skip_feedback("backward")
             if self.panel:
                 self.panel.sync_play_state()
-            print("[ACTION] Double Click LEFT on Talia: Previous Track.")
+            log.info("[ACTION] Double Click LEFT on Talia: Previous Track.")
 
     def _trigger_triple_click(self):
         """3 Clicks on Talia: Open / Show Controller Panel."""
@@ -1834,7 +1898,7 @@ class OverlayWindow(QWidget):
             self.panel.show()
             self.panel.raise_()
             self.panel.activateWindow()
-            print("[ACTION] 3 Clicks on Talia: Controller Panel Opened.")
+            log.info("[ACTION] 3 Clicks on Talia: Controller Panel Opened.")
 
     def wheelEvent(self, event):
         self.last_user_activity = time.time()
@@ -1869,7 +1933,9 @@ class OverlayWindow(QWidget):
                     self.panel.sync_volume(self.current_volume)
                 self.update()
                 dir_str = "UP (+)" if delta > 0 else "DOWN (-)"
-                print(f"[ACTION] Global Mode: Laptop audio {dir_str} (Talia eyes synced to {int(self.current_volume * 100)}%)")
+                log.info(
+                    f"[ACTION] Global Mode: Laptop audio {dir_str} (Talia eyes synced to {int(self.current_volume * 100)}%)"
+                )
                 event.accept()
             else:
                 # Scroll wheel changes local music volume with 1% fine-tuning at low volume

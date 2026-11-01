@@ -2,12 +2,18 @@
 Configuration, Constants, Settings Storage, and Win32 Bindings for Talia Cyberpunk Visualizer.
 """
 
+import ctypes
+import json
+import logging
 import os
 import sys
-import json
-import ctypes
+import tempfile
 from ctypes import wintypes
+
 from PyQt6.QtGui import QColor
+
+log = logging.getLogger(__name__)
+
 
 # ==========================================================
 # Paths & Directories (Resolves project root dynamically)
@@ -23,18 +29,34 @@ else:
         PROJECT_ROOT = CURRENT_DIR
 
 BASE_DIR = PROJECT_ROOT
-EYE_PARTS_DIR = os.path.join(PROJECT_ROOT, "assets", "eye_parts") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "eye_parts")) else os.path.join(PROJECT_ROOT, "eye_parts")
+EYE_PARTS_DIR = (
+    os.path.join(PROJECT_ROOT, "assets", "eye_parts")
+    if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "eye_parts"))
+    else os.path.join(PROJECT_ROOT, "eye_parts")
+)
 DEFAULT_MUSIC_DIR = os.path.join(PROJECT_ROOT, "music")
 SETTINGS_FILE = os.path.join(PROJECT_ROOT, "settings.json")
-PNGS_DIR = os.path.join(PROJECT_ROOT, "assets", "icons") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons")) else os.path.join(PROJECT_ROOT, "PNGs")
-SOUNDS_DIR = os.path.join(PROJECT_ROOT, "assets", "sounds") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "sounds")) else os.path.join(PROJECT_ROOT, "sounds")
+PNGS_DIR = (
+    os.path.join(PROJECT_ROOT, "assets", "icons")
+    if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons"))
+    else os.path.join(PROJECT_ROOT, "PNGs")
+)
+SOUNDS_DIR = (
+    os.path.join(PROJECT_ROOT, "assets", "sounds")
+    if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "sounds"))
+    else os.path.join(PROJECT_ROOT, "sounds")
+)
 LYRICS_CACHE_DIR = os.path.join(PROJECT_ROOT, "assets", "lyrics_cache")
 os.makedirs(LYRICS_CACHE_DIR, exist_ok=True)
 FONTS_DIR = os.path.join(PROJECT_ROOT, "assets", "fonts")
 os.makedirs(FONTS_DIR, exist_ok=True)
-ICON_PATH = os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico") if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico")) else os.path.join(PROJECT_ROOT, "app_icon.ico")
+ICON_PATH = (
+    os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico")
+    if os.path.exists(os.path.join(PROJECT_ROOT, "assets", "icons", "app_icon.ico"))
+    else os.path.join(PROJECT_ROOT, "app_icon.ico")
+)
 
-SUPPORTED_AUDIO_EXTS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus')
+SUPPORTED_AUDIO_EXTS = (".mp3", ".wav", ".flac", ".ogg", ".m4a", ".opus")
 
 # ==========================================================
 # Window & Sizing Constants
@@ -80,40 +102,94 @@ DEFAULT_SETTINGS = {
     "lyrics_x": 218,
     "lyrics_y": 664,
     "show_lyrics": True,
-    "download_folder": ""
+    "download_folder": "",
 }
 
 
-def load_settings() -> dict:
-    """Loads saved settings from settings.json or returns defaults."""
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                settings = DEFAULT_SETTINGS.copy()
-                settings.update(data)
-                return settings
-        except Exception as e:
-            print(f"[SETTINGS] Failed to read {SETTINGS_FILE}: {e}")
-    return DEFAULT_SETTINGS.copy()
+SETTINGS_VERSION = 2
 
 
-def save_settings(data: dict) -> bool:
-    """Saves settings dictionary to settings.json."""
+def portable_path(path: str) -> str:
+    """Stores paths inside the project as relative paths so the folder stays movable."""
+    if not path:
+        return path
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-        print("[SETTINGS] Saved all layout & settings to settings.json successfully!")
+        relative = os.path.relpath(os.path.abspath(path), PROJECT_ROOT)
+    except (OSError, ValueError):
+        return path
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return path
+    return relative.replace(os.sep, "/")
+
+
+def resolve_path(path: str) -> str:
+    """Resolves a relative settings path against the project root."""
+    if not path:
+        return path
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return os.path.normpath(expanded)
+    return os.path.normpath(os.path.join(PROJECT_ROOT, expanded))
+
+
+def load_settings(path: str | None = None) -> dict:
+    """Loads settings, merges defaults, and resolves portable paths."""
+    settings_path = path or SETTINGS_FILE
+    settings = DEFAULT_SETTINGS.copy()
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                settings.update(data)
+        except (OSError, json.JSONDecodeError) as exc:
+            log.error("[SETTINGS] Failed to read %s: %s", settings_path, exc)
+    for key in ("music_folder", "download_folder"):
+        if settings.get(key):
+            settings[key] = resolve_path(settings[key])
+    if not isinstance(settings.get("lyrics_offsets"), dict):
+        settings["lyrics_offsets"] = {}
+    settings["_version"] = SETTINGS_VERSION
+    return settings
+
+
+def save_settings(data: dict, path: str | None = None) -> bool:
+    """Atomically saves settings, converting project paths to portable relative paths."""
+    settings_path = path or SETTINGS_FILE
+    payload = dict(data)
+    payload["_version"] = SETTINGS_VERSION
+    for key in ("music_folder", "download_folder"):
+        if payload.get(key):
+            payload[key] = portable_path(payload[key])
+    directory = os.path.dirname(os.path.abspath(settings_path)) or "."
+    tmp_path = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix=".talia-settings-", suffix=".tmp", dir=directory)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, settings_path)
+        tmp_path = None
+        log.debug("[SETTINGS] Saved all layout & settings to %s", settings_path)
         return True
-    except Exception as e:
-        print(f"[SETTINGS] Failed to save {SETTINGS_FILE}: {e}")
+    except Exception as exc:
+        log.error("[SETTINGS] Failed to save %s: %s", settings_path, exc)
         return False
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def trim_process_memory(force_gc: bool = False):
     """Releases physical RAM working set back to Windows without causing periodic GC stalls."""
     if force_gc:
         import gc
+
         gc.collect()
     try:
         ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
@@ -124,10 +200,11 @@ def trim_process_memory(force_gc: bool = False):
 def init_app_fonts():
     """Pre-registers all bundled fonts in assets/fonts/ (including Rajdhani) with QFontDatabase."""
     from PyQt6.QtGui import QFontDatabase
+
     registered = []
     if os.path.exists(FONTS_DIR):
         for f in os.listdir(FONTS_DIR):
-            if f.lower().endswith(('.ttf', '.otf', '.woff', '.woff2')):
+            if f.lower().endswith((".ttf", ".otf", ".woff", ".woff2")):
                 p = os.path.join(FONTS_DIR, f)
                 fid = QFontDatabase.addApplicationFont(p)
                 if fid != -1:
@@ -162,7 +239,7 @@ user32.SetWindowPos.argtypes = [
     ctypes.c_int,
     ctypes.c_int,
     ctypes.c_int,
-    wintypes.UINT
+    wintypes.UINT,
 ]
 user32.SetWindowPos.restype = wintypes.BOOL
 
@@ -181,9 +258,9 @@ SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
 SWP_FRAMECHANGED = 0x0020
 
-VK_F7 = 0x76   # F7: Toggle Lyrics Overlay
-VK_F8 = 0x77   # F8: Toggle Move Talia mode
-VK_F9 = 0x78   # F9: Toggle Show/Hide overlay
+VK_F7 = 0x76  # F7: Toggle Lyrics Overlay
+VK_F8 = 0x77  # F8: Toggle Move Talia mode
+VK_F9 = 0x78  # F9: Toggle Show/Hide overlay
 VK_F10 = 0x79  # F10: Toggle Audio Source Mode (Desktop vs Player)
 VK_F11 = 0x7A  # F11: Toggle Eco Mode (< 1% CPU)
 
@@ -206,9 +283,9 @@ COLOR_THEMES = {
     "Cyberpunk Neon": {
         "bg": QColor(8, 8, 18, 245),
         "grid": QColor(0, 240, 255, 25),
-        "bar_bottom": QColor(0, 240, 255),      # Neon Cyan
-        "bar_mid": QColor(255, 0, 128),         # Neon Magenta
-        "bar_top": QColor(255, 230, 0),          # Cyber Yellow
+        "bar_bottom": QColor(0, 240, 255),  # Neon Cyan
+        "bar_mid": QColor(255, 0, 128),  # Neon Magenta
+        "bar_top": QColor(255, 230, 0),  # Cyber Yellow
         "peak": QColor(255, 255, 255),
         "wave": QColor(0, 240, 255),
         "wave_glow": QColor(255, 0, 128, 90),
@@ -226,9 +303,9 @@ COLOR_THEMES = {
     "Synthwave Sunset": {
         "bg": QColor(18, 6, 26, 245),
         "grid": QColor(255, 110, 0, 30),
-        "bar_bottom": QColor(128, 0, 255),      # Deep Violet
-        "bar_mid": QColor(255, 0, 100),         # Hot Pink
-        "bar_top": QColor(255, 160, 0),         # Sunburst Orange
+        "bar_bottom": QColor(128, 0, 255),  # Deep Violet
+        "bar_mid": QColor(255, 0, 100),  # Hot Pink
+        "bar_top": QColor(255, 160, 0),  # Sunburst Orange
         "peak": QColor(255, 240, 200),
         "wave": QColor(255, 50, 130),
         "wave_glow": QColor(255, 130, 0, 90),
@@ -242,5 +319,5 @@ COLOR_THEMES = {
         "peak": QColor(255, 255, 255),
         "wave": QColor(100, 220, 255),
         "wave_glow": QColor(160, 100, 255, 90),
-    }
+    },
 }

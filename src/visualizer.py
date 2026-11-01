@@ -2,16 +2,15 @@
 Cyberpunk Visualizer: Renders audio-reactive spectrum, waveforms, and reactor cores inside Talia's mouth.
 """
 
-import os
 import math
-import numpy as np
-from PyQt6.QtCore import Qt, QRect, QRectF, QPointF
-from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QRadialGradient, QPolygonF, QPixmap
-)
+import os
 
-from config import COLOR_THEMES, PNGS_DIR
+import numpy as np
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPolygonF, QRadialGradient
+
 from audio_engine import CyberAudioEngine
+from config import COLOR_THEMES, PNGS_DIR
 
 
 class CyberVisualizer:
@@ -25,7 +24,11 @@ class CyberVisualizer:
         self._cached_grid_key = None
         self.eco_mode = False
         self.music_note_icon = QPixmap()
-        for cand_dir in [PNGS_DIR, os.path.join(os.path.dirname(PNGS_DIR), "icons"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons")]:
+        for cand_dir in [
+            PNGS_DIR,
+            os.path.join(os.path.dirname(PNGS_DIR), "icons"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons"),
+        ]:
             ip = os.path.join(cand_dir, "music_note_white.png")
             if os.path.exists(ip):
                 self.music_note_icon.load(ip)
@@ -37,7 +40,11 @@ class CyberVisualizer:
         # Fast forward & backward symbols
         self.icon_forward = QPixmap()
         self.icon_backward = QPixmap()
-        for cand_dir in [PNGS_DIR, os.path.join(os.path.dirname(PNGS_DIR), "icons"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons")]:
+        for cand_dir in [
+            PNGS_DIR,
+            os.path.join(os.path.dirname(PNGS_DIR), "icons"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons"),
+        ]:
             fw_p = os.path.join(cand_dir, "icon_forward.png")
             bw_p = os.path.join(cand_dir, "icon_backward.png")
             if os.path.exists(fw_p) and self.icon_forward.isNull():
@@ -65,7 +72,7 @@ class CyberVisualizer:
                     int(c1.red() * (1 - r2) + c2.red() * r2),
                     int(c1.green() * (1 - r2) + c2.green() * r2),
                     int(c1.blue() * (1 - r2) + c2.blue() * r2),
-                    235
+                    235,
                 )
             else:
                 c1, c2 = theme["bar_mid"], theme["bar_top"]
@@ -74,7 +81,7 @@ class CyberVisualizer:
                     int(c1.red() * (1 - t_ratio) + c2.red() * t_ratio),
                     int(c1.green() * (1 - t_ratio) + c2.green() * t_ratio),
                     int(c1.blue() * (1 - t_ratio) + c2.blue() * t_ratio),
-                    250
+                    250,
                 )
             colors.append(col)
         self._segment_color_cache[key] = colors
@@ -84,7 +91,11 @@ class CyberVisualizer:
         if theme_name in self._guide_pen_cache:
             return self._guide_pen_cache[theme_name]
         theme = COLOR_THEMES.get(theme_name, COLOR_THEMES["Cyberpunk Neon"])
-        pen = QPen(QColor(theme["grid"].red(), theme["grid"].green(), theme["grid"].blue(), 45), 1, Qt.PenStyle.DashLine)
+        pen = QPen(
+            QColor(theme["grid"].red(), theme["grid"].green(), theme["grid"].blue(), 45),
+            1,
+            Qt.PenStyle.DashLine,
+        )
         self._guide_pen_cache[theme_name] = pen
         return pen
 
@@ -107,7 +118,6 @@ class CyberVisualizer:
         if getattr(self, "eco_mode", False):
             painter.fillRect(rect, QColor(8, 8, 12, 255))
             return
-
         key = (rect.width(), rect.height(), self.current_theme_name)
         if self._cached_grid_key != key or self._cached_grid_pixmap is None:
             self._cached_grid_key = key
@@ -123,15 +133,15 @@ class CyberVisualizer:
                 p_grid.drawLine(0, y, rect.width(), y)
             p_grid.end()
             self._cached_grid_pixmap = pm
-
         painter.drawPixmap(rect.topLeft(), self._cached_grid_pixmap)
 
-    def draw(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine, osd_symbol: str = None):
+    def draw(
+        self, painter: QPainter, rect: QRect, engine: CyberAudioEngine, osd_symbol: str = None
+    ):
         # Draws visualizer in target rect
         painter.save()
         try:
             painter.setClipRect(rect)
-
             theme = COLOR_THEMES.get(self.current_theme_name, COLOR_THEMES["Cyberpunk Neon"])
 
             # Eco Mode
@@ -140,12 +150,23 @@ class CyberVisualizer:
                 if engine is not None:
                     if getattr(engine, "audio_mode", "player") == "desktop":
                         bars = getattr(engine, "smoothed_bars", None)
-                        is_active = bool(getattr(engine, "beat_energy", 0.0) > 0.002 or (bars is not None and len(bars) > 0 and bars.max() > 0.002))
+                        is_active = bool(
+                            getattr(engine, "beat_energy", 0.0) > 0.002
+                            or (bars is not None and len(bars) > 0 and bars.max() > 0.002)
+                        )
                     else:
-                        is_active = bool(getattr(engine, "is_playing", False) and not getattr(engine, "is_paused", False))
-                self._draw_eco_mode(painter, rect, theme, show_symbol=is_active or bool(osd_symbol), override_symbol=osd_symbol)
+                        is_active = bool(
+                            getattr(engine, "is_playing", False)
+                            and not getattr(engine, "is_paused", False)
+                        )
+                self._draw_eco_mode(
+                    painter,
+                    rect,
+                    theme,
+                    show_symbol=is_active or bool(osd_symbol),
+                    override_symbol=osd_symbol,
+                )
                 return
-
             self.draw_background(painter, rect)
 
             # Ambient bass glow pulse
@@ -179,13 +200,19 @@ class CyberVisualizer:
         finally:
             painter.restore()
 
-    def _draw_eco_mode(self, painter: QPainter, rect: QRect, theme: dict, show_symbol: bool = True, override_symbol: str = None):
+    def _draw_eco_mode(
+        self,
+        painter: QPainter,
+        rect: QRect,
+        theme: dict,
+        show_symbol: bool = True,
+        override_symbol: str = None,
+    ):
         """Renders ultra-low CPU black background with crisp white music symbol and sleek cyber HUD accents."""
         # 1. Pitch black background inside mouth cavity
         painter.fillRect(rect, QColor(8, 8, 12, 255))
         if not show_symbol:
             return
-
         cx = rect.center().x()
         cy = rect.center().y()
         icon_dim = max(16, int(min(rect.width(), rect.height()) * 0.52))
@@ -197,9 +224,10 @@ class CyberVisualizer:
         by1 = cy - icon_dim // 2 - bracket_pad
         by2 = cy + icon_dim // 2 + bracket_pad
         blen = max(4, int(icon_dim * 0.20))
-
         bracket_color = theme.get("bar_bottom", QColor(0, 240, 255))
-        bpen = QPen(QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 130), 1.5)
+        bpen = QPen(
+            QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 130), 1.5
+        )
         painter.setPen(bpen)
         # Top-left
         painter.drawLine(bx1, by1, bx1 + blen, by1)
@@ -217,8 +245,12 @@ class CyberVisualizer:
         # 3. Soft ambient glow behind music note or skip symbol
         glow_rad = icon_dim * 0.85
         glow = QRadialGradient(float(cx), float(cy), float(glow_rad))
-        glow.setColorAt(0.0, QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 45))
-        glow.setColorAt(0.55, QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 12))
+        glow.setColorAt(
+            0.0, QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 45)
+        )
+        glow.setColorAt(
+            0.55, QColor(bracket_color.red(), bracket_color.green(), bracket_color.blue(), 12)
+        )
         glow.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.setBrush(glow)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -232,12 +264,12 @@ class CyberVisualizer:
             active_pixmap = self.icon_backward
         elif not self.music_note_icon.isNull():
             active_pixmap = self.music_note_icon
-
         if active_pixmap is not None:
             scaled = active_pixmap.scaled(
-                icon_dim, icon_dim,
+                icon_dim,
+                icon_dim,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.SmoothTransformation,
             )
             ix = cx - scaled.width() // 2
             iy = cy - scaled.height() // 2
@@ -260,21 +292,32 @@ class CyberVisualizer:
         # Stems
         stem_w = max(2, int(dim * 0.08))
         stem_top = cy - int(dim * 0.38)
-        painter.fillRect(QRect(cx - dx + r - stem_w, stem_top + int(dim * 0.08), stem_w, int(cy + r - stem_top)), QColor(255, 255, 255, 255))
-        painter.fillRect(QRect(cx + dx + r - stem_w, stem_top, stem_w, int(cy - stem_top)), QColor(255, 255, 255, 255))
+        painter.fillRect(
+            QRect(cx - dx + r - stem_w, stem_top + int(dim * 0.08), stem_w, int(cy + r - stem_top)),
+            QColor(255, 255, 255, 255),
+        )
+        painter.fillRect(
+            QRect(cx + dx + r - stem_w, stem_top, stem_w, int(cy - stem_top)),
+            QColor(255, 255, 255, 255),
+        )
         # Beam
         beam_h = max(3, int(dim * 0.12))
         from PyQt6.QtGui import QPolygonF
-        beam_poly = QPolygonF([
-            QPointF(cx - dx + r - stem_w, stem_top + int(dim * 0.08)),
-            QPointF(cx + dx + r, stem_top),
-            QPointF(cx + dx + r, stem_top + beam_h),
-            QPointF(cx - dx + r - stem_w, stem_top + int(dim * 0.08) + beam_h),
-        ])
+
+        beam_poly = QPolygonF(
+            [
+                QPointF(cx - dx + r - stem_w, stem_top + int(dim * 0.08)),
+                QPointF(cx + dx + r, stem_top),
+                QPointF(cx + dx + r, stem_top + beam_h),
+                QPointF(cx - dx + r - stem_w, stem_top + int(dim * 0.08) + beam_h),
+            ]
+        )
         painter.drawPolygon(beam_poly)
         painter.restore()
 
-    def _draw_cyber_bars(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
+    def _draw_cyber_bars(
+        self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict
+    ):
         """Segmented LED equalizer bars with falling peak hold caps (zero-allocation cached rendering)."""
         if (len(bars) > 0 and bars.max() < 0.002) and (len(peaks) > 0 and peaks.max() < 0.002):
             return  # Zero-cost early exit when silent
@@ -285,20 +328,16 @@ class CyberVisualizer:
         gap = max(1, int((usable_w - (bar_w * num)) / max(1, num - 1)))
         max_h = max(6, rect.height() - 16)
         base_y = rect.bottom() - 4
-
         num_segments = max(4, min(14, max_h // 4))
         seg_gap = 1 if max_h < 60 else 2
-
         seg_colors = self._get_segment_colors(self.current_theme_name, num_segments)
         inactive_col = self._inactive_color
         peak_col = theme["peak"]
-
         for i in range(num):
             bx = rect.left() + pad_x + i * (bar_w + gap)
             val = float(bars[i])
             active_segs = int(val * num_segments)
             seg_h = max(2, (max_h // num_segments) - seg_gap)
-
             for s in range(num_segments):
                 sy = base_y - (s + 1) * (seg_h + seg_gap)
                 if s < active_segs:
@@ -312,22 +351,21 @@ class CyberVisualizer:
                 py = base_y - int(peak_val * max_h) - 3
                 painter.fillRect(bx, py, bar_w, 2, peak_col)
 
-    def _draw_neon_wave(self, painter: QPainter, rect: QRect, engine: CyberAudioEngine, theme: dict):
+    def _draw_neon_wave(
+        self, painter: QPainter, rect: QRect, engine: CyberAudioEngine, theme: dict
+    ):
         """Dual-layer glowing neon oscilloscope ECG waveform (single polygon pass)."""
         wave = engine.get_waveform(sample_count=80)
         pts_len = len(wave)
         if pts_len < 2:
             return
-
         cy = float(rect.center().y())
         if max(float(wave.max()), -float(wave.min())) < 0.002:
             # Silent guide line early return (zero-cost when paused)
             painter.setPen(self._get_guide_pen(self.current_theme_name))
             painter.drawLine(rect.left(), int(cy), rect.right(), int(cy))
             return
-
         max_amp = float(rect.height() * 0.42)
-
         poly = QPolygonF()
         dx = float(rect.width()) / float(pts_len - 1)
         for i in range(pts_len):
@@ -341,20 +379,37 @@ class CyberVisualizer:
 
         # Translucent glow envelope
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(theme["wave_glow"], 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setPen(
+            QPen(
+                theme["wave_glow"],
+                6,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
         painter.drawPolyline(poly)
 
         # Sharp bright core line
-        painter.setPen(QPen(theme["wave"], 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setPen(
+            QPen(
+                theme["wave"],
+                2,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
         painter.drawPolyline(poly)
 
-    def _draw_radial_core(self, painter: QPainter, rect: QRect, bars: np.ndarray, beat: float, theme: dict):
+    def _draw_radial_core(
+        self, painter: QPainter, rect: QRect, bars: np.ndarray, beat: float, theme: dict
+    ):
         """Spinning futuristic cyber targeting reticle and audio-reactive core."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         cx = float(rect.center().x())
         cy = float(rect.center().y())
         base_r = float(min(rect.width(), rect.height())) * 0.28
-
         self.rotation_angle = (self.rotation_angle + 1.2) % 360.0
 
         # Pulsing center reactor core
@@ -374,12 +429,10 @@ class CyberVisualizer:
             val = float(bars[i % len(bars)])
             r_inner = base_r * 0.75
             r_outer = r_inner + val * (base_r * 0.8)
-
             x1 = cx + math.cos(angle) * r_inner
             y1 = cy + math.sin(angle) * r_inner
             x2 = cx + math.cos(angle) * r_outer
             y2 = cy + math.sin(angle) * r_outer
-
             pen_col = theme["bar_bottom"] if (i % 2 == 0) else theme["bar_mid"]
             painter.setPen(QPen(pen_col, 2))
             painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
@@ -389,23 +442,21 @@ class CyberVisualizer:
         bracket_r = float(base_r * 1.35)
         painter.drawEllipse(QRectF(cx - bracket_r, cy - bracket_r, bracket_r * 2, bracket_r * 2))
 
-    def _draw_dual_mirror(self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict):
+    def _draw_dual_mirror(
+        self, painter: QPainter, rect: QRect, bars: np.ndarray, peaks: np.ndarray, theme: dict
+    ):
         """Symmetrical dual-sided equalizer extending outward from the center."""
         cx = rect.center().x()
         # Center divider line (drawn in all states for HUD aesthetic)
         painter.setPen(QPen(theme["bar_top"], 1))
         painter.drawLine(cx, rect.top() + 8, cx, rect.bottom() - 8)
-
         if (len(bars) > 0 and bars.max() < 0.002) and (len(peaks) > 0 and peaks.max() < 0.002):
             return
-
         base_y = rect.bottom() - 10
         max_h = rect.height() - 28
         half_bars = len(bars) // 2
-
         bar_w = max(2, int((rect.width() * 0.44) / half_bars))
         gap = 2
-
         for i in range(half_bars):
             val = float(bars[i * 2])
             h = int(val * max_h)

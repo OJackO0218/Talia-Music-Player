@@ -3,9 +3,11 @@ Comprehensive Settings Audit & Functional Verification for Talia.
 Tests all modes, themes, toggles, sliders, lyrics settings, and buttons.
 """
 
+# ruff: noqa: E402  (Qt imports must follow QT_QPA_PLATFORM/path setup)
+
+import glob
 import os
 import sys
-import glob
 
 # Ensure offscreen Qt
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -19,14 +21,16 @@ if SRC_DIR not in sys.path:
 if FETCHER_DIR not in sys.path:
     sys.path.insert(0, FETCHER_DIR)
 
+from PyQt6.QtGui import QImage, QPainter
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QPainter, QImage
-from config import init_app_fonts, COLOR_THEMES
-from overlay import OverlayWindow
+
 from audio_engine import CyberAudioEngine
+from config import COLOR_THEMES, init_app_fonts
 from controller import ControlPanel
-from lyrics_overlay import LyricsOverlayWindow
 from lyrics_manager import LyricsManager
+from lyrics_overlay import LyricsOverlayWindow
+from overlay import OverlayWindow
+
 
 def run_audit():
     settings_file = os.path.join(PROJECT_ROOT, "settings.json")
@@ -36,7 +40,7 @@ def run_audit():
             original_settings = f.read()
 
     print("Initializing QApplication and fonts...")
-    app = QApplication.instance() or QApplication(sys.argv)
+    _app = QApplication.instance() or QApplication(sys.argv)
     init_app_fonts()
 
     print("Initializing Audio Engine and Overlay...")
@@ -72,13 +76,17 @@ def run_audit():
             panel.settings_dialog.combo_mode.setCurrentText(m)
             panel.settings_dialog.combo_theme.setCurrentText(t)
             assert overlay.visualizer.mode == m, f"Mode mismatch: {overlay.visualizer.mode} != {m}"
-            assert overlay.visualizer.current_theme_name == t, f"Theme mismatch: {overlay.visualizer.current_theme_name} != {t}"
-            
+            assert (
+                overlay.visualizer.current_theme_name == t
+            ), f"Theme mismatch: {overlay.visualizer.current_theme_name} != {t}"
+
             p = QPainter(img)
             overlay.paintEvent(None)
             p.end()
 
-    print(f"[PASS] All {len(modes)} styles across all {len(themes)} themes rendered without errors.")
+    print(
+        f"[PASS] All {len(modes)} styles across all {len(themes)} themes rendered without errors."
+    )
 
     # 3. Settings sliders & toggles
     print("\n--- TEST 3: Settings Sliders & Toggles ---")
@@ -189,7 +197,9 @@ def run_audit():
 
     # Verify next track navigation in shuffle mode
     initial_shuffle_pos = engine._shuffle_pos
-    expected_next_idx = engine._shuffle_order[(initial_shuffle_pos + 1) % len(engine._shuffle_order)]
+    expected_next_idx = engine._shuffle_order[
+        (initial_shuffle_pos + 1) % len(engine._shuffle_order)
+    ]
     engine.next_track()
     assert engine.current_index == expected_next_idx
     assert engine._shuffle_pos == (initial_shuffle_pos + 1) % len(engine._shuffle_order)
@@ -214,6 +224,7 @@ def run_audit():
     print("\n==========================================")
     print("  ALL 8 AUDIT SECTIONS PASSED WITH 0 ERRORS")
     print("==========================================")
+
 
 if __name__ == "__main__":
     run_audit()

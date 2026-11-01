@@ -7,8 +7,9 @@ Setup Windows App for Talia Cyberpunk Audio Visualizer.
 """
 
 import os
-import sys
 import subprocess
+import sys
+
 from PIL import Image
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +19,11 @@ else:
     PROJECT_ROOT = CURRENT_DIR
 
 ICONS_DIR = os.path.join(PROJECT_ROOT, "assets", "icons")
-ICON_PATH = os.path.join(ICONS_DIR, "app_icon.ico") if os.path.exists(ICONS_DIR) else os.path.join(PROJECT_ROOT, "app_icon.ico")
+ICON_PATH = (
+    os.path.join(ICONS_DIR, "app_icon.ico")
+    if os.path.exists(ICONS_DIR)
+    else os.path.join(PROJECT_ROOT, "app_icon.ico")
+)
 EXE_PATH = os.path.join(PROJECT_ROOT, "Talia.exe")
 
 PNG_SOURCE = os.path.join(ICONS_DIR, "talia_avatar_icon.png")
@@ -48,7 +53,7 @@ def compile_talia_exe():
     print("[*] Compiling native Windows Talia.exe launcher (zero console)...")
     csc_paths = [
         r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
-        r"C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+        r"C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe",
     ]
     csc_exe = None
     for p in csc_paths:
@@ -60,9 +65,11 @@ def compile_talia_exe():
         print("[!] csc.exe not found. Skipping .exe compilation.")
         return False
 
-    current_pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe").replace("\\", "\\\\")
+    current_pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe").replace(
+        "\\", "\\\\"
+    )
 
-    cs_code = f'''using System;
+    cs_code = f"""using System;
 using System.Diagnostics;
 using System.IO;
 
@@ -127,8 +134,8 @@ namespace TaliaAppLauncher
         }}
     }}
 }}
-'''
-    manifest_code = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+"""
+    manifest_code = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="Talia.App" type="win32"/>
   <description>Talia Cyberpunk Audio Visualizer</description>
@@ -140,7 +147,7 @@ namespace TaliaAppLauncher
     </security>
   </trustInfo>
 </assembly>
-'''
+"""
     manifest_file = os.path.join(PROJECT_ROOT, "_temp_app.manifest")
     with open(manifest_file, "w", encoding="utf-8") as f:
         f.write(manifest_code)
@@ -156,7 +163,7 @@ namespace TaliaAppLauncher
         f"/win32manifest:{manifest_file}",
         "/r:System.Windows.Forms.dll",
         f"/out:{EXE_PATH}",
-        cs_file
+        cs_file,
     ]
 
     try:
@@ -198,12 +205,12 @@ def create_shortcuts():
 
     shortcuts = [
         os.path.join(desktop_dir, "Talia Visualizer.lnk"),
-        os.path.join(start_menu_dir, "Talia Visualizer.lnk")
+        os.path.join(start_menu_dir, "Talia Visualizer.lnk"),
     ]
 
     # PowerShell script to create shortcuts via WScript.Shell
     for sc in shortcuts:
-        ps_script = f'''
+        ps_script = f"""
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut("{sc}")
 $Shortcut.TargetPath = "{target}"
@@ -212,7 +219,7 @@ $Shortcut.WorkingDirectory = "{PROJECT_ROOT}"
 $Shortcut.IconLocation = "{ICON_PATH}, 0"
 $Shortcut.Description = "Talia Cyberpunk Audio Visualizer"
 $Shortcut.Save()
-'''
+"""
         try:
             subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=True)
             print(f"[+] Created shortcut: {sc}")
@@ -228,7 +235,9 @@ def main():
     compile_talia_exe()
     create_shortcuts()
     print("\n[+] SUCCESS: Talia is now installed as a Windows App!")
-    print("    - Pin to Taskbar: Right-click Talia.exe or the Desktop/Start shortcut -> 'Pin to taskbar'")
+    print(
+        "    - Pin to Taskbar: Right-click Talia.exe or the Desktop/Start shortcut -> 'Pin to taskbar'"
+    )
     print("    - Start Menu: Type 'Talia' in Windows Search to launch anytime.")
     print("    - No Terminal Window: Runs 100% silently in the background.")
     print("=======================================================\n")

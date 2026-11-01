@@ -2,10 +2,13 @@
 Main entry point for Talia Cyberpunk Audio Visualizer.
 """
 
-import os
-import sys
+# ruff: noqa: E402  (Qt imports must follow environment/path setup)
+
 import ctypes
+import logging
+import os
 import random
+import sys
 
 # Prevent OpenMP / BLAS from spawning multi-threaded thread pools for micro-FFT ops
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -18,32 +21,49 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
-from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication
 
-from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT, load_settings, ICON_PATH, LYRICS_CACHE_DIR, trim_process_memory, init_app_fonts
 from audio_engine import CyberAudioEngine
+from config import (
+    DEFAULT_MUSIC_DIR,
+    ICON_PATH,
+    LYRICS_CACHE_DIR,
+    init_app_fonts,
+    load_settings,
+    trim_process_memory,
+)
+from controller import ControlPanel
+from logging_setup import setup_logging
 from lyrics_manager import LyricsManager
 from lyrics_overlay import LyricsOverlayWindow
 from overlay import OverlayWindow
-from controller import ControlPanel
+
+log = logging.getLogger(__name__)
 
 # Explicit AppUserModelID so Windows treats Talia as its own taskbar entity
 APP_ID = "Athar.Talia.CyberpunkVisualizer.1.0"
 try:
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
 except Exception:
-    pass
+    log.debug("Could not set AppUserModelID", exc_info=True)
+
+
+def _log_uncaught_exception(exc_type, exc_value, exc_tb):
+    """Make GUI crashes visible in talia.log instead of vanishing silently."""
+    log.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
 
 
 def main():
+    setup_logging()
+    sys.excepthook = _log_uncaught_exception
     # Elevate to Administrator only if explicitly requested via --admin flag
     if "--admin" in sys.argv:
         try:
             is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
         except Exception:
             is_admin = False
-
         if not is_admin:
             if getattr(sys, "frozen", False):
                 args = " ".join([f'"{a}"' for a in sys.argv[1:] if a != "--admin"])
@@ -52,16 +72,21 @@ def main():
                 python_exe = sys.executable
                 script = os.path.abspath(__file__)
                 args = " ".join([f'"{a}"' for a in sys.argv[1:] if a != "--admin"])
-                ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, f'"{script}" {args}', None, 1)
+                ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", python_exe, f'"{script}" {args}', None, 1
+                )
             sys.exit(0)
 
     # Ensure only 1 instance of Talia runs at a time (prevents orphaned background instances)
-    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "AtharTaliaCyberpunkVisualizerMutex")
+    mutex = ctypes.windll.kernel32.CreateMutexW(  # noqa: F841 (handle must outlive app)
+        None, False, "AtharTaliaCyberpunkVisualizerMutex"
+    )
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        print("[!] Another instance of Talia is already running! Exiting duplicate process...")
+        log.warning(
+            "[!] Another instance of Talia is already running! Exiting duplicate process..."
+        )
         sys.exit(0)
-
-    print("[1/4] Starting Talia Cyberpunk Visualizer...")
+    log.info("[1/4] Starting Talia Cyberpunk Visualizer...")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     init_app_fonts()
@@ -83,14 +108,14 @@ def main():
     audio_engine.set_folder(music_folder)
 
     # Initialize transparent Live2D character overlay & synced lyrics overlay
-    print("[2/4] Loading Talia character rig & visualizer surface...")
+    log.info("[2/4] Loading Talia character rig & visualizer surface...")
     overlay = OverlayWindow(audio_engine)
     lyrics_overlay = LyricsOverlayWindow(audio_engine, lyrics_manager)
     overlay.lyrics_overlay = lyrics_overlay
 
     # Initialize controller panel and apply saved layout/settings
     # Note: Controller panel starts closed/hidden as requested; open with 3 clicks on Talia!
-    print("[3/4] Initializing Controller Panel & restoring saved settings...")
+    log.info("[3/4] Initializing Controller Panel & restoring saved settings...")
     panel = ControlPanel(overlay, audio_engine, lyrics_overlay)
     panel.apply_settings(saved_cfg)
 
@@ -113,25 +138,22 @@ def main():
     # Show startup controls & shortcuts guide if enabled
     if saved_cfg.get("show_startup_guide", True):
         panel.show_guide_dialog()
-
     trim_process_memory()
-
-    print("[4/4] Talia is ready!")
-    print("\n=======================================================")
-    print("  TALIA CYBERPUNK AUDIO VISUALIZER")
-    print("  - Click Talia 1x to Play / Pause.")
-    print("  - Click Talia 2x on Right to Skip / Left to Rewind.")
-    print("  - Click Talia 3x to Open / Show Controller Window.")
-    print("  - Close Controller with [X] anytime (reopen with 3 clicks).")
-    print("  - Hold Talia for 0.7s & release to toggle Move Mode (Talia & Lyrics).")
-    print("  - Hold Talia for 2s to Power Down & Exit.")
-    print("  - Scroll wheel on Talia to adjust volume (or resize in Move Mode).")
-    print("  - Press [F7] to toggle Synced Lyrics Overlay.")
-    print("  - Press [F8] to toggle Move Mode.")
-    print("  - Press [F10] to switch Desktop Mode vs Local Player.")
-    print("  - Press [F11] to toggle Eco Mode (< 1% CPU).")
-    print("=======================================================\n")
-
+    log.info("[4/4] Talia is ready!")
+    log.info("\n=======================================================")
+    log.info("  TALIA CYBERPUNK AUDIO VISUALIZER")
+    log.info("  - Click Talia 1x to Play / Pause.")
+    log.info("  - Click Talia 2x on Right to Skip / Left to Rewind.")
+    log.info("  - Click Talia 3x to Open / Show Controller Window.")
+    log.info("  - Close Controller with [X] anytime (reopen with 3 clicks).")
+    log.info("  - Hold Talia for 0.7s & release to toggle Move Mode (Talia & Lyrics).")
+    log.info("  - Hold Talia for 2s to Power Down & Exit.")
+    log.info("  - Scroll wheel on Talia to adjust volume (or resize in Move Mode).")
+    log.info("  - Press [F7] to toggle Synced Lyrics Overlay.")
+    log.info("  - Press [F8] to toggle Move Mode.")
+    log.info("  - Press [F10] to switch Desktop Mode vs Local Player.")
+    log.info("  - Press [F11] to toggle Eco Mode (< 1% CPU).")
+    log.info("=======================================================\n")
     sys.exit(app.exec())
 
 

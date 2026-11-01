@@ -5,27 +5,30 @@ saves directly to the 'Downloaded Songs' subfolder, and automatically fetches
 verified synchronized lyrics (.lrc).
 """
 
-import os
-import sys
-import re
-import gc
 import ctypes
+import gc
+import logging
+import os
+import re
+import sys
 import threading
-from typing import List, Dict, Optional, Tuple, Callable
+from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 _yt_dlp = None
 
+
 def _find_ffmpeg_dir() -> Optional[str]:
     """Locates and returns the directory containing ffmpeg and ffprobe binaries."""
     try:
         import static_ffmpeg
+
         static_ffmpeg.add_paths()
     except Exception as e:
-        print(f"[FFMPEG INIT] Note: {e}")
-
+        log.info(f"[FFMPEG INIT] Note: {e}")
     import shutil
+
     ffmpeg_exe = shutil.which("ffmpeg")
     if ffmpeg_exe and os.path.exists(ffmpeg_exe):
         return os.path.dirname(os.path.abspath(ffmpeg_exe))
@@ -44,14 +47,15 @@ def _find_ffmpeg_dir() -> Optional[str]:
     # Search local project directories
     candidates.append(os.path.join(PROJECT_ROOT, "assets", "bin"))
     candidates.append(os.path.join(PROJECT_ROOT, "_internal", "static_ffmpeg", "bin", "win32"))
-
     for c in candidates:
-        if os.path.exists(os.path.join(c, "ffmpeg.exe")) or os.path.exists(os.path.join(c, "ffmpeg")):
+        if os.path.exists(os.path.join(c, "ffmpeg.exe")) or os.path.exists(
+            os.path.join(c, "ffmpeg")
+        ):
             if c not in os.environ.get("PATH", ""):
                 os.environ["PATH"] = os.pathsep.join([c, os.environ.get("PATH", "")])
             return c
-
     return None
+
 
 def _get_yt_dlp():
     """Lazily loads static_ffmpeg and yt_dlp on first download/search request."""
@@ -59,8 +63,10 @@ def _get_yt_dlp():
     if _yt_dlp is None:
         _find_ffmpeg_dir()
         import yt_dlp
+
         _yt_dlp = yt_dlp
     return _yt_dlp
+
 
 # Resolve path to Talia Lyrics Fetch Automated
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -77,6 +83,7 @@ except ImportError:
 try:
     from config import trim_process_memory
 except ImportError:
+
     def trim_process_memory():
         """Forces garbage collection and trims Windows working set to guarantee < 200 MB RAM."""
         gc.collect()
@@ -88,8 +95,8 @@ except ImportError:
 
 def sanitize_filename(name: str) -> str:
     """Removes invalid Windows filesystem characters and limits length."""
-    clean = re.sub(r'[\\/*?:"<>|]', '_', name)
-    clean = re.sub(r'\s+', ' ', clean).strip()
+    clean = re.sub(r'[\\/*?:"<>|]', "_", name)
+    clean = re.sub(r"\s+", " ", clean).strip()
     return clean[:120]
 
 
@@ -98,17 +105,14 @@ def search_youtube(query: str, limit: int = 5) -> List[Dict]:
     q = query.strip()
     if not q:
         return []
-
     is_url = "youtube.com/" in q or "youtu.be/" in q
     search_term = q if is_url else f"ytsearch{limit}:{q}"
-
     ydl_opts = {
         "extract_flat": True,
         "quiet": True,
         "skip_download": True,
         "no_warnings": True,
     }
-
     results = []
     ydl_mod = _get_yt_dlp()
     with ydl_mod.YoutubeDL(ydl_opts) as ydl:
@@ -125,30 +129,26 @@ def search_youtube(query: str, limit: int = 5) -> List[Dict]:
             dur_s = int(dur % 60)
             dur_str = f"{dur_m:02d}:{dur_s:02d}" if dur > 0 else "--:--"
             url = e.get("url") if is_url else f"https://www.youtube.com/watch?v={vid_id}"
-
-            results.append({
-                "id": vid_id,
-                "title": title,
-                "channel": channel,
-                "duration": dur,
-                "duration_str": dur_str,
-                "url": url
-            })
-
+            results.append(
+                {
+                    "id": vid_id,
+                    "title": title,
+                    "channel": channel,
+                    "duration": dur,
+                    "duration_str": dur_str,
+                    "url": url,
+                }
+            )
     return results
 
 
 def download_and_sync_lrc(
-    video_url: str,
-    target_dir: str,
-    progress_cb: Optional[Callable[[str], None]] = None
+    video_url: str, target_dir: str, progress_cb: Optional[Callable[[str], None]] = None
 ) -> Tuple[bool, str, str]:
     """Downloads audio, converts to Opus 160kbps in target_dir, and auto-fetches synced LRC."""
     if not os.path.exists(target_dir):
         os.makedirs(target_dir, exist_ok=True)
-
     download_dir = target_dir
-
     if progress_cb:
         progress_cb("Connecting to YouTube stream...")
 
@@ -168,11 +168,13 @@ def download_and_sync_lrc(
     ffmpeg_dir = _find_ffmpeg_dir()
     ydl_opts = {
         "format": "bestaudio/best",
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "opus",
-            "preferredquality": "160",
-        }],
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "opus",
+                "preferredquality": "160",
+            }
+        ],
         "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
         "progress_hooks": [hook],
         "quiet": True,
@@ -181,15 +183,12 @@ def download_and_sync_lrc(
     }
     if ffmpeg_dir:
         ydl_opts["ffmpeg_location"] = ffmpeg_dir
-
     ydl_mod = _get_yt_dlp()
     with ydl_mod.YoutubeDL(ydl_opts) as ydl:
         meta = ydl.extract_info(video_url, download=True)
         title = meta.get("title", "Track")
-
     clean_title = sanitize_filename(title)
     expected_opus = os.path.join(download_dir, f"{clean_title}.opus")
-
     final_opus = expected_opus if os.path.exists(expected_opus) else None
     if not final_opus:
         opus_candidates = [
@@ -200,7 +199,6 @@ def download_and_sync_lrc(
         if opus_candidates:
             opus_candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
             final_opus = opus_candidates[0]
-
     if not final_opus or not os.path.exists(final_opus):
         return False, "", "Audio download completed but .opus file not found."
 
@@ -213,15 +211,16 @@ def download_and_sync_lrc(
             lrc_ok, lrc_msg = fetch_lyrics_for_file(final_opus, force_overwrite=True)
             lrc_synced = lrc_ok
         except Exception as le:
-            print(f"[LYRICS AUTO-FETCH ERROR] {le}")
-
+            log.info(f"[LYRICS AUTO-FETCH ERROR] {le}")
     status_msg = f"Saved: {os.path.basename(final_opus)}"
     if lrc_synced:
         status_msg += " (Lyrics synced)"
     else:
         status_msg += " (Audio ready, no lyrics match)"
-
     return True, final_opus, status_msg
+
+
+log = logging.getLogger(__name__)
 
 
 class SongDownloaderService(QObject):
@@ -246,10 +245,8 @@ class SongDownloaderService(QObject):
         if not q:
             self.search_error.emit("Please enter a song name or YouTube URL.")
             return
-
         if self._is_searching:
             return
-
         self._is_searching = True
 
         def worker():
@@ -269,15 +266,12 @@ class SongDownloaderService(QObject):
         if self._is_downloading:
             self.download_progress.emit("Another download is currently in progress...")
             return
-
         self._is_downloading = True
 
         def worker():
             try:
                 ok, opus_path, msg = download_and_sync_lrc(
-                    video_url,
-                    target_dir,
-                    progress_cb=self.download_progress.emit
+                    video_url, target_dir, progress_cb=self.download_progress.emit
                 )
                 self.download_finished.emit(ok, opus_path, msg)
             except Exception as ex:
