@@ -5,6 +5,7 @@ Main entry point for Talia Cyberpunk Audio Visualizer.
 import os
 import sys
 import ctypes
+import random
 
 # Prevent OpenMP / BLAS from spawning multi-threaded thread pools for micro-FFT ops
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -93,10 +94,13 @@ def main():
     panel = ControlPanel(overlay, audio_engine, lyrics_overlay)
     panel.apply_settings(saved_cfg)
 
-    # Load first track into engine in paused state (no autoplay)
+    # Load initial track into engine in paused state (random selection on launch)
     if audio_engine.playlist:
-        audio_engine.current_index = 0
-        audio_engine.load_file(audio_engine.playlist[0], auto_play=False, blocking=True)
+        start_idx = random.randint(0, len(audio_engine.playlist) - 1)
+        audio_engine.current_index = start_idx
+        audio_engine.load_file(audio_engine.playlist[start_idx], auto_play=False, blocking=True)
+        if audio_engine.shuffle:
+            audio_engine.rebuild_shuffle_order(starting_index=start_idx)
         panel.sync_play_state()
 
     # Show overlays (Talia + Synced Lyrics)

@@ -1773,7 +1773,8 @@ class OverlayWindow(QWidget):
         if not self.audio_engine.playlist:
             return
         if self.audio_engine.current_index < 0:
-            self.audio_engine.play_index(0)
+            start_idx = random.randint(0, len(self.audio_engine.playlist) - 1)
+            self.audio_engine.play_index(start_idx)
         else:
             self.audio_engine.toggle_play_pause()
         if self.panel:

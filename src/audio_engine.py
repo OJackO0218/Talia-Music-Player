@@ -307,7 +307,7 @@ class CyberAudioEngine:
             self.current_index = files.index(current_track)
         elif self.playlist:
             if self.current_index < 0 or self.current_index >= len(self.playlist):
-                self.current_index = 0
+                self.current_index = random.randint(0, len(self.playlist) - 1)
         else:
             self.current_index = -1
 
@@ -494,7 +494,10 @@ class CyberAudioEngine:
 
         if self.stream is None:
             if self.playlist:
-                idx = max(0, self.current_index)
+                if self.current_index < 0 or self.current_index >= len(self.playlist):
+                    idx = random.randint(0, len(self.playlist) - 1)
+                else:
+                    idx = self.current_index
                 self.play_index(idx)
             return
         if self.is_playing:

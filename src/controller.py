@@ -3,6 +3,7 @@ import os
 import sys
 
 import subprocess
+import random
 
 from PyQt6.QtWidgets import (
 
@@ -2632,7 +2633,9 @@ class ControlPanel(QWidget):
 
         if self.audio_engine.current_index < 0:
 
-            self.audio_engine.play_index(0)
+            start_idx = random.randint(0, len(self.audio_engine.playlist) - 1)
+
+            self.audio_engine.play_index(start_idx)
 
         else:
 
