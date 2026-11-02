@@ -1,19 +1,27 @@
 """Playlist, queue, and track context menu behaviour for the control panel."""
 
+import logging
 import os
+import re
+import subprocess
+import sys
+from typing import Optional, Tuple
 
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import (
-    QSizePolicy,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
+
+log = logging.getLogger("Talia.PlaylistPanel")
 
 
 class TrackRowWidget(QWidget):
@@ -340,6 +348,11 @@ class PlaylistPanelMixin:
                 background-color: #3b82f6;
                 color: #ffffff;
             }
+            QMenu::separator {
+                height: 1px;
+                background-color: #3f3f46;
+                margin: 4px 8px;
+            }
         """)
 
         action_play = menu.addAction("Play Now")
@@ -347,6 +360,10 @@ class PlaylistPanelMixin:
         action_play_next = menu.addAction("Play Next in Queue")
         menu.addSeparator()
         action_open = menu.addAction("Show in Explorer")
+        menu.addSeparator()
+        action_del_lyric = menu.addAction("Delete Lyric")
+        action_del_song = menu.addAction("Delete Song & Lyric")
+
         selected = menu.exec(global_pos)
         if selected == action_play:
             if orig_idx is not None:
@@ -364,8 +381,258 @@ class PlaylistPanelMixin:
             self.refresh_queue_ui()
             self.queue_container.setVisible(True)
         elif selected == action_open:
-            import subprocess
-            subprocess.run(["explorer", f"/select,{path}"])
+            self.show_in_explorer(path)
+        elif selected == action_del_lyric:
+            self.delete_track_lyrics(path)
+        elif selected == action_del_song:
+            self.delete_track_and_lyrics(path, orig_idx)
+
+    def show_in_explorer(self, target_path: str):
+        """Highlights the file in Windows Explorer, or opens containing folder on other OS."""
+        if not target_path:
+            return
+        clean_path = os.path.normpath(os.path.abspath(target_path))
+        if sys.platform == "win32":
+            if os.path.isfile(clean_path):
+                # Passing a raw string to subprocess.Popen bypasses subprocess.list2cmdline quoting
+                # which otherwise quotes "/select,path" and causes Windows Explorer to open Documents.
+                safe_path = clean_path.replace('"', "")
+                subprocess.Popen(f'explorer /select,"{safe_path}"')
+            elif os.path.isdir(clean_path):
+                os.startfile(clean_path)
+            elif os.path.exists(os.path.dirname(clean_path)):
+                os.startfile(os.path.dirname(clean_path))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", clean_path])
+        else:
+            folder = clean_path if os.path.isdir(clean_path) else os.path.dirname(clean_path)
+            subprocess.Popen(["xdg-open", folder])
+
+    def get_track_lyrics_paths(self, track_path: str) -> Tuple[Optional[str], Optional[str]]:
+        """Returns (local_lrc_path, cached_lrc_path) for the given audio track."""
+        if not track_path:
+            return None, None
+        local_lrc = os.path.splitext(track_path)[0] + ".lrc"
+        local_found = local_lrc if os.path.exists(local_lrc) else None
+
+        cached_found = None
+        mgr = (
+            getattr(self.audio_engine, "lyrics_manager", None)
+            or getattr(self.lyrics_overlay, "lyrics_manager", None)
+        )
+        if mgr and getattr(mgr, "cache_dir", ""):
+            title = mgr.clean_title(track_path)
+            safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", title) + ".lrc"
+            cp = os.path.join(mgr.cache_dir, safe_name)
+            if os.path.exists(cp):
+                cached_found = cp
+
+        return local_found, cached_found
+
+    def _confirm_action(self, title: str, message: str, danger_text: str = "Delete") -> bool:
+        """Presents a styled cyberpunk confirmation dialog."""
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        yes_btn = box.button(QMessageBox.StandardButton.Yes)
+        if yes_btn:
+            yes_btn.setText(danger_text)
+            yes_btn.setStyleSheet(
+                "background-color: #ef4444; color: #ffffff; border: 1px solid #dc2626; "
+                "padding: 6px 14px; border-radius: 4px; font-weight: bold;"
+            )
+        no_btn = box.button(QMessageBox.StandardButton.No)
+        if no_btn:
+            no_btn.setText("Cancel")
+            no_btn.setStyleSheet(
+                "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; "
+                "padding: 6px 14px; border-radius: 4px;"
+            )
+        box.setStyleSheet("""
+            QMessageBox {
+                background-color: #18181b;
+                border: 1px solid #3f3f46;
+                border-radius: 8px;
+            }
+            QLabel {
+                color: #f4f4f5;
+                font-size: 12px;
+                padding: 6px;
+            }
+        """)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _show_info_dialog(self, title: str, message: str):
+        """Presents a styled info dialog."""
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        ok_btn = box.button(QMessageBox.StandardButton.Ok)
+        if ok_btn:
+            ok_btn.setStyleSheet(
+                "background-color: #3b82f6; color: #ffffff; border: 1px solid #2563eb; "
+                "padding: 6px 14px; border-radius: 4px;"
+            )
+        box.setStyleSheet("""
+            QMessageBox {
+                background-color: #18181b;
+                border: 1px solid #3f3f46;
+                border-radius: 8px;
+            }
+            QLabel {
+                color: #f4f4f5;
+                font-size: 12px;
+                padding: 6px;
+            }
+        """)
+        box.exec()
+
+    def delete_track_lyrics(self, path: str, confirm: bool = True):
+        """Prompts for confirmation and deletes local and cached lyric files for the track."""
+        if not path:
+            return
+        local_lrc, cached_lrc = self.get_track_lyrics_paths(path)
+        if not local_lrc and not cached_lrc:
+            self._show_info_dialog(
+                "Delete Lyric",
+                f"No lyric file (.lrc) found for:\n\n{os.path.basename(path)}",
+            )
+            return
+
+        song_name = os.path.basename(path)
+        if confirm and not self._confirm_action(
+            "Delete Lyric",
+            f"Are you sure you want to delete the lyric file for:\n\n{song_name}?",
+            danger_text="Delete Lyric",
+        ):
+            return
+
+        if local_lrc and os.path.exists(local_lrc):
+            try:
+                os.remove(local_lrc)
+            except Exception as exc:
+                log.error(f"[LYRICS] Failed to delete local lyric {local_lrc}: {exc}")
+
+        if cached_lrc and os.path.exists(cached_lrc):
+            try:
+                os.remove(cached_lrc)
+            except Exception as exc:
+                log.error(f"[LYRICS] Failed to delete cached lyric {cached_lrc}: {exc}")
+
+        # If this track is currently loaded in the lyrics manager, clear display
+        mgr = (
+            getattr(self.audio_engine, "lyrics_manager", None)
+            or getattr(self.lyrics_overlay, "lyrics_manager", None)
+        )
+        if mgr:
+            cur = getattr(mgr, "current_track_path", "")
+            if cur and os.path.normpath(cur).lower() == os.path.normpath(path).lower():
+                if hasattr(mgr, "clear_lyrics"):
+                    mgr.clear_lyrics()
+                if hasattr(self, "lyrics_overlay") and self.lyrics_overlay:
+                    if hasattr(self.lyrics_overlay, "reset_lyrics_display"):
+                        self.lyrics_overlay.reset_lyrics_display()
+                    else:
+                        self.lyrics_overlay.update()
+
+        log.info(f"[LYRICS] Deleted lyric file(s) for {path}")
+
+    def delete_track_and_lyrics(
+        self, path: str, orig_idx: Optional[int] = None, confirm: bool = True
+    ):
+        """Prompts for confirmation and permanently deletes the song file and any lyric files."""
+        if not path or not os.path.exists(path):
+            self._show_info_dialog("Delete Song", "Song file does not exist on disk.")
+            return
+
+        song_name = os.path.basename(path)
+        if confirm and not self._confirm_action(
+            "Delete Song & Lyric",
+            f"Are you sure you want to permanently delete this song and its lyrics?\n\n{song_name}\n\nThis cannot be undone.",
+            danger_text="Delete Song & Lyric",
+        ):
+            return
+
+        norm_target = os.path.normpath(path).lower()
+        is_current = False
+        cur_idx = self.audio_engine.current_index
+        if 0 <= cur_idx < len(self.audio_engine.playlist):
+            cur_path = self.audio_engine.playlist[cur_idx]
+            if os.path.normpath(cur_path).lower() == norm_target:
+                is_current = True
+
+        was_playing = bool(self.audio_engine.is_playing)
+
+        if is_current:
+            self.audio_engine._stop_for_playlist_change()
+            self.sync_play_state()
+            mgr = (
+                getattr(self.audio_engine, "lyrics_manager", None)
+                or getattr(self.lyrics_overlay, "lyrics_manager", None)
+            )
+            if mgr and hasattr(mgr, "clear_lyrics"):
+                mgr.clear_lyrics()
+            if hasattr(self, "lyrics_overlay") and self.lyrics_overlay:
+                if hasattr(self.lyrics_overlay, "reset_lyrics_display"):
+                    self.lyrics_overlay.reset_lyrics_display()
+                else:
+                    self.lyrics_overlay.update()
+
+        if hasattr(self.audio_engine, "_invalidate_preload_cache"):
+            self.audio_engine._invalidate_preload_cache()
+
+        self.audio_engine.queue = [
+            q for q in self.audio_engine.queue if os.path.normpath(q).lower() != norm_target
+        ]
+        self.refresh_queue_ui()
+
+        try:
+            os.remove(path)
+            log.info(f"[AUDIO] Deleted song file: {path}")
+        except Exception as exc:
+            log.error(f"[AUDIO] Failed to delete audio file {path}: {exc}")
+            self._show_info_dialog("Error", f"Could not delete song file:\n\n{exc}")
+            return
+
+        local_lrc, cached_lrc = self.get_track_lyrics_paths(path)
+        if local_lrc and os.path.exists(local_lrc):
+            try:
+                os.remove(local_lrc)
+            except Exception as exc:
+                log.error(f"[LYRICS] Failed to delete local lyric {local_lrc}: {exc}")
+        if cached_lrc and os.path.exists(cached_lrc):
+            try:
+                os.remove(cached_lrc)
+            except Exception as exc:
+                log.error(f"[LYRICS] Failed to delete cached lyric {cached_lrc}: {exc}")
+
+        self.refresh_tracklist()
+
+        if is_current:
+            if self.audio_engine.playlist:
+                new_idx = min(
+                    max(0, orig_idx if orig_idx is not None else 0),
+                    len(self.audio_engine.playlist) - 1,
+                )
+                if was_playing:
+                    self.audio_engine.play_index(new_idx)
+                else:
+                    self.audio_engine.current_index = new_idx
+                    self.audio_engine.load_file(
+                        self.audio_engine.playlist[new_idx], auto_play=False
+                    )
+                self.sync_play_state()
+                self.refresh_queue_ui()
+            else:
+                self.audio_engine.current_index = -1
+                if hasattr(self, "lbl_track_title") and self.lbl_track_title:
+                    self.lbl_track_title.setText("No tracks in playlist")
+                self.sync_play_state()
 
     def show_queue_context_menu(self, pos):
         item = self.list_queue.itemAt(pos)
@@ -389,11 +656,18 @@ class PlaylistPanelMixin:
                 background-color: #3b82f6;
                 color: #ffffff;
             }
+            QMenu::separator {
+                height: 1px;
+                background-color: #3f3f46;
+                margin: 4px 8px;
+            }
         """)
 
         action_play = menu.addAction("Play Now")
         action_remove = menu.addAction("Remove from Queue")
         action_clear = menu.addAction("Clear Entire Queue")
+        menu.addSeparator()
+        action_open = menu.addAction("Show in Explorer")
         selected = menu.exec(self.list_queue.mapToGlobal(pos))
         if selected == action_play:
             path = self.audio_engine.remove_from_queue(row)
@@ -409,3 +683,6 @@ class PlaylistPanelMixin:
         elif selected == action_clear:
             self.audio_engine.clear_queue()
             self.refresh_queue_ui()
+        elif selected == action_open:
+            if 0 <= row < len(self.audio_engine.queue):
+                self.show_in_explorer(self.audio_engine.queue[row])

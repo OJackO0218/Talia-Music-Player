@@ -51,6 +51,8 @@ class LyricsManager:
         self.current_title: str = ""
         self.is_loading: bool = False
         self.has_lyrics: bool = False
+        self.current_lrc_path: str = ""
+        self.current_lrc_mtime: float = 0.0
         self.lock = threading.Lock()
 
         # Offset management (in seconds)
@@ -110,6 +112,19 @@ class LyricsManager:
         # Collapse multiple whitespace
         stem = re.sub(r"\s+", " ", stem).strip()
         return stem
+
+    def clear_lyrics(self) -> None:
+        """Clears all parsed lyrics data and resets state to empty."""
+        with self.lock:
+            self.lines = []
+            self.current_track_path = ""
+            self.current_title = ""
+            self.current_lrc_path = ""
+            self.current_lrc_mtime = 0.0
+            self.has_lyrics = False
+            self.is_loading = False
+            self.file_offset = 0.0
+            self.manual_offset = 0.0
 
     def parse_lrc(self, lrc_text: str) -> List[Tuple[float, str]]:
         """Parses standard LRC text into sorted [(timestamp_seconds, text), ...] list and extracts offset tag."""

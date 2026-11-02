@@ -266,6 +266,18 @@ class LyricsOverlayWindow(QWidget):
                 self.line_opacity = 0.0
         self.update()
 
+    def reset_lyrics_display(self) -> None:
+        """Immediately clears displayed lyrics and resets animation states."""
+        self.displayed_text = ""
+        self.current_line_idx = -1
+        self.line_opacity = 0.0
+        self.pop_progress = 1.0
+        self.line_progress = 0.0
+        self.glow_flash = 0.0
+        self.pause_start_time = None
+        self._pause_timed_out = False
+        self.update()
+
     def _sync_and_animate_tick(self):
         """Runs at 60 FPS: syncs current playback position with lyrics and drives pop-up physics."""
         if not self.is_enabled or not self.isVisible():
