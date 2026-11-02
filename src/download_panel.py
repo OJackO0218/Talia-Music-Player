@@ -101,18 +101,18 @@ class DownloadPanelMixin:
         os.makedirs(default_sub, exist_ok=True)
 
         # 1. Default Downloaded Songs
-        self.combo_dl_folder.addItem("📁 Downloaded Songs", default_sub)
+        self.combo_dl_folder.addItem("Downloaded Songs", default_sub)
 
         # 2. Main Library Root
         root_name = os.path.basename(os.path.normpath(music_dir)) or "Music"
-        self.combo_dl_folder.addItem(f"📁 Library Root ({root_name})", os.path.normpath(music_dir))
+        self.combo_dl_folder.addItem(f"Library Root ({root_name})", os.path.normpath(music_dir))
 
         # 3. Existing subfolders in music_dir
         try:
             for item in sorted(os.listdir(music_dir), key=lambda s: s.lower()):
                 full_p = os.path.normpath(os.path.join(music_dir, item))
                 if os.path.isdir(full_p) and full_p != default_sub:
-                    self.combo_dl_folder.addItem(f"📁 {item}", full_p)
+                    self.combo_dl_folder.addItem(f"{item}", full_p)
         except Exception:
             pass
 
@@ -126,10 +126,10 @@ class DownloadPanelMixin:
                     break
             if not found:
                 custom_name = os.path.basename(norm_custom) or norm_custom
-                self.combo_dl_folder.addItem(f"📁 Custom: {custom_name}", norm_custom)
+                self.combo_dl_folder.addItem(f"Custom: {custom_name}", norm_custom)
 
         # 5. Browse option
-        self.combo_dl_folder.addItem("➕ Browse Custom Folder...", "__BROWSE__")
+        self.combo_dl_folder.addItem("Browse Custom Folder...", "__BROWSE__")
 
         # Select target
         target = (
@@ -177,7 +177,7 @@ class DownloadPanelMixin:
         self.btn_dl_action.setEnabled(True)
         self.btn_dl_search.setEnabled(True)
         if success:
-            self.lbl_dl_status.setText(f"✓ {status_msg}")
+            self.lbl_dl_status.setText(status_msg)
             self.lbl_dl_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 500;")
 
             # Automatically refresh playlist to include the new track
@@ -200,5 +200,5 @@ class DownloadPanelMixin:
                             self.list_tracks.setCurrentRow(r)
                             break
         else:
-            self.lbl_dl_status.setText(f"✗ {status_msg}")
+            self.lbl_dl_status.setText(status_msg)
             self.lbl_dl_status.setStyleSheet("color: #f87171; font-size: 11px;")

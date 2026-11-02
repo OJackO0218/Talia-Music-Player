@@ -1,3 +1,7 @@
+from party_dialog import PartySyncDialog
+from party_sync import PartySyncService
+from spotify_dialog import SpotifySyncDialog
+from spotify_sync import SpotifySyncService
 """Main controller panel for Talia playback, appearance, and configuration."""
 
 import logging
@@ -128,6 +132,21 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.downloader.download_progress.connect(self._on_download_progress)
         self.downloader.download_finished.connect(self._on_download_finished)
 
+        # Real-time Party Sync Service (Listen Together)
+        self.party_sync = PartySyncService(self)
+        self.party_dialog = PartySyncDialog(self)
+        self.party_sync.track_received.connect(self._on_party_track_received)
+        self.party_sync.play_received.connect(self._on_party_play_received)
+        self.party_sync.pause_received.connect(self._on_party_pause_received)
+        self.party_sync.seek_received.connect(self._on_party_seek_received)
+        self.party_sync.heartbeat_received.connect(self._on_party_heartbeat_received)
+        self._is_handling_party_event = False
+        self._last_party_heartbeat = 0.0
+
+        # Spotify Playlist Sync & Import Service
+        self.spotify_service = SpotifySyncService(self)
+        self.spotify_dialog = SpotifySyncDialog(self)
+
         # Polling timer for global hotkeys (50ms)
         self.hotkey_timer = QTimer(self)
         self.hotkey_timer.timeout.connect(self.check_hotkeys)
@@ -164,7 +183,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         # --- PRIMARY TOGGLES (Settings, Move, Mode, Lyrics, Eco) ---
         hbox_top_toggles = QHBoxLayout()
         hbox_top_toggles.setSpacing(4)
-        self.btn_open_settings = QPushButton("⚙ Settings")
+        self.btn_open_settings = QPushButton("Settings")
         self.btn_open_settings.setObjectName("btnOpenSettings")
         self.btn_open_settings.setToolTip("Open Full Settings & Customization")
         self.btn_open_settings.setStyleSheet(
@@ -193,6 +212,30 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.btn_eco.clicked.connect(self.toggle_eco_mode)
         hbox_top_toggles.addWidget(self.btn_eco)
         content_layout.addLayout(hbox_top_toggles)
+
+        # --- SYNC & PARTY BUTTONS (Listen Together & Spotify Sync) ---
+        hbox_sync_tools = QHBoxLayout()
+        hbox_sync_tools.setSpacing(6)
+
+        self.btn_party_sync = QPushButton("Listen Together")
+        self.btn_party_sync.setObjectName("btnPartySync")
+        self.btn_party_sync.setToolTip("Listen together with friends in real-time with synchronized lyrics and reactions")
+        self.btn_party_sync.setStyleSheet(
+            "background-color: #1e1b4b; color: #a78bfa; border: 1px solid #7c3aed; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
+        )
+        self.btn_party_sync.clicked.connect(self.open_party_dialog)
+        hbox_sync_tools.addWidget(self.btn_party_sync, 1)
+
+        self.btn_spotify_sync = QPushButton("Spotify Sync")
+        self.btn_spotify_sync.setObjectName("btnSpotifySync")
+        self.btn_spotify_sync.setToolTip("Import and auto-download Spotify playlists with synchronized lyrics")
+        self.btn_spotify_sync.setStyleSheet(
+            "background-color: #064e3b; color: #6ee7b7; border: 1px solid #059669; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
+        )
+        self.btn_spotify_sync.clicked.connect(self.open_spotify_dialog)
+        hbox_sync_tools.addWidget(self.btn_spotify_sync, 1)
+
+        content_layout.addLayout(hbox_sync_tools)
 
         # --- SECTION: PLAYBACK & VOLUME ---
         content_layout.addWidget(create_section_header("Playback & Volume"))
@@ -474,7 +517,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         # Download Tip Label
         self.lbl_dl_tip = QLabel(
-            "💡 Tip: For best lyric sync, download Lyric Videos or Audio Tracks instead of Official MVs (music videos often have extra intros/breaks that desync lyrics)."
+            "Tip: For best lyric sync, download Lyric Videos or Audio Tracks instead of Official MVs (music videos often have extra intros/breaks that desync lyrics)."
         )
         self.lbl_dl_tip.setStyleSheet(
             "color: #71717a; font-size: 10px; font-style: italic; margin-top: 1px;"
@@ -731,6 +774,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 m_dur, s_dur = int(dur // 60), int(dur % 60)
                 self.lbl_time_cur.setText(f"{m_pos:02d}:{s_pos:02d}")
                 self.lbl_time_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
+
+        # Periodic party heartbeat (every 3s for host)
+        if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+            now = time.time()
+            if now - getattr(self, "_last_party_heartbeat", 0.0) >= 3.0:
+                self._last_party_heartbeat = now
+                self.party_sync.broadcast_heartbeat(pos, self.audio_engine.is_playing)
 
         # Auto-advance to next track when song finishes
         if self.audio_engine.audio_mode != "desktop":
@@ -1459,3 +1509,177 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     # SONG SEARCH & AUTO-DOWNLOAD SLOTS
 
     # -------------------------------------------------------------
+
+    # -------------------------------------------------------------------------
+    # Party Sync (Listen Together) & Spotify Integration Handlers
+    # -------------------------------------------------------------------------
+
+    def open_party_dialog(self):
+        if hasattr(self, "party_dialog"):
+            self.party_dialog.show()
+            self.party_dialog.raise_()
+            self.party_dialog.activateWindow()
+
+    def open_spotify_dialog(self):
+        if hasattr(self, "spotify_dialog"):
+            self.spotify_dialog.show()
+            self.spotify_dialog.raise_()
+            self.spotify_dialog.activateWindow()
+
+    def update_party_hud(self, is_connected: bool, room_code: str, is_host: bool):
+        if hasattr(self, "btn_party_sync"):
+            if is_connected:
+                role = "HOST" if is_host else "PARTY"
+                self.btn_party_sync.setText(f"{role}: {room_code}")
+                self.btn_party_sync.setStyleSheet(
+                    "background-color: #581c87; color: #f0abfc; border: 1px solid #c084fc; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
+                )
+            else:
+                self.btn_party_sync.setText("Listen Together")
+                self.btn_party_sync.setStyleSheet(
+                    "background-color: #1e1b4b; color: #a78bfa; border: 1px solid #7c3aed; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
+                )
+
+    def trigger_reaction_feedback(self, emoji: str, sender: str):
+        if hasattr(self, "overlay") and self.overlay:
+            self.overlay.current_volume = min(1.0, self.overlay.current_volume + 0.12)
+            self.overlay._apply_pupil_saturation()
+            self.overlay.update()
+
+    def _broadcast_party_track(self):
+        if not hasattr(self, "party_sync") or not self.party_sync.is_connected:
+            return
+        if getattr(self, "_is_handling_party_event", False):
+            return
+        if not self.party_sync.is_host and not self.party_sync.allow_guest_control:
+            return
+        if 0 <= self.audio_engine.current_index < len(self.audio_engine.playlist):
+            path = self.audio_engine.playlist[self.audio_engine.current_index]
+            fname = os.path.basename(path)
+            meta = self.audio_engine.current_metadata
+            title = meta.get("title") or os.path.splitext(fname)[0]
+            artist = meta.get("artist") or ""
+            dur = self.audio_engine.get_duration()
+            pos = self.audio_engine.get_position()
+            self.party_sync.broadcast_track(
+                title=title,
+                artist=artist,
+                filename=fname,
+                duration=dur,
+                timestamp=pos,
+                is_playing=self.audio_engine.is_playing,
+            )
+
+    def _on_party_track_received(self, data: dict):
+        if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
+            return
+        target_fn = (data.get("filename") or "").lower()
+        target_title = (data.get("title") or "").lower()
+        target_artist = (data.get("artist") or "").lower()
+        target_time = float(data.get("timestamp", 0.0))
+        target_playing = bool(data.get("is_playing", True))
+
+        matched_idx = -1
+        for i, track_path in enumerate(self.audio_engine.playlist):
+            fn = os.path.basename(track_path).lower()
+            if target_fn and (target_fn == fn or target_fn in fn):
+                matched_idx = i
+                break
+            if target_title and target_title in fn:
+                matched_idx = i
+                break
+
+        if matched_idx >= 0:
+            self._is_handling_party_event = True
+            try:
+                self.audio_engine.play_index(matched_idx)
+                if target_time > 0:
+                    self.audio_engine.seek(target_time)
+                if not target_playing:
+                    self.audio_engine.pause()
+                self.sync_play_state()
+            finally:
+                self._is_handling_party_event = False
+        else:
+            query = data.get("yt_query") or f"{target_artist} - {target_title}".strip(" -")
+            log.info("[PARTY SYNC] Track not in local library. Auto-downloading: %s", query)
+            self.lbl_track_title.setText(f"[PARTY] Auto-fetching '{data.get('title')}'...")
+            threading.Thread(
+                target=self._auto_download_party_track,
+                args=(query, target_time, target_playing),
+                daemon=True,
+            ).start()
+
+    def _auto_download_party_track(self, query: str, target_time: float, target_playing: bool):
+        target_dir = os.path.join(DEFAULT_MUSIC_DIR, "Downloaded Songs")
+        os.makedirs(target_dir, exist_ok=True)
+        if hasattr(self, "downloader") and self.downloader:
+            ok = self.downloader.download_sync_query(query, target_dir)
+            if ok:
+                QTimer.singleShot(0, lambda: self._on_party_track_downloaded(target_dir, target_time, target_playing))
+
+    def _on_party_track_downloaded(self, target_dir: str, target_time: float, target_playing: bool):
+        self.refresh_playlist()
+        if self.audio_engine.playlist:
+            newest_idx = len(self.audio_engine.playlist) - 1
+            self._is_handling_party_event = True
+            try:
+                self.audio_engine.play_index(newest_idx)
+                if target_time > 0:
+                    self.audio_engine.seek(target_time)
+                if not target_playing:
+                    self.audio_engine.pause()
+                self.sync_play_state()
+            finally:
+                self._is_handling_party_event = False
+
+    def _on_party_play_received(self, ts: float):
+        if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
+            return
+        self._is_handling_party_event = True
+        try:
+            curr_pos = self.audio_engine.get_position()
+            if abs(curr_pos - ts) > 0.35:
+                self.audio_engine.seek(ts)
+            if not self.audio_engine.is_playing:
+                self.audio_engine.play()
+                self.sync_play_state()
+        finally:
+            self._is_handling_party_event = False
+
+    def _on_party_pause_received(self, ts: float):
+        if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
+            return
+        self._is_handling_party_event = True
+        try:
+            if self.audio_engine.is_playing:
+                self.audio_engine.pause()
+                self.sync_play_state()
+            curr_pos = self.audio_engine.get_position()
+            if abs(curr_pos - ts) > 0.35:
+                self.audio_engine.seek(ts)
+        finally:
+            self._is_handling_party_event = False
+
+    def _on_party_seek_received(self, ts: float):
+        if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
+            return
+        self._is_handling_party_event = True
+        try:
+            self.audio_engine.seek(ts)
+            self.update_timeline()
+        finally:
+            self._is_handling_party_event = False
+
+    def _on_party_heartbeat_received(self, ts: float, is_playing: bool):
+        if hasattr(self, "party_sync") and self.party_sync.is_host:
+            return
+        curr_pos = self.audio_engine.get_position()
+        drift = abs(curr_pos - ts)
+        if drift > 0.40:
+            log.info("[PARTY SYNC] Clock drift: %.2fs -> snapping seek", drift)
+            self._is_handling_party_event = True
+            try:
+                self.audio_engine.seek(ts)
+            finally:
+                self._is_handling_party_event = False

@@ -143,9 +143,15 @@ def search_youtube(query: str, limit: int = 5) -> List[Dict]:
 
 
 def download_and_sync_lrc(
-    video_url: str, target_dir: str, progress_cb: Optional[Callable[[str], None]] = None
+    video_url: str,
+    target_dir: str,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Tuple[bool, str, str]:
     """Downloads audio, converts to Opus 160kbps in target_dir, and auto-fetches synced LRC."""
+    if cancel_check and cancel_check():
+        return False, "", "Cancelled by user"
+
     if not os.path.exists(target_dir):
         os.makedirs(target_dir, exist_ok=True)
     download_dir = target_dir
@@ -153,6 +159,8 @@ def download_and_sync_lrc(
         progress_cb("Connecting to YouTube stream...")
 
     def hook(d):
+        if cancel_check and cancel_check():
+            raise KeyboardInterrupt("Cancelled by user")
         if d.get("status") == "downloading":
             p_str = d.get("_percent_str", "").strip()
             spd = d.get("_speed_str", "").strip()
@@ -184,9 +192,18 @@ def download_and_sync_lrc(
     if ffmpeg_dir:
         ydl_opts["ffmpeg_location"] = ffmpeg_dir
     ydl_mod = _get_yt_dlp()
-    with ydl_mod.YoutubeDL(ydl_opts) as ydl:
-        meta = ydl.extract_info(video_url, download=True)
-        title = meta.get("title", "Track")
+    try:
+        with ydl_mod.YoutubeDL(ydl_opts) as ydl:
+            meta = ydl.extract_info(video_url, download=True)
+            title = meta.get("title", "Track")
+    except (KeyboardInterrupt, Exception) as exc:
+        if cancel_check and cancel_check():
+            return False, "", "Cancelled by user"
+        log.warning("[DOWNLOAD] ydl extract_info error: %s", exc)
+        return False, "", str(exc)
+
+    if cancel_check and cancel_check():
+        return False, "", "Cancelled by user"
     clean_title = sanitize_filename(title)
     expected_opus = os.path.join(download_dir, f"{clean_title}.opus")
     final_opus = expected_opus if os.path.exists(expected_opus) else None
@@ -260,6 +277,41 @@ class SongDownloaderService(QObject):
                 trim_process_memory()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def download_sync_query(
+        self,
+        query: str,
+        target_dir: str,
+        progress_cb: Optional[Callable[[str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        """Synchronously searches YouTube and downloads top result into target_dir with synced LRC."""
+        try:
+            if cancel_check and cancel_check():
+                return False
+            if progress_cb:
+                progress_cb(f"Searching YouTube: {query}")
+            results = search_youtube(query, limit=1)
+            if cancel_check and cancel_check():
+                return False
+            if not results:
+                log.warning("[DOWNLOAD] No YouTube results found for '%s'", query)
+                if progress_cb:
+                    progress_cb(f"No match found: {query}")
+                return False
+            top_url = results[0].get("url")
+            if not top_url:
+                return False
+            ok, opus_path, msg = download_and_sync_lrc(
+                top_url, target_dir, progress_cb=progress_cb, cancel_check=cancel_check
+            )
+            trim_process_memory()
+            return ok
+        except Exception as e:
+            log.warning("[DOWNLOAD] Sync query failed for %s: %s", query, e)
+            if progress_cb:
+                progress_cb(f"Error: {e}")
+            return False
 
     def download_and_sync_async(self, video_url: str, target_dir: str):
         """Asynchronously downloads audio, converts to Opus 160kbps in target_dir, and fetches LRC."""
