@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["TALIA_DISABLE_DISCORD_RPC"] = "1"
 
 ROOT = Path(__file__).resolve().parents[1]
 for path in (ROOT / "src", ROOT / "Talia Lyrics Fetch Automated"):
@@ -14,7 +15,7 @@ for path in (ROOT / "src", ROOT / "Talia Lyrics Fetch Automated"):
 import pytest  # noqa: E402
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def qapp():
     from PyQt6.QtWidgets import QApplication
 

@@ -146,6 +146,7 @@ def write_release_settings() -> None:
         "lyrics_word_glow": True,
         "lyrics_font": "Rajdhani",
         "download_folder": "",
+        "discord_rpc": True,
         "_version": 2,
     }
     with open(os.path.join(APP_STAGE, "settings.json"), "w", encoding="utf-8") as handle:

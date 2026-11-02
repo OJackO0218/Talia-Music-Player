@@ -104,6 +104,7 @@ DEFAULT_SETTINGS = {
     "lyrics_y": 664,
     "show_lyrics": True,
     "download_folder": "",
+    "discord_rpc": True,
 }
 
 

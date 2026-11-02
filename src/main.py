@@ -77,15 +77,16 @@ def main():
                 )
             sys.exit(0)
 
-    # Ensure only 1 instance of Talia runs at a time (prevents orphaned background instances)
-    mutex = ctypes.windll.kernel32.CreateMutexW(  # noqa: F841 (handle must outlive app)
-        None, False, "AtharTaliaCyberpunkVisualizerMutex"
-    )
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        log.warning(
-            "[!] Another instance of Talia is already running! Exiting duplicate process..."
+    # Ensure only 1 instance of Talia runs at a time (pass --multi to allow multiple instances for testing)
+    if "--multi" not in sys.argv:
+        mutex = ctypes.windll.kernel32.CreateMutexW(  # noqa: F841 (handle must outlive app)
+            None, False, "AtharTaliaCyberpunkVisualizerMutex"
         )
-        sys.exit(0)
+        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            log.warning(
+                "[!] Another instance of Talia is already running! Exiting duplicate process..."
+            )
+            sys.exit(0)
     log.info("[1/4] Starting Talia Cyberpunk Visualizer...")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)

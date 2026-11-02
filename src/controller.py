@@ -2,12 +2,18 @@ from party_dialog import PartySyncDialog
 from party_sync import PartySyncService
 from spotify_dialog import SpotifySyncDialog
 from spotify_sync import SpotifySyncService
+from discord_service import DiscordRpcService, parse_track_info
 """Main controller panel for Talia playback, appearance, and configuration."""
 
 import logging
 import os
 import random
+import subprocess
 import sys
+import threading
+import time
+
+log = logging.getLogger("ControlPanel")
 
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QIcon
@@ -15,6 +21,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QColorDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +36,7 @@ from PyQt6.QtWidgets import (
 from audio_engine import CyberAudioEngine
 from config import (
     COLOR_THEMES,
+    DEFAULT_MUSIC_DIR,
     FONTS_DIR,
     ICON_PATH,
     MAX_CHAR_SIZE,
@@ -98,7 +106,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         # Stylized minimal player window
         self.setMinimumSize(360, 480)
         self.resize(380, 560)
-        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setStyleSheet(SHARED_PANEL_STYLE)
         self.init_ui()
 
@@ -140,12 +148,19 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.party_sync.seek_received.connect(self._on_party_seek_received)
         self.party_sync.heartbeat_received.connect(self._on_party_heartbeat_received)
         self.party_sync.track_auto_downloaded.connect(self._on_party_track_downloaded)
+        self.party_sync.peer_joined.connect(self._on_party_peer_joined)
+        self.party_sync.connected.connect(self._on_party_connected)
         self._is_handling_party_event = False
         self._last_party_heartbeat = 0.0
 
         # Spotify Playlist Sync & Import Service
         self.spotify_service = SpotifySyncService(self)
         self.spotify_dialog = SpotifySyncDialog(self)
+
+        # Discord Rich Presence Service
+        self._discord_rpc_enabled = True
+        self.discord_service = DiscordRpcService(enabled=self._discord_rpc_enabled)
+        self._last_discord_update = 0.0
 
         # Polling timer for global hotkeys (50ms)
         self.hotkey_timer = QTimer(self)
@@ -167,18 +182,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         root_layout.setSpacing(0)
 
         # -------------------------------------------------------------
-
-        # SCROLLABLE CONTENT BODY (Resizable)
-
+        # PINNED PLAYBACK HEADER (Always visible even when scrolled)
         # -------------------------------------------------------------
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(12, 10, 12, 12)
-        content_layout.setSpacing(8)
+        pinned_header = QWidget()
+        pinned_header.setObjectName("pinnedPlaybackHeader")
+        pinned_layout = QVBoxLayout(pinned_header)
+        pinned_layout.setContentsMargins(12, 10, 12, 6)
+        pinned_layout.setSpacing(8)
 
         # --- PRIMARY TOGGLES (Settings, Move, Mode, Lyrics, Eco) ---
         hbox_top_toggles = QHBoxLayout()
@@ -211,7 +221,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.btn_eco.setToolTip("Toggle Eco Mode (< 1% CPU) [F11]")
         self.btn_eco.clicked.connect(self.toggle_eco_mode)
         hbox_top_toggles.addWidget(self.btn_eco)
-        content_layout.addLayout(hbox_top_toggles)
+        pinned_layout.addLayout(hbox_top_toggles)
 
         # --- SYNC & PARTY BUTTONS (Listen Together & Spotify Sync) ---
         hbox_sync_tools = QHBoxLayout()
@@ -235,14 +245,14 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.btn_spotify_sync.clicked.connect(self.open_spotify_dialog)
         hbox_sync_tools.addWidget(self.btn_spotify_sync, 1)
 
-        content_layout.addLayout(hbox_sync_tools)
+        pinned_layout.addLayout(hbox_sync_tools)
 
         # --- SECTION: PLAYBACK & VOLUME ---
-        content_layout.addWidget(create_section_header("Playback & Volume"))
+        pinned_layout.addWidget(create_section_header("Playback & Volume"))
 
         # Track title banner (Cyberpunk Rajdhani marquee)
         self.lbl_track_title = CyberScrollingTrackLabel()
-        content_layout.addWidget(self.lbl_track_title)
+        pinned_layout.addWidget(self.lbl_track_title)
 
         # Timeline seeker
         hbox_time = QHBoxLayout()
@@ -264,7 +274,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         hbox_time.addWidget(self.lbl_time_cur)
         hbox_time.addWidget(self.slider_seek)
         hbox_time.addWidget(self.lbl_time_dur)
-        content_layout.addLayout(hbox_time)
+        pinned_layout.addLayout(hbox_time)
 
         # Playback Transport Buttons (Basic: Rewind, Play/Pause, Next + Shuffle)
         hbox_controls = QHBoxLayout()
@@ -297,7 +307,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.btn_shuffle.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
         self.btn_shuffle.clicked.connect(self.toggle_shuffle)
         hbox_controls.addWidget(self.btn_shuffle)
-        content_layout.addLayout(hbox_controls)
+        pinned_layout.addLayout(hbox_controls)
 
         # Small Volume Slider
         hbox_vol = QHBoxLayout()
@@ -316,7 +326,28 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
         )
         hbox_vol.addWidget(self.lbl_vol_val)
-        content_layout.addLayout(hbox_vol)
+        pinned_layout.addLayout(hbox_vol)
+
+        # Divider separating pinned playback area from scrollable playlist
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("background-color: #27272a; max-height: 1px;")
+        pinned_layout.addWidget(divider)
+
+        root_layout.addWidget(pinned_header)
+
+        # -------------------------------------------------------------
+        # SCROLLABLE CONTENT BODY (Song Selection, Download Songs)
+        # -------------------------------------------------------------
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(12, 6, 12, 12)
+        content_layout.setSpacing(8)
 
         # --- SECTION: SONG SELECTION ---
         content_layout.addWidget(create_section_header("Song Selection"))
@@ -586,7 +617,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.lbl_dl_status.setVisible(False)
         content_layout.addWidget(self.lbl_dl_status)
         scroll_area.setWidget(content_widget)
-        root_layout.addWidget(scroll_area)
+        root_layout.addWidget(scroll_area, 1)
 
         # -------------------------------------------------------------
 
@@ -676,6 +707,36 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             self.btn_play_pause.setText("Play")
             self.btn_play_pause.setStyleSheet("")
             self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
+
+        # Update Discord Rich Presence
+        if hasattr(self, "discord_service") and self.discord_service:
+            raw_title = self.audio_engine.get_current_track_title()
+            is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
+            pos = self.audio_engine.get_position()
+            dur = self.audio_engine.get_duration()
+            self.discord_service.update_playback(raw_title, is_playing, pos, dur)
+
+        # Broadcast playback state to Listen Together party
+        if hasattr(self, "party_sync") and self.party_sync.is_connected:
+            if not getattr(self, "_is_handling_party_event", False):
+                if self.party_sync.is_host or self.party_sync.allow_guest_control:
+                    curr_idx = self.audio_engine.current_index
+                    last_idx = getattr(self, "_last_broadcast_party_idx", -999)
+                    last_playing = getattr(self, "_last_broadcast_party_playing", None)
+                    is_p = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
+                    cur_pos = self.audio_engine.get_position()
+
+                    if curr_idx != last_idx:
+                        self._last_broadcast_party_idx = curr_idx
+                        self._last_broadcast_party_playing = is_p
+                        self._broadcast_party_track()
+                    elif is_p != last_playing:
+                        self._last_broadcast_party_playing = is_p
+                        if is_p:
+                            self.party_sync.broadcast_play(cur_pos)
+                        else:
+                            self.party_sync.broadcast_pause(cur_pos)
+
         for r in range(self.list_tracks.count()):
             it = self.list_tracks.item(r)
             if it.data(Qt.ItemDataRole.UserRole) == self.audio_engine.current_index:
@@ -752,7 +813,17 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             target_sec = (val / 1000.0) * dur
             self.audio_engine.seek(target_sec)
         else:
+            target_sec = 0.0
             self.audio_engine.seek(0.0)
+        if hasattr(self, "discord_service") and self.discord_service:
+            raw_title = self.audio_engine.get_current_track_title()
+            is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
+            self.discord_service.update_playback(raw_title, is_playing, target_sec, dur)
+
+        if hasattr(self, "party_sync") and self.party_sync.is_connected:
+            if not getattr(self, "_is_handling_party_event", False):
+                if self.party_sync.is_host or self.party_sync.allow_guest_control:
+                    self.party_sync.broadcast_seek(target_sec)
 
     def update_timeline(self):
         if self.is_user_scrubbing:
@@ -781,6 +852,15 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             if now - getattr(self, "_last_party_heartbeat", 0.0) >= 3.0:
                 self._last_party_heartbeat = now
                 self.party_sync.broadcast_heartbeat(pos, self.audio_engine.is_playing)
+
+        # Periodic Discord Rich Presence timeline update (every 4s while playing)
+        if hasattr(self, "discord_service") and self.discord_service and self.discord_service.enabled:
+            now = time.time()
+            if now - getattr(self, "_last_discord_update", 0.0) >= 4.0:
+                self._last_discord_update = now
+                raw_title = self.audio_engine.get_current_track_title()
+                is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
+                self.discord_service.update_playback(raw_title, is_playing, pos, dur)
 
         # Auto-advance to next track when song finishes
         if self.audio_engine.audio_mode != "desktop":
@@ -825,6 +905,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "lbl_folder_path"):
             self.settings_dialog.lbl_folder_path.setText(f"{self.audio_engine.folder_path}")
 
+    def refresh_playlist(self):
+        """Alias for playlist refresh called by downloaders, party sync, and dialogs."""
+        self.refresh_tracklist()
+
     def on_vis_mode_changed(self, mode: str):
         self.overlay.visualizer.set_mode(mode)
         self.overlay._was_rendering = True
@@ -848,6 +932,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.overlay.enable_bass_pop = checked
         self.overlay._was_rendering = True
         self.overlay.update()
+
+    def on_discord_rpc_toggled(self, checked: bool):
+        self._discord_rpc_enabled = bool(checked)
+        if hasattr(self, "discord_service") and self.discord_service:
+            self.discord_service.set_enabled(bool(checked))
+            if checked:
+                raw_title = self.audio_engine.get_current_track_title()
+                is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
+                pos = self.audio_engine.get_position()
+                dur = self.audio_engine.get_duration()
+                self.discord_service.update_playback(raw_title, is_playing, pos, dur)
+        self.save_settings()
 
     def on_widescreen_toggled(self, checked):
         self.overlay.use_widescreen = checked
@@ -1317,6 +1413,11 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             )
             settings_dict["lyrics_font"] = font_val
         settings_dict["download_folder"] = str(getattr(self, "saved_dl_folder", ""))
+        settings_dict["discord_rpc"] = bool(
+            self.settings_dialog.chk_discord_rpc.isChecked()
+            if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "chk_discord_rpc")
+            else getattr(self, "_discord_rpc_enabled", True)
+        )
         return settings_dict
 
     def apply_settings(self, cfg: dict):
@@ -1355,6 +1456,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         # Features
         self.overlay.enable_scanlines = False
         self.chk_bass_pop.setChecked(cfg.get("bass_pop", True))
+        discord_on = bool(cfg.get("discord_rpc", True))
+        self._discord_rpc_enabled = discord_on
+        if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "chk_discord_rpc"):
+            self.settings_dialog.chk_discord_rpc.setChecked(discord_on)
+        if hasattr(self, "discord_service") and self.discord_service:
+            self.discord_service.set_enabled(discord_on)
         self.overlay.enable_bass_pop = cfg.get("bass_pop", True)
 
         # Visualizer
@@ -1539,6 +1646,14 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 )
 
 
+    def _on_party_connected(self, room_code: str, is_host: bool, members: list):
+        if is_host:
+            self._broadcast_party_track()
+
+    def _on_party_peer_joined(self, name: str, count: int):
+        if hasattr(self, "party_sync") and self.party_sync.is_host:
+            self._broadcast_party_track()
+
     def _broadcast_party_track(self):
         if not hasattr(self, "party_sync") or not self.party_sync.is_connected:
             return
@@ -1546,22 +1661,26 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             return
         if not self.party_sync.is_host and not self.party_sync.allow_guest_control:
             return
-        if 0 <= self.audio_engine.current_index < len(self.audio_engine.playlist):
-            path = self.audio_engine.playlist[self.audio_engine.current_index]
-            fname = os.path.basename(path)
-            meta = self.audio_engine.current_metadata
-            title = meta.get("title") or os.path.splitext(fname)[0]
-            artist = meta.get("artist") or ""
-            dur = self.audio_engine.get_duration()
-            pos = self.audio_engine.get_position()
-            self.party_sync.broadcast_track(
-                title=title,
-                artist=artist,
-                filename=fname,
-                duration=dur,
-                timestamp=pos,
-                is_playing=self.audio_engine.is_playing,
-            )
+        try:
+            if 0 <= self.audio_engine.current_index < len(self.audio_engine.playlist):
+                path = self.audio_engine.playlist[self.audio_engine.current_index]
+                fname = os.path.basename(path)
+                raw_title = self.audio_engine.get_current_track_title()
+                title, artist = parse_track_info(raw_title)
+                dur = self.audio_engine.get_duration()
+                pos = self.audio_engine.get_position()
+                is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
+                log.info("[PARTY SYNC] Broadcasting track: '%s' by '%s' (pos=%.2f, dur=%.2f, playing=%s)", title, artist, pos, dur, is_playing)
+                self.party_sync.broadcast_track(
+                    title=title,
+                    artist=artist,
+                    filename=fname,
+                    duration=dur,
+                    timestamp=pos,
+                    is_playing=is_playing,
+                )
+        except Exception as exc:
+            log.exception("[PARTY SYNC] Failed to broadcast track: %s", exc)
 
     def _on_party_track_received(self, data: dict):
         if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
@@ -1612,7 +1731,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.party_sync.track_auto_downloaded.emit(target_dir, target_time, target_playing)
 
     def _on_party_track_downloaded(self, target_dir: str, target_time: float, target_playing: bool):
-        self.refresh_playlist()
+        cur_folder = getattr(self.audio_engine, 'folder_path', None)
+        if not cur_folder or not os.path.exists(cur_folder):
+            self.audio_engine.set_folder(target_dir)
+        elif not os.path.abspath(target_dir).startswith(os.path.abspath(cur_folder)) and not os.path.abspath(cur_folder).startswith(os.path.abspath(target_dir)):
+            self.audio_engine.set_folder(target_dir)
+        self.refresh_tracklist()
         if self.audio_engine.playlist:
             newest_idx = len(self.audio_engine.playlist) - 1
             self._is_handling_party_event = True

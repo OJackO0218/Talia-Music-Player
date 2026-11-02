@@ -40,7 +40,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Talia Settings")
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
-        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setMinimumSize(460, 560)
         self.resize(480, 740)
         self.setStyleSheet(SHARED_PANEL_STYLE)
@@ -311,6 +311,11 @@ class SettingsDialog(QDialog):
         self.chk_bass_pop.setChecked(True)
         self.chk_bass_pop.toggled.connect(self.panel.on_bass_pop_toggled)
         hbox_toggles.addWidget(self.chk_bass_pop)
+
+        self.chk_discord_rpc = QCheckBox("Discord Presence")
+        self.chk_discord_rpc.setChecked(True)
+        self.chk_discord_rpc.toggled.connect(self.panel.on_discord_rpc_toggled)
+        hbox_toggles.addWidget(self.chk_discord_rpc)
         content_layout.addLayout(hbox_toggles)
 
         # --- SECTION: SETTINGS & ACTIONS ---

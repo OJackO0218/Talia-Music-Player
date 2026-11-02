@@ -1895,6 +1895,8 @@ class OverlayWindow(QWidget):
         if hasattr(self, "sound_menu_open") and self.sound_menu_open.isLoaded():
             self.sound_menu_open.play()
         if self.panel:
+            if self.panel.isMinimized():
+                self.panel.setWindowState(self.panel.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
             self.panel.show()
             self.panel.raise_()
             self.panel.activateWindow()

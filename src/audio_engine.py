@@ -198,6 +198,10 @@ class CyberAudioEngine:
         self._invalidate_preload_cache()
         self.refresh_playlist()
 
+    def switch_folder(self, folder_path: str):
+        """Alias for set_folder."""
+        self.set_folder(folder_path)
+
     def _invalidate_preload_cache(self) -> None:
         """Drops cached preloads and makes in-flight preloads discard their result."""
         with self._preload_lock:

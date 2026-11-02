@@ -112,6 +112,12 @@ def search_youtube(query: str, limit: int = 5) -> List[Dict]:
         "quiet": True,
         "skip_download": True,
         "no_warnings": True,
+        "nocheckcertificate": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios", "mweb"]
+            }
+        },
     }
     results = []
     ydl_mod = _get_yt_dlp()
@@ -147,6 +153,7 @@ def download_and_sync_lrc(
     target_dir: str,
     progress_cb: Optional[Callable[[str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    track_info: Optional[Dict] = None,
 ) -> Tuple[bool, str, str]:
     """Downloads audio, converts to Opus 160kbps in target_dir, and auto-fetches synced LRC."""
     if cancel_check and cancel_check():
@@ -174,6 +181,17 @@ def download_and_sync_lrc(
                 progress_cb("Converting to Opus 160kbps...")
 
     ffmpeg_dir = _find_ffmpeg_dir()
+
+    # Determine output template: clean filename from track_info if provided
+    outtmpl = os.path.join(download_dir, "%(title)s.%(ext)s")
+    clean_target_stem = ""
+    if track_info and track_info.get("title"):
+        t_artist = str(track_info.get("artist") or "").strip()
+        t_title = str(track_info.get("title") or "").strip()
+        if t_artist and t_title:
+            clean_target_stem = sanitize_filename(f"{t_artist} - {t_title}")
+            outtmpl = os.path.join(download_dir, f"{clean_target_stem}.%(ext)s")
+
     ydl_opts = {
         "format": "bestaudio/best",
         "postprocessors": [
@@ -183,11 +201,17 @@ def download_and_sync_lrc(
                 "preferredquality": "160",
             }
         ],
-        "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
+        "outtmpl": outtmpl,
         "progress_hooks": [hook],
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "nocheckcertificate": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios", "mweb"]
+            }
+        },
     }
     if ffmpeg_dir:
         ydl_opts["ffmpeg_location"] = ffmpeg_dir
@@ -204,9 +228,18 @@ def download_and_sync_lrc(
 
     if cancel_check and cancel_check():
         return False, "", "Cancelled by user"
-    clean_title = sanitize_filename(title)
-    expected_opus = os.path.join(download_dir, f"{clean_title}.opus")
-    final_opus = expected_opus if os.path.exists(expected_opus) else None
+
+    final_opus = None
+    if clean_target_stem:
+        target_path = os.path.join(download_dir, f"{clean_target_stem}.opus")
+        if os.path.exists(target_path):
+            final_opus = target_path
+
+    if not final_opus:
+        clean_title = sanitize_filename(title)
+        expected_opus = os.path.join(download_dir, f"{clean_title}.opus")
+        final_opus = expected_opus if os.path.exists(expected_opus) else None
+
     if not final_opus:
         opus_candidates = [
             os.path.join(download_dir, f)
@@ -216,10 +249,24 @@ def download_and_sync_lrc(
         if opus_candidates:
             opus_candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
             final_opus = opus_candidates[0]
+
     if not final_opus or not os.path.exists(final_opus):
         return False, "", "Audio download completed but .opus file not found."
 
-    # Auto-fetch synced lyrics
+    # Embed clean metadata tags into the Opus container
+    if track_info:
+        try:
+            from mutagen.oggopus import OggOpus
+            audio = OggOpus(final_opus)
+            if track_info.get("title"):
+                audio["title"] = [str(track_info["title"])]
+            if track_info.get("artist"):
+                audio["artist"] = [str(track_info["artist"])]
+            audio.save()
+        except Exception as tag_err:
+            log.debug("Could not write opus tags: %s", tag_err)
+
+    # Auto-fetch synced lyrics (runs in < 1s with direct LRCLIB & NetEase)
     if progress_cb:
         progress_cb("Auto-fetching verified synced lyrics (.lrc)...")
     lrc_synced = False
@@ -284,14 +331,47 @@ class SongDownloaderService(QObject):
         target_dir: str,
         progress_cb: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        track_info: Optional[Dict] = None,
     ) -> bool:
-        """Synchronously searches YouTube and downloads top result into target_dir with synced LRC."""
+        """Synchronously searches YouTube (prioritizing lyric/audio videos) and downloads into target_dir."""
         try:
             if cancel_check and cancel_check():
                 return False
+
+            # Check if file already exists in target_dir to skip duplicate work
+            if track_info and track_info.get("title") and track_info.get("artist"):
+                t_stem = sanitize_filename(f"{track_info['artist']} - {track_info['title']}")
+                exist_opus = os.path.join(target_dir, f"{t_stem}.opus")
+                if os.path.exists(exist_opus):
+                    exist_lrc = os.path.join(target_dir, f"{t_stem}.lrc")
+                    if os.path.exists(exist_lrc):
+                        if progress_cb:
+                            progress_cb(f"Already downloaded: {t_stem}")
+                        return True
+                    else:
+                        if progress_cb:
+                            progress_cb(f"Audio exists, fetching lyrics: {t_stem}")
+                        if fetch_lyrics_for_file:
+                            fetch_lyrics_for_file(exist_opus, force_overwrite=True)
+                        return True
+
+            is_url = "youtube.com/" in query or "youtu.be/" in query
+            if is_url:
+                search_query = query
+            elif track_info and track_info.get("title") and track_info.get("artist"):
+                # Prioritize lyric videos for clean, unedited studio tracks
+                search_query = f"{track_info['artist']} - {track_info['title']} lyrics"
+            else:
+                search_query = f"{query} lyrics"
+
             if progress_cb:
-                progress_cb(f"Searching YouTube: {query}")
-            results = search_youtube(query, limit=1)
+                progress_cb(f"Searching YouTube: {search_query if not is_url else query}")
+
+            results = search_youtube(search_query, limit=3 if not is_url else 1)
+            # Fallback to direct query if lyrics search returned nothing
+            if not results and search_query != query:
+                results = search_youtube(query, limit=1)
+
             if cancel_check and cancel_check():
                 return False
             if not results:
@@ -299,11 +379,17 @@ class SongDownloaderService(QObject):
                 if progress_cb:
                     progress_cb(f"No match found: {query}")
                 return False
+
             top_url = results[0].get("url")
             if not top_url:
                 return False
+
             ok, opus_path, msg = download_and_sync_lrc(
-                top_url, target_dir, progress_cb=progress_cb, cancel_check=cancel_check
+                top_url,
+                target_dir,
+                progress_cb=progress_cb,
+                cancel_check=cancel_check,
+                track_info=track_info,
             )
             trim_process_memory()
             return ok

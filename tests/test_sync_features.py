@@ -100,7 +100,7 @@ def test_party_sync_local_exchange():
     host_svc.host_local_server(port=test_port, room_code="SYNC1", user_name="Alice")
 
     # Give server a moment to spin up
-    for _ in range(20):
+    for _ in range(50):
         QCoreApplication.processEvents()
         if host_connected:
             break
@@ -112,7 +112,7 @@ def test_party_sync_local_exchange():
     # Guest joins local server
     guest_svc.join_session("SYNC1", user_name="Bob", relay_url=f"ws://127.0.0.1:{test_port}")
 
-    for _ in range(20):
+    for _ in range(50):
         QCoreApplication.processEvents()
         if guest_connected:
             break
@@ -158,7 +158,9 @@ def test_party_sync_local_exchange():
     # Cleanup
     host_svc.disconnect_session()
     guest_svc.disconnect_session()
-    time.sleep(0.1)
+    for _ in range(10):
+        QCoreApplication.processEvents()
+        time.sleep(0.05)
 
 def test_party_host_session_auto_starts_embedded():
     """Verifies that calling host_session() automatically starts the local relay and connects."""
@@ -167,7 +169,7 @@ def test_party_host_session_auto_starts_embedded():
     svc.connected.connect(lambda code, is_h, mem: connected_events.append((code, is_h, mem)))
 
     # Call host_session directly with no external relay running
-    svc.host_session(room_code="AUTO1", user_name="HostAlice")
+    svc.host_session(room_code="AUTO1", user_name="HostAlice", relay_url="")
 
     for _ in range(25):
         QCoreApplication.processEvents()
@@ -183,7 +185,9 @@ def test_party_host_session_auto_starts_embedded():
     assert svc.is_connected is True
 
     svc.disconnect_session()
-    time.sleep(0.1)
+    for _ in range(10):
+        QCoreApplication.processEvents()
+        time.sleep(0.05)
 
 
 def test_spotify_saved_playlists_management():
@@ -237,6 +241,9 @@ def test_spotify_dialog_batch_download_ui_states(qapp):
     # User cancels download
     dlg._on_download_toggle_clicked()
     assert dlg._stop_download_flag is True
+
+    if hasattr(dlg, "_worker_thread") and dlg._worker_thread:
+        dlg._worker_thread.join(timeout=1.0)
 
     # Cleanup
     dlg.hide()

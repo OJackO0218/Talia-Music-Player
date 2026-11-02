@@ -9,5 +9,7 @@ SoundCard==0.4.6
 yt-dlp==2026.10.26
 static-ffmpeg==3.0
 syncedlyrics==1.0.1
+websockets>=15.0
+pypresence>=4.6.0
 # Used by the in-app lyrics fetcher to read embedded audio metadata.
 mutagen==1.48.1

@@ -48,13 +48,15 @@ hiddenimports = [
     "static_ffmpeg",
     "syncedlyrics",
     "websockets",
+    "discord_service",
+    "pypresence",
 ]
 datas += collect_data_files("sounddevice")
 datas += collect_data_files("soundfile")
 datas += collect_data_files("soundcard")
 binaries += collect_dynamic_libs("sounddevice")
 binaries += collect_dynamic_libs("soundfile")
-for package in ("yt_dlp", "static_ffmpeg", "websockets"):
+for package in ("yt_dlp", "static_ffmpeg", "websockets", "pypresence"):
     collected = collect_all(package)
     datas += collected[0]
     binaries += collected[1]

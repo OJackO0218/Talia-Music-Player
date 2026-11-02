@@ -203,6 +203,22 @@ def clean_unwanted_lrc_headers(lrc_text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def clean_primary_artist(artist: str) -> str:
+    """Extracts primary artist name, stripping featured artists and multiple collaborators."""
+    if not artist:
+        return ""
+    split = re.split(r'[,&]|\s+(?:feat\.?|ft\.?|featuring)\s+', artist, flags=re.I)[0]
+    return split.strip()
+
+
+def clean_bare_title(title: str) -> str:
+    """Strips parenthetical qualifiers from song title."""
+    if not title:
+        return ""
+    clean = re.sub(r'\s*[\(\[\{].*?[\)\]\}]', '', title).strip()
+    return clean or title
+
+
 def validate_lyrics_match(lrc_text: str, expected_duration: float = 0.0) -> bool:
     """High-precision sanity check: enforces line count, timestamps, and strict duration bounds."""
     if not lrc_text or "[" not in lrc_text:
@@ -216,8 +232,8 @@ def validate_lyrics_match(lrc_text: str, expected_duration: float = 0.0) -> bool
         last_ts = parse_last_timestamp(lrc_text)
         if last_ts > 0.0:
             diff = abs(expected_duration - last_ts)
-            # Refuse lyrics that extend beyond song length or cut off prematurely
-            if last_ts > expected_duration + 3.0:
+            # Refuse lyrics that extend far beyond song length or cut off prematurely
+            if last_ts > expected_duration + 8.0:
                 return False
             if diff > 30.0 and last_ts < expected_duration * 0.70:
                 return False
@@ -226,57 +242,73 @@ def validate_lyrics_match(lrc_text: str, expected_duration: float = 0.0) -> bool
 
 
 def fetch_from_lrclib_direct(title: str, artist: str = "", duration: float = 0.0) -> Optional[str]:
-    """Direct query to LRCLIB API with exact track duration matching."""
-    try:
-        if artist and title and duration > 10.0:
+    """Direct query to LRCLIB API with exact or closest track duration matching."""
+    primary_artist = clean_primary_artist(artist)
+    clean_title = clean_bare_title(title)
+
+    # 1. Exact query: track_name, artist_name, duration
+    candidates = []
+    if primary_artist and clean_title and duration > 10.0:
+        candidates.append((primary_artist, clean_title))
+    if artist and artist != primary_artist and clean_title and duration > 10.0:
+        candidates.append((artist, clean_title))
+
+    for a_name, t_name in candidates:
+        try:
             params = {
-                "track_name": title,
-                "artist_name": artist,
-                "duration": int(round(duration))
+                "track_name": t_name,
+                "artist_name": a_name,
+                "duration": int(round(duration)),
             }
             url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(params)}"
             req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if data.get("syncedLyrics"):
                     cleaned = clean_unwanted_lrc_headers(data["syncedLyrics"])
                     if validate_lyrics_match(cleaned, duration):
                         return cleaned
-    except Exception:
-        pass
+        except Exception:
+            pass
 
+    # 2. Search query on LRCLIB
     try:
-        query = f"{title} {artist}".strip()
-        url = f"https://lrclib.net/api/search?q={urllib.parse.quote(query)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list):
-                best_synced = None
-                best_diff = float("inf")
-                for item in data:
-                    synced = item.get("syncedLyrics")
-                    if not synced:
-                        continue
-                    cand_dur = float(item.get("duration") or 0.0)
-                    if duration > 10.0 and cand_dur > 10.0:
-                        diff = abs(cand_dur - duration)
-                        if diff > 2.0:
+        search_terms = []
+        if primary_artist and clean_title:
+            search_terms.append(f"{primary_artist} {clean_title}")
+        if clean_title:
+            search_terms.append(clean_title)
+
+        max_allowed_diff = max(15.0, duration * 0.10) if duration > 10.0 else 999.0
+
+        for term in search_terms:
+            url = f"https://lrclib.net/api/search?q={urllib.parse.quote(term)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, list):
+                    best_synced = None
+                    best_diff = float("inf")
+                    for item in data:
+                        synced = item.get("syncedLyrics")
+                        if not synced:
                             continue
-                    else:
-                        diff = 0.0
+                        cand_dur = float(item.get("duration") or 0.0)
+                        diff = abs(cand_dur - duration) if (duration > 10.0 and cand_dur > 10.0) else 0.0
+                        if diff > max_allowed_diff:
+                            continue
 
-                    cleaned = clean_unwanted_lrc_headers(synced)
-                    if not validate_lyrics_match(cleaned, duration):
-                        continue
+                        cleaned = clean_unwanted_lrc_headers(synced)
+                        if not validate_lyrics_match(cleaned, duration):
+                            continue
 
-                    if diff < best_diff:
-                        best_diff = diff
-                        best_synced = cleaned
-                        if diff <= 1.0:
-                            break
-                if best_synced:
-                    return best_synced
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_synced = cleaned
+                            if diff <= 2.0:
+                                break
+                    if best_synced:
+                        return best_synced
     except Exception:
         pass
 
@@ -286,70 +318,45 @@ def fetch_from_lrclib_direct(title: str, artist: str = "", duration: float = 0.0
 def fetch_synced_lyrics(title: str, artist: str = "", duration: float = 0.0) -> Optional[str]:
     """
     Cascading Multi-Provider Search:
-    Tries 4 prioritized query iterations across syncedlyrics and LRCLIB.
+    Prioritizes ultra-fast LRCLIB and NetEase, avoiding slow provider timeouts.
     """
-    queries = []
-    if artist and title:
-        queries.append(f"{artist} - {title}")
-        queries.append(f"{title} {artist}")
-    if title:
-        queries.append(title)
-        # Strip parens/brackets from title for fallback
-        clean_bare_title = re.sub(r'[\(\[\{].*?[\)\]\}]', '', title).strip()
-        if clean_bare_title and clean_bare_title != title:
-            if artist:
-                queries.append(f"{artist} {clean_bare_title}")
-            queries.append(clean_bare_title)
+    primary = clean_primary_artist(artist)
+    clean_t = clean_bare_title(title)
 
-    # 1. Try Direct LRCLIB exact match first (highest accuracy)
-    if artist and title and duration > 10.0:
-        direct = fetch_from_lrclib_direct(title, artist, duration)
-        if direct and validate_lyrics_match(direct, duration):
-            return direct
+    # 1. Try Direct LRCLIB exact/search match first (highest accuracy, < 1s)
+    direct = fetch_from_lrclib_direct(title, artist, duration)
+    if direct:
+        return direct
 
-    # 2. Iterate through query waterfall with syncedlyrics
+    # 2. Fast NetEase / Lrclib search via syncedlyrics (< 1s)
     if syncedlyrics is not None:
-        for q in queries:
+        fast_queries = []
+        if primary and clean_t:
+            fast_queries.append(f"{primary} {clean_t}")
+        elif clean_t:
+            fast_queries.append(clean_t)
+
+        for q in fast_queries:
             try:
-                result = syncedlyrics.search(q, synced_only=True)
-                if result:
-                    cleaned = clean_unwanted_lrc_headers(result)
+                res = syncedlyrics.search(q, synced_only=True, providers=["NetEase", "Lrclib"])
+                if res:
+                    cleaned = clean_unwanted_lrc_headers(res)
                     if validate_lyrics_match(cleaned, duration):
                         return cleaned
             except Exception:
                 continue
 
-    # 3. Fallback to LRCLIB search
-    for q in queries:
+    # 3. Comprehensive fallback with remaining providers
+    if syncedlyrics is not None:
+        fallback_query = f"{primary} {clean_t}".strip() if primary else (title or "")
         try:
-            url = f"https://lrclib.net/api/search?q={urllib.parse.quote(q)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if isinstance(data, list):
-                    best_synced = None
-                    best_diff = float("inf")
-                    for item in data:
-                        synced = item.get("syncedLyrics")
-                        if not synced:
-                            continue
-                        cleaned = clean_unwanted_lrc_headers(synced)
-                        if not validate_lyrics_match(cleaned, duration):
-                            continue
-                        cand_dur = float(item.get("duration") or 0.0)
-                        if duration > 10.0 and cand_dur > 10.0:
-                            diff = abs(cand_dur - duration)
-                            if diff < best_diff:
-                                best_diff = diff
-                                best_synced = cleaned
-                                if diff < 2.0:
-                                    break
-                        elif best_synced is None:
-                            best_synced = cleaned
-                    if best_synced:
-                        return best_synced
+            res = syncedlyrics.search(fallback_query, synced_only=True, providers=["Megalobiz", "Musixmatch"])
+            if res:
+                cleaned = clean_unwanted_lrc_headers(res)
+                if validate_lyrics_match(cleaned, duration):
+                    return cleaned
         except Exception:
-            continue
+            pass
 
     return None
 

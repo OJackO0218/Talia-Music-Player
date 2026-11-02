@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Talia Listen Together - Test Client</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #09090b;
+      color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      width: 100%;
+      max-width: 480px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #38bdf8;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #71717a;
+      display: inline-block;
+    }
+    .status-dot.online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+    .subtitle { font-size: 13px; color: #a1a1aa; margin-bottom: 20px; }
+    .input-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    input {
+      flex: 1;
+      background: #09090b;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      color: #f4f4f5;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      padding: 10px 14px;
+      text-transform: uppercase;
+      outline: none;
+    }
+    input:focus { border-color: #38bdf8; }
+    button {
+      background: #0284c7;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      padding: 10px 18px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: #0369a1; }
+    button:disabled { background: #3f3f46; cursor: not-allowed; }
+    .now-playing {
+      background: #09090b;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .track-title { font-size: 17px; font-weight: 700; color: #ffffff; margin-bottom: 4px; }
+    .track-artist { font-size: 14px; color: #f472b6; margin-bottom: 14px; }
+    .progress-bar-container {
+      width: 100%;
+      height: 6px;
+      background: #27272a;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: #38bdf8;
+      transition: width 0.1s linear;
+    }
+    .time-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: #71717a;
+      font-family: monospace;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .btn-secondary {
+      background: #27272a;
+      color: #e4e4e7;
+    }
+    .btn-secondary:hover { background: #3f3f46; }
+    .logs {
+      background: #09090b;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 12px;
+      height: 140px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 11px;
+      color: #a1a1aa;
+    }
+    .log-item { margin-bottom: 4px; }
+    .log-highlight { color: #38bdf8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1><span class="status-dot" id="statusDot"></span> Talia Listen Together</h1>
+    <div class="subtitle" id="statusText">Disconnected - Enter a 5-letter Room Code to test</div>
+
+    <div class="input-group">
+      <input type="text" id="roomInput" placeholder="ROOM CODE" maxlength="6" value="">
+      <button id="btnJoin" onclick="toggleJoin()">Join Room</button>
+    </div>
+
+    <div class="now-playing">
+      <div class="track-title" id="trackTitle">No Track Loaded</div>
+      <div class="track-artist" id="trackArtist">Waiting for Host...</div>
+      <div class="progress-bar-container">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="time-labels">
+        <span id="timeCurrent">00:00</span>
+        <span id="timeDuration">--:--</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn-secondary" id="btnPlayPause" onclick="togglePlayPause()" disabled>Play / Pause</button>
+      <button class="btn-secondary" id="btnRewind" onclick="seekRelative(-5)" disabled>-5s</button>
+      <button class="btn-secondary" id="btnForward" onclick="seekRelative(5)" disabled>+5s</button>
+    </div>
+
+    <div class="logs" id="logBox"></div>
+  </div>
+
+  <script>
+    const RELAY_URL = "wss://soft-mongoose-6754.ojacko0218.deno.net";
+    let ws = null;
+    let isConnected = false;
+    let currentTrack = null;
+    let isPlaying = false;
+    let currentPos = 0;
+    let duration = 0;
+    let lastClockSync = Date.now();
+    let tickTimer = null;
+
+    function addLog(msg, highlight = false) {
+      const box = document.getElementById("logBox");
+      const d = new Date();
+      const timeStr = d.toTimeString().split(' ')[0];
+      const div = document.createElement("div");
+      div.className = "log-item" + (highlight ? " log-highlight" : "");
+      div.textContent = `[${timeStr}] ${msg}`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function formatTime(sec) {
+      if (!sec || isNaN(sec) || sec < 0) return "00:00";
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function startTicker() {
+      if (tickTimer) clearInterval(tickTimer);
+      tickTimer = setInterval(() => {
+        if (isPlaying && duration > 0) {
+          const now = Date.now();
+          const dt = (now - lastClockSync) / 1000;
+          const displayPos = Math.min(duration, currentPos + dt);
+          document.getElementById("timeCurrent").textContent = formatTime(displayPos);
+          const pct = Math.min(100, (displayPos / duration) * 100);
+          document.getElementById("progressFill").style.width = pct + "%";
+        }
+      }, 100);
+    }
+
+    function toggleJoin() {
+      if (isConnected) {
+        disconnect();
+        return;
+      }
+      const room = document.getElementById("roomInput").value.trim().toUpperCase();
+      if (!room) {
+        alert("Please enter a room code!");
+        return;
+      }
+      connect(room);
+    }
+
+    function connect(room) {
+      addLog(`Connecting to relay ${RELAY_URL}...`);
+      document.getElementById("statusText").textContent = "Connecting to relay...";
+      ws = new WebSocket(RELAY_URL);
+
+      ws.onopen = () => {
+        addLog(`Connected to relay! Joining room ${room}...`);
+        ws.send(JSON.stringify({
+          type: "join",
+          room: room,
+          name: "WebListener",
+          is_host: false
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleMessage(data);
+        } catch (e) {
+          console.error(e);
+        }
+      };
+
+      ws.onclose = () => {
+        handleDisconnect("Disconnected from relay.");
+      };
+
+      ws.onerror = (err) => {
+        addLog("WebSocket Error occurred.");
+      };
+    }
+
+    function handleMessage(data) {
+      if (data.type === "joined") {
+        isConnected = true;
+        document.getElementById("statusDot").className = "status-dot online";
+        document.getElementById("statusText").textContent = `Room ${data.room} | Members: ${data.members.join(", ")}`;
+        document.getElementById("btnJoin").textContent = "Leave";
+        document.getElementById("btnPlayPause").disabled = false;
+        document.getElementById("btnRewind").disabled = false;
+        document.getElementById("btnForward").disabled = false;
+        addLog(`Joined Room ${data.room}! (Members: ${data.members.join(", ")})`, true);
+        startTicker();
+      } else if (data.type === "peer_joined") {
+        addLog(`${data.name} joined the room! (${data.count} members)`);
+      } else if (data.type === "peer_left") {
+        addLog(`${data.name} left the room.`);
+      } else if (data.type === "track_change") {
+        currentTrack = data;
+        duration = data.duration || 0;
+        currentPos = data.timestamp || 0;
+        isPlaying = data.is_playing;
+        lastClockSync = Date.now();
+
+        document.getElementById("trackTitle").textContent = data.title || "Unknown Title";
+        document.getElementById("trackArtist").textContent = data.artist || "Unknown Artist";
+        document.getElementById("timeDuration").textContent = formatTime(duration);
+        document.getElementById("timeCurrent").textContent = formatTime(currentPos);
+        addLog(`Track Changed: "${data.title}" by ${data.artist} (${formatTime(duration)})`, true);
+      } else if (data.type === "play") {
+        isPlaying = true;
+        currentPos = data.timestamp;
+        lastClockSync = Date.now();
+        addLog(`Host PLAY at ${formatTime(currentPos)}`);
+      } else if (data.type === "pause") {
+        isPlaying = false;
+        currentPos = data.timestamp;
+        lastClockSync = Date.now();
+        addLog(`Host PAUSE at ${formatTime(currentPos)}`);
+      } else if (data.type === "seek") {
+        currentPos = data.timestamp;
+        lastClockSync = Date.now();
+        addLog(`Host SEEK to ${formatTime(currentPos)}`);
+      } else if (data.type === "heartbeat") {
+        currentPos = data.timestamp;
+        isPlaying = data.is_playing;
+        lastClockSync = Date.now();
+      }
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.send(JSON.stringify({ type: "leave" }));
+        ws.close();
+      }
+      handleDisconnect("Left room.");
+    }
+
+    function handleDisconnect(reason) {
+      isConnected = false;
+      if (tickTimer) clearInterval(tickTimer);
+      document.getElementById("statusDot").className = "status-dot";
+      document.getElementById("statusText").textContent = reason;
+      document.getElementById("btnJoin").textContent = "Join Room";
+      document.getElementById("btnPlayPause").disabled = true;
+      document.getElementById("btnRewind").disabled = true;
+      document.getElementById("btnForward").disabled = true;
+      addLog(reason);
+    }
+
+    function togglePlayPause() {
+      if (!ws || !isConnected) return;
+      if (isPlaying) {
+        ws.send(JSON.stringify({ type: "pause", timestamp: currentPos }));
+      } else {
+        ws.send(JSON.stringify({ type: "play", timestamp: currentPos }));
+      }
+    }
+
+    function seekRelative(delta) {
+      if (!ws || !isConnected) return;
+      const target = Math.max(0, Math.min(duration, currentPos + delta));
+      ws.send(JSON.stringify({ type: "seek", timestamp: target }));
+    }
+  </script>
+</body>
+</html>

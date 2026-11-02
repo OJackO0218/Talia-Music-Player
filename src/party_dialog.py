@@ -37,7 +37,7 @@ class PartySyncDialog(QDialog):
 
         self.setWindowTitle("Listen Together - Party Sync")
         self.setFixedSize(480, 520)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.WindowType.Dialog)
         self.setStyleSheet(SHARED_PANEL_STYLE)
 
         self._generated_code = generate_room_code()

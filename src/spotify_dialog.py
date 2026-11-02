@@ -58,7 +58,7 @@ class SpotifySyncDialog(QDialog):
 
         self.setWindowTitle("Spotify Sync - Import Playlists")
         self.resize(560, 640)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.WindowType.Dialog)
         self.setStyleSheet(SHARED_PANEL_STYLE)
 
         self._active_playlist_data: Optional[dict] = None
@@ -440,10 +440,16 @@ class SpotifySyncDialog(QDialog):
             pct = int(((step_num - 1) / max(1, total)) * 100)
 
             # Signal UI that track has started
-            self.bridge.track_started.emit(step_num, total, query, pct)
+            try:
+                self.bridge.track_started.emit(step_num, total, query, pct)
+            except (RuntimeError, AttributeError):
+                break
 
             def _live_cb(msg: str, s=step_num):
-                self.bridge.live_progress.emit(s, total, msg)
+                try:
+                    self.bridge.live_progress.emit(s, total, msg)
+                except (RuntimeError, AttributeError):
+                    pass
 
             dl_ok = False
             try:
@@ -453,6 +459,7 @@ class SpotifySyncDialog(QDialog):
                         target_dir,
                         progress_cb=_live_cb,
                         cancel_check=lambda: self._stop_download_flag,
+                        track_info=t,
                     )
                 else:
                     log.warning("No downloader instance found on panel.")
@@ -464,10 +471,21 @@ class SpotifySyncDialog(QDialog):
             else:
                 failed += 1
 
-            self.bridge.track_completed.emit(item_idx, dl_ok)
+            try:
+                self.bridge.track_completed.emit(item_idx, dl_ok)
+            except (RuntimeError, AttributeError):
+                break
+
+            # Polite pacing between downloads to avoid YouTube burst bot rate limits
+            if step_num < total and not self._stop_download_flag:
+                import time
+                time.sleep(0.8)
 
         # Batch finished notification via thread-safe signal
-        self.bridge.batch_finished.emit(success, failed, target_dir, self._stop_download_flag)
+        try:
+            self.bridge.batch_finished.emit(success, failed, target_dir, self._stop_download_flag)
+        except (RuntimeError, AttributeError):
+            pass
 
     # -------------------------------------------------------------------------
     # Thread-Safe Signal Slots (Executed on Main Qt GUI Thread)
@@ -528,7 +546,10 @@ class SpotifySyncDialog(QDialog):
             try:
                 if hasattr(self.panel, "audio_engine") and self.panel.audio_engine:
                     if self.panel.audio_engine.folder_path != target_dir:
-                        self.panel.audio_engine.switch_folder(target_dir)
+                        if hasattr(self.panel.audio_engine, 'switch_folder'):
+                            self.panel.audio_engine.switch_folder(target_dir)
+                        elif hasattr(self.panel.audio_engine, 'set_folder'):
+                            self.panel.audio_engine.set_folder(target_dir)
                 self.panel.refresh_playlist()
                 if hasattr(self.panel, "populate_playlist_ui"):
                     self.panel.populate_playlist_ui()
