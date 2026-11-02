@@ -104,8 +104,8 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             self.setWindowIcon(QIcon(ICON_PATH))
 
         # Stylized minimal player window
-        self.setMinimumSize(360, 480)
-        self.resize(380, 560)
+        self.setMinimumSize(420, 540)
+        self.resize(460, 640)
         self.setWindowFlags(Qt.WindowType.Window)
         self.setStyleSheet(SHARED_PANEL_STYLE)
         self.init_ui()
@@ -120,6 +120,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.lbl_sens_val = self.settings_dialog.lbl_sens_val
         self.chk_scanlines = None
         self.chk_bass_pop = self.settings_dialog.chk_bass_pop
+        self.chk_head_bop = getattr(self.settings_dialog, 'chk_head_bop', None)
         self.combo_mode = self.settings_dialog.combo_mode
         self.combo_theme = self.settings_dialog.combo_theme
         self.combo_lyric_color = self.settings_dialog.combo_lyric_color
@@ -276,37 +277,52 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         hbox_time.addWidget(self.lbl_time_dur)
         pinned_layout.addLayout(hbox_time)
 
-        # Playback Transport Buttons (Basic: Rewind, Play/Pause, Next + Shuffle)
+        # Playback Transport Buttons (Clean Symbols: Shuffle, Rewind, Play/Pause, Next)
         hbox_controls = QHBoxLayout()
-        hbox_controls.setSpacing(6)
-        btn_prev = QPushButton(" Rewind")
-        icon_bw_path = os.path.join(PNGS_DIR, "icon_backward.png")
-        if os.path.exists(icon_bw_path):
-            btn_prev.setIcon(QIcon(icon_bw_path))
-            btn_prev.setIconSize(QSize(13, 13))
-        btn_prev.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
-        btn_prev.clicked.connect(self.on_prev_clicked)
-        hbox_controls.addWidget(btn_prev)
-        self.btn_play_pause = QPushButton("Play")
-        self.btn_play_pause.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
+        hbox_controls.setSpacing(8)
+        hbox_controls.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_shuffle = QPushButton("⇄")
+        self.btn_shuffle.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
+        self.btn_shuffle.setToolTip("Shuffle: Disabled")
+        self.btn_shuffle.setFixedSize(38, 30)
+        self.btn_shuffle.setStyleSheet(
+            "background-color: #27272a; color: #71717a; border: 1px solid #3f3f46; border-radius: 4px;"
+        )
+        self.btn_shuffle.clicked.connect(self.toggle_shuffle)
+        hbox_controls.addWidget(self.btn_shuffle)
+
+        self.btn_prev = QPushButton("⏮")
+        self.btn_prev.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
+        self.btn_prev.setToolTip("Previous Track [Rewind]")
+        self.btn_prev.setFixedSize(46, 30)
+        self.btn_prev.setStyleSheet(
+            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px;"
+        )
+        self.btn_prev.clicked.connect(self.on_prev_clicked)
+        hbox_controls.addWidget(self.btn_prev)
+
+        self.btn_play_pause = QPushButton("▶")
+        self.btn_play_pause.setFont(QFont("Segoe UI Symbol", 13, QFont.Weight.Bold))
         self.btn_play_pause.setObjectName("btnPlayPause")
+        self.btn_play_pause.setToolTip("Play / Pause [Space]")
+        self.btn_play_pause.setFixedSize(56, 30)
         self.btn_play_pause.setStyleSheet(
-            "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold;"
+            "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; border-radius: 4px;"
         )
         self.btn_play_pause.clicked.connect(self.on_play_pause_clicked)
         hbox_controls.addWidget(self.btn_play_pause)
-        btn_next = QPushButton(" Next")
-        icon_fw_path = os.path.join(PNGS_DIR, "icon_forward.png")
-        if os.path.exists(icon_fw_path):
-            btn_next.setIcon(QIcon(icon_fw_path))
-            btn_next.setIconSize(QSize(13, 13))
-        btn_next.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
-        btn_next.clicked.connect(self.on_next_clicked)
-        hbox_controls.addWidget(btn_next)
-        self.btn_shuffle = QPushButton("Shuffle: Off")
-        self.btn_shuffle.setFont(QFont("Rajdhani", 10, QFont.Weight.Bold))
-        self.btn_shuffle.clicked.connect(self.toggle_shuffle)
-        hbox_controls.addWidget(self.btn_shuffle)
+
+        self.btn_next = QPushButton("⏭")
+        self.btn_next.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
+        self.btn_next.setToolTip("Next Track [Next]")
+        self.btn_next.setFixedSize(46, 30)
+        self.btn_next.setStyleSheet(
+            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px;"
+        )
+        self.btn_next.clicked.connect(self.on_next_clicked)
+        hbox_controls.addWidget(self.btn_next)
+
         pinned_layout.addLayout(hbox_controls)
 
         # Small Volume Slider
@@ -352,82 +368,126 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         # --- SECTION: SONG SELECTION ---
         content_layout.addWidget(create_section_header("Song Selection"))
 
+        # Folder Quick-Switcher (Clean 1-line dropdown + browse button)
+        hbox_folder = QHBoxLayout()
+        hbox_folder.setSpacing(6)
+        lbl_folder_icon = QLabel("Folder:")
+        lbl_folder_icon.setStyleSheet("color: #a1a1aa; font-weight: 600; font-size: 11px;")
+        hbox_folder.addWidget(lbl_folder_icon)
+
+        self.combo_active_folder = NoScrollComboBox()
+        self.combo_active_folder.setStyleSheet("""
+            QComboBox {
+                background-color: #202024;
+                color: #f4f4f5;
+                border: 1px solid #3f3f46;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 500;
+            }
+            QComboBox:hover {
+                border-color: #3b82f6;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 18px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1f1f23;
+                color: #f4f4f5;
+                selection-background-color: #3b82f6;
+                border: 1px solid #3f3f46;
+                padding: 4px;
+            }
+        """)
+        self.combo_active_folder.activated.connect(self.on_active_folder_selected)
+        hbox_folder.addWidget(self.combo_active_folder, 1)
+
+        self.btn_browse_folder = QPushButton("...")
+        self.btn_browse_folder.setToolTip("Browse and choose a custom music folder")
+        self.btn_browse_folder.setFixedWidth(34)
+        self.btn_browse_folder.setStyleSheet(
+            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-weight: bold; border-radius: 4px;"
+        )
+        self.btn_browse_folder.clicked.connect(self.choose_music_folder)
+        hbox_folder.addWidget(self.btn_browse_folder)
+        content_layout.addLayout(hbox_folder)
+
         # Search Bar with live filter and clear button
         hbox_search = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search songs...")
-
         self.search_input.setStyleSheet("""
-
             QLineEdit {
-
                 background-color: #202024;
-
                 color: #f4f4f5;
-
                 border: 1px solid #3f3f46;
-
                 border-radius: 4px;
-
                 padding: 5px 8px;
-
                 font-size: 11px;
-
             }
-
             QLineEdit:focus {
-
                 border-color: #3b82f6;
-
             }
-
         """)
-
         self.search_input.textChanged.connect(self.filter_tracks)
         hbox_search.addWidget(self.search_input)
+
         self.btn_clear_search = QPushButton("✕")
         self.btn_clear_search.setFixedWidth(28)
         self.btn_clear_search.setStyleSheet(
-            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-weight: bold;"
+            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-weight: bold; border-radius: 4px;"
         )
         self.btn_clear_search.clicked.connect(lambda: self.search_input.clear())
         hbox_search.addWidget(self.btn_clear_search)
         content_layout.addLayout(hbox_search)
-        self.btn_clear_search = QPushButton("✕")
-        self.btn_clear_search.setFixedWidth(28)
-        self.btn_clear_search.setStyleSheet(
-            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-weight: bold;"
-        )
-        self.btn_clear_search.clicked.connect(lambda: self.search_input.clear())
-        hbox_search.addWidget(self.btn_clear_search)
-        content_layout.addLayout(hbox_search)
+
+        # Track List (Wider & Taller, each row includes tactile + queue button)
         self.list_tracks = QListWidget()
-        self.list_tracks.setFixedHeight(120)
+        self.list_tracks.setMinimumHeight(180)
+        self.list_tracks.setFixedHeight(210)
+        self.list_tracks.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list_tracks.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_tracks.customContextMenuRequested.connect(self.show_track_context_menu)
         self.list_tracks.itemDoubleClicked.connect(self.on_track_double_clicked)
+        self.list_tracks.setStyleSheet("""
+            QListWidget {
+                background-color: #18181b;
+                border: 1px solid #2d2d35;
+                border-radius: 4px;
+                padding: 2px;
+            }
+            QListWidget::item {
+                border-radius: 3px;
+                padding: 1px;
+            }
+            QListWidget::item:selected {
+                background-color: #27272a;
+            }
+            QListWidget::item:hover {
+                background-color: #222227;
+            }
+        """)
         content_layout.addWidget(self.list_tracks)
 
-        # Track & Queue Action Buttons
+        # Queue Status & Toggle Actions
         hbox_track_actions = QHBoxLayout()
-        self.btn_add_to_queue = QPushButton("+ Queue")
-        self.btn_add_to_queue.setStyleSheet(
-            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; font-size: 10px; font-weight: 500; padding: 4px 8px;"
-        )
-        self.btn_add_to_queue.clicked.connect(self.on_add_selected_to_queue)
-        hbox_track_actions.addWidget(self.btn_add_to_queue)
+        hbox_track_actions.setSpacing(6)
         self.btn_toggle_queue = QPushButton("Queue (0)")
         self.btn_toggle_queue.setStyleSheet(
-            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; font-size: 10px; font-weight: 500; padding: 4px 8px;"
+            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-size: 10px; font-weight: 500; padding: 4px 10px; border-radius: 3px;"
         )
         self.btn_toggle_queue.clicked.connect(self.toggle_queue_panel)
         hbox_track_actions.addWidget(self.btn_toggle_queue)
+
         self.btn_clear_queue = QPushButton("Clear Queue")
         self.btn_clear_queue.setStyleSheet(
-            "background-color: #27272a; color: #f87171; border: 1px solid #3f3f46; font-size: 10px; padding: 4px 8px;"
+            "background-color: #27272a; color: #f87171; border: 1px solid #3f3f46; font-size: 10px; padding: 4px 10px; border-radius: 3px;"
         )
         self.btn_clear_queue.clicked.connect(self.on_clear_queue_clicked)
         hbox_track_actions.addWidget(self.btn_clear_queue)
+        hbox_track_actions.addStretch()
         content_layout.addLayout(hbox_track_actions)
 
         # Collapsible Upcoming Queue Container
@@ -763,14 +823,24 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def toggle_shuffle(self):
         self.audio_engine.shuffle = not self.audio_engine.shuffle
+        self.update_shuffle_ui()
+        self.save_settings()
+
+    def update_shuffle_ui(self):
+        if not hasattr(self, "btn_shuffle"):
+            return
         if self.audio_engine.shuffle:
-            self.btn_shuffle.setText("Shuffle: On")
+            self.btn_shuffle.setText("⇄")
+            self.btn_shuffle.setToolTip("Shuffle: Enabled")
             self.btn_shuffle.setStyleSheet(
-                "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6;"
+                "background-color: #1e3a8a; color: #60a5fa; border: 1px solid #3b82f6; border-radius: 4px; font-weight: bold; font-size: 13px;"
             )
         else:
-            self.btn_shuffle.setText("Shuffle: Off")
-            self.btn_shuffle.setStyleSheet("")
+            self.btn_shuffle.setText("⇄")
+            self.btn_shuffle.setToolTip("Shuffle: Disabled")
+            self.btn_shuffle.setStyleSheet(
+                "background-color: #27272a; color: #71717a; border: 1px solid #3f3f46; border-radius: 4px; font-size: 13px;"
+            )
 
     def on_track_double_clicked(self, item):
         orig_idx = item.data(Qt.ItemDataRole.UserRole)
@@ -927,6 +997,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.overlay.enable_scanlines = checked
         self.overlay._was_rendering = True
         self.overlay.update()
+
+
+    def on_head_bop_toggled(self, checked: bool):
+        self.overlay.enable_head_bop = bool(checked)
+        self.overlay._was_rendering = True
+        self.overlay.update()
+        self.save_settings()
 
     def on_bass_pop_toggled(self, checked):
         self.overlay.enable_bass_pop = checked
@@ -1412,6 +1489,11 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 else "Default (Segoe UI / Inter)"
             )
             settings_dict["lyrics_font"] = font_val
+        settings_dict["head_bop"] = bool(
+            self.settings_dialog.chk_head_bop.isChecked()
+            if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "chk_head_bop")
+            else getattr(self.overlay, "enable_head_bop", False)
+        )
         settings_dict["download_folder"] = str(getattr(self, "saved_dl_folder", ""))
         settings_dict["discord_rpc"] = bool(
             self.settings_dialog.chk_discord_rpc.isChecked()
@@ -1800,3 +1882,53 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.audio_engine.seek(ts)
             finally:
                 self._is_handling_party_event = False
+
+    def refresh_folder_switcher(self):
+        if getattr(self, "combo_active_folder", None) is None:
+            return
+        self.combo_active_folder.blockSignals(True)
+        self.combo_active_folder.clear()
+
+        cur = os.path.abspath(self.audio_engine.folder_path) if self.audio_engine.folder_path else ""
+        root_dir = os.path.abspath(DEFAULT_MUSIC_DIR)
+
+        # 1. All Music root
+        self.combo_active_folder.addItem("All Music", root_dir)
+
+        # 2. Subfolders of DEFAULT_MUSIC_DIR
+        if os.path.exists(root_dir):
+            for entry in sorted(os.listdir(root_dir)):
+                full_p = os.path.abspath(os.path.join(root_dir, entry))
+                if os.path.isdir(full_p):
+                    self.combo_active_folder.addItem(f"{entry}", full_p)
+
+        # 3. Custom external folder if active
+        found = False
+        for idx in range(self.combo_active_folder.count()):
+            p = self.combo_active_folder.itemData(idx)
+            if p and os.path.abspath(p) == cur:
+                self.combo_active_folder.setCurrentIndex(idx)
+                found = True
+                break
+
+        if not found and cur and os.path.exists(cur):
+            display_name = os.path.basename(cur) or cur
+            self.combo_active_folder.insertItem(1, f"{display_name} (Custom)", cur)
+            self.combo_active_folder.setCurrentIndex(1)
+
+        # 4. Browse option at bottom
+        self.combo_active_folder.addItem("+ Browse Folder...", "__browse__")
+        self.combo_active_folder.blockSignals(False)
+
+    def on_active_folder_selected(self, index: int):
+        target = self.combo_active_folder.itemData(index)
+        if target == "__browse__":
+            self.choose_music_folder()
+            self.refresh_folder_switcher()
+            return
+        if target and os.path.exists(target):
+            cur = os.path.abspath(self.audio_engine.folder_path) if self.audio_engine.folder_path else ""
+            if cur != os.path.abspath(target):
+                self.audio_engine.set_folder(target)
+                self.refresh_tracklist()
+                self.save_settings()

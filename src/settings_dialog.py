@@ -8,6 +8,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -31,6 +32,23 @@ if TYPE_CHECKING:
     from controller import ControlPanel
 
 
+def create_card_frame(title: str):
+    """Creates a neat, modern grouped card container for settings."""
+    frame = QFrame()
+    frame.setStyleSheet("""
+        QFrame {
+            background-color: #1a1a1f;
+            border: 1px solid #292932;
+            border-radius: 6px;
+        }
+    """)
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(12, 10, 12, 12)
+    layout.setSpacing(8)
+    layout.addWidget(create_section_header(title))
+    return frame, layout
+
+
 class SettingsDialog(QDialog):
     """Clean, dedicated settings dialog for advanced lyrics, visualizer, and character configuration."""
 
@@ -41,8 +59,8 @@ class SettingsDialog(QDialog):
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
         self.setWindowFlags(Qt.WindowType.Window)
-        self.setMinimumSize(460, 560)
-        self.resize(480, 740)
+        self.setMinimumSize(480, 580)
+        self.resize(500, 720)
         self.setStyleSheet(SHARED_PANEL_STYLE)
         self.init_ui()
 
@@ -50,112 +68,101 @@ class SettingsDialog(QDialog):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
+
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(14, 14, 14, 14)
         content_layout.setSpacing(10)
 
-        # --- SECTION: MODES & WINDOW STATE ---
-        content_layout.addWidget(create_section_header("Playback Modes"))
-        hbox_modes = QHBoxLayout()
-        hbox_modes.setSpacing(6)
-        self.btn_move_talia = QPushButton("Lock Window")
-        self.btn_move_talia.clicked.connect(self.panel.toggle_move_talia)
-        hbox_modes.addWidget(self.btn_move_talia)
-        self.btn_audio_mode = QPushButton("Player Mode")
-        self.btn_audio_mode.clicked.connect(self.panel.toggle_audio_mode)
-        hbox_modes.addWidget(self.btn_audio_mode)
-        self.btn_lyrics = QPushButton("Lyrics: On")
-        self.btn_lyrics.setStyleSheet(
-            "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold; font-size: 11px; padding: 7px 8px;"
-        )
-        self.btn_lyrics.clicked.connect(self.panel.toggle_lyrics)
-        hbox_modes.addWidget(self.btn_lyrics)
-        self.btn_eco = QPushButton("Eco Mode: Off")
-        self.btn_eco.setToolTip("Toggle Eco Mode (< 1% CPU) [F11]")
-        self.btn_eco.clicked.connect(self.panel.toggle_eco_mode)
-        hbox_modes.addWidget(self.btn_eco)
-        content_layout.addLayout(hbox_modes)
+        # -------------------------------------------------------------
+        # CARD 1: MUSIC LIBRARY
+        # -------------------------------------------------------------
+        card_music, layout_music = create_card_frame("Music Library")
 
-        # --- SECTION: MUSIC FOLDER & LIBRARY ---
-        content_layout.addWidget(create_section_header("Music Folder"))
         self.lbl_folder_path = QLabel(f"{self.panel.audio_engine.folder_path}")
-        self.lbl_folder_path.setStyleSheet("color: #71717a; font-size: 10px;")
+        self.lbl_folder_path.setStyleSheet(
+            "background-color: #121215; color: #a1a1aa; border: 1px solid #27272f; border-radius: 4px; padding: 6px 8px; font-size: 10px; font-family: 'Consolas', monospace;"
+        )
         self.lbl_folder_path.setWordWrap(True)
-        content_layout.addWidget(self.lbl_folder_path)
+        layout_music.addWidget(self.lbl_folder_path)
+
         hbox_folder_btns = QHBoxLayout()
+        hbox_folder_btns.setSpacing(6)
         btn_choose = QPushButton("Change Folder")
         btn_choose.clicked.connect(self.panel.choose_music_folder)
         hbox_folder_btns.addWidget(btn_choose)
+
         btn_open_exp = QPushButton("Open in Explorer")
         btn_open_exp.clicked.connect(self.panel.open_music_folder_explorer)
         hbox_folder_btns.addWidget(btn_open_exp)
+
         btn_refresh = QPushButton("Refresh Library")
         btn_refresh.clicked.connect(self.panel.refresh_tracklist)
         hbox_folder_btns.addWidget(btn_refresh)
-        content_layout.addLayout(hbox_folder_btns)
+        layout_music.addLayout(hbox_folder_btns)
 
-        # --- SECTION: LYRICS ---
-        content_layout.addWidget(create_section_header("Lyrics"))
+        content_layout.addWidget(card_music)
 
-        # Launch automated lyrics fetcher tool
+        # -------------------------------------------------------------
+        # CARD 2: LYRICS CONFIGURATION & TIMINGS
+        # -------------------------------------------------------------
+        card_lyrics, layout_lyrics = create_card_frame("Lyrics Configuration")
+
         self.btn_open_fetcher = QPushButton("Launch Automated Lyric Fetcher")
         self.btn_open_fetcher.setToolTip("Open the automated lyrics fetcher and calibration tool")
-
         self.btn_open_fetcher.setStyleSheet("""
-
             QPushButton {
-
-                background-color: #27272a;
-
-                color: #38bdf8;
-
+                background-color: #0c4a6e;
+                color: #7dd3fc;
                 border: 1px solid #0284c7;
-
                 border-radius: 4px;
-
                 padding: 6px 12px;
-
                 font-weight: 600;
-
                 font-size: 11px;
-
-                margin-top: 2px;
-
-                margin-bottom: 4px;
-
             }
-
             QPushButton:hover {
-
                 background-color: #0284c7;
-
                 color: #ffffff;
-
             }
-
         """)
-
         self.btn_open_fetcher.clicked.connect(self.panel.open_lyric_fetcher)
-        content_layout.addWidget(self.btn_open_fetcher)
-        self.lbl_lyric_disclaimer = QLabel(
-            "Note: Some songs may not have available or synchronized lyrics."
-        )
-        self.lbl_lyric_disclaimer.setStyleSheet(
-            "color: #71717a; font-size: 10px; font-style: italic; margin-top: 2px; margin-bottom: 4px;"
-        )
-        self.lbl_lyric_disclaimer.setWordWrap(True)
-        content_layout.addWidget(self.lbl_lyric_disclaimer)
+        layout_lyrics.addWidget(self.btn_open_fetcher)
+
+        # Font row
+        hbox_font = QHBoxLayout()
+        hbox_font.setSpacing(6)
+        lbl_font_title = QLabel("Font:")
+        lbl_font_title.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 45px;")
+        hbox_font.addWidget(lbl_font_title)
+
+        self.combo_font = NoScrollComboBox()
+        self.combo_font.currentTextChanged.connect(self.panel.on_font_changed)
+        hbox_font.addWidget(self.combo_font, 1)
+
+        self.btn_open_fonts = QPushButton("Open Folder")
+        self.btn_open_fonts.setToolTip("Open assets/fonts/ folder to add .ttf/.otf fonts")
+        self.btn_open_fonts.clicked.connect(self.panel.open_fonts_folder)
+        hbox_font.addWidget(self.btn_open_fonts)
+
+        self.btn_reload_fonts = QPushButton("Reload")
+        self.btn_reload_fonts.setToolTip("Re-scan fonts folder")
+        self.btn_reload_fonts.clicked.connect(self.panel.reload_custom_fonts)
+        hbox_font.addWidget(self.btn_reload_fonts)
+        layout_lyrics.addLayout(hbox_font)
 
         # Lyrics Size slider row
         hbox_size = QHBoxLayout()
+        hbox_size.setSpacing(6)
         lbl_size_title = QLabel("Size:")
-        lbl_size_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        lbl_size_title.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 45px;")
         hbox_size.addWidget(lbl_size_title)
+
         self.slider_lyric_size = QSlider(Qt.Orientation.Horizontal)
         self.slider_lyric_size.setRange(14, 60)
         init_size = 25
@@ -164,178 +171,237 @@ class SettingsDialog(QDialog):
         self.slider_lyric_size.setValue(init_size)
         self.slider_lyric_size.valueChanged.connect(self.panel.on_lyric_size_changed)
         hbox_size.addWidget(self.slider_lyric_size)
+
         self.lbl_lyric_size_val = QLabel(f"{init_size} pt")
-        self.lbl_lyric_size_val.setFixedWidth(42)
+        self.lbl_lyric_size_val.setFixedWidth(44)
         self.lbl_lyric_size_val.setStyleSheet(
-            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600;"
+            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
         )
         hbox_size.addWidget(self.lbl_lyric_size_val)
-        content_layout.addLayout(hbox_size)
-
-        # Font dropdown row
-        hbox_font = QHBoxLayout()
-        lbl_font_title = QLabel("Font:")
-        lbl_font_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
-        hbox_font.addWidget(lbl_font_title)
-        self.combo_font = NoScrollComboBox()
-        self.combo_font.currentTextChanged.connect(self.panel.on_font_changed)
-        hbox_font.addWidget(self.combo_font, 1)
-        self.btn_open_fonts = QPushButton("Open Folder")
-        self.btn_open_fonts.setToolTip("Open assets/fonts/ folder to add .ttf/.otf fonts")
-        self.btn_open_fonts.clicked.connect(self.panel.open_fonts_folder)
-        hbox_font.addWidget(self.btn_open_fonts)
-        self.btn_reload_fonts = QPushButton("Reload")
-        self.btn_reload_fonts.setToolTip("Re-scan fonts folder")
-        self.btn_reload_fonts.clicked.connect(self.panel.reload_custom_fonts)
-        hbox_font.addWidget(self.btn_reload_fonts)
-        content_layout.addLayout(hbox_font)
+        layout_lyrics.addLayout(hbox_size)
 
         # Color row
         hbox_lyric_color = QHBoxLayout()
+        hbox_lyric_color.setSpacing(6)
         lbl_lyric_col = QLabel("Color:")
-        lbl_lyric_col.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        lbl_lyric_col.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 45px;")
         hbox_lyric_color.addWidget(lbl_lyric_col)
+
         self.combo_lyric_color = NoScrollComboBox()
         for name in self.panel.lyric_presets.keys():
             self.combo_lyric_color.addItem(name)
         self.combo_lyric_color.addItem("Custom...")
         self.combo_lyric_color.currentTextChanged.connect(self.panel.on_lyric_preset_changed)
         hbox_lyric_color.addWidget(self.combo_lyric_color, 1)
+
         self.btn_pick_color = QPushButton("Custom Color")
         self.btn_pick_color.clicked.connect(self.panel.choose_custom_lyric_color)
         hbox_lyric_color.addWidget(self.btn_pick_color)
-        content_layout.addLayout(hbox_lyric_color)
-        self.chk_word_glow = QCheckBox("Word highlight animation")
+        layout_lyrics.addLayout(hbox_lyric_color)
+
+        self.chk_word_glow = QCheckBox("Word highlight glow animation")
         self.chk_word_glow.setChecked(True)
         self.chk_word_glow.toggled.connect(self.panel.on_word_glow_toggled)
-        content_layout.addWidget(self.chk_word_glow)
+        layout_lyrics.addWidget(self.chk_word_glow)
 
         # Sync offset controls
         hbox_sync = QHBoxLayout()
+        hbox_sync.setSpacing(4)
         lbl_sync_title = QLabel("Sync:")
-        lbl_sync_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        lbl_sync_title.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 45px;")
         hbox_sync.addWidget(lbl_sync_title)
+
         btn_minus_half = QPushButton("-0.5s")
         btn_minus_half.setToolTip("Shift lyrics 0.5s earlier (Hotkeys: Ctrl+[ / Ctrl+])")
         btn_minus_half.clicked.connect(lambda: self.panel.adjust_lyrics_offset(-0.5))
         hbox_sync.addWidget(btn_minus_half)
+
         btn_minus_tenth = QPushButton("-0.1s")
         btn_minus_tenth.clicked.connect(lambda: self.panel.adjust_lyrics_offset(-0.1))
         hbox_sync.addWidget(btn_minus_tenth)
+
         self.lbl_sync_offset = QLabel("+0.00s")
         self.lbl_sync_offset.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_sync_offset.setStyleSheet("color: #f4f4f5; font-weight: 600; min-width: 50px;")
+        self.lbl_sync_offset.setStyleSheet(
+            "color: #f4f4f5; font-weight: 600; min-width: 52px; font-family: 'Consolas', monospace; font-size: 11px;"
+        )
         hbox_sync.addWidget(self.lbl_sync_offset)
+
         btn_plus_tenth = QPushButton("+0.1s")
         btn_plus_tenth.clicked.connect(lambda: self.panel.adjust_lyrics_offset(0.1))
         hbox_sync.addWidget(btn_plus_tenth)
+
         btn_plus_half = QPushButton("+0.5s")
         btn_plus_half.clicked.connect(lambda: self.panel.adjust_lyrics_offset(0.5))
         hbox_sync.addWidget(btn_plus_half)
+
         btn_sync_reset = QPushButton("Reset")
         btn_sync_reset.clicked.connect(self.panel.reset_lyrics_offset)
         hbox_sync.addWidget(btn_sync_reset)
+
         btn_auto_sync = QPushButton("Auto-Sync")
         btn_auto_sync.setToolTip("Automatically align audio start with lyrics timestamp")
         btn_auto_sync.clicked.connect(self.panel.auto_sync_lyrics)
         hbox_sync.addWidget(btn_auto_sync)
-        content_layout.addLayout(hbox_sync)
+        layout_lyrics.addLayout(hbox_sync)
 
-        # --- SECTION: VISUALIZER CONFIGURATION ---
-        content_layout.addWidget(create_section_header("Visualizer"))
+        content_layout.addWidget(card_lyrics)
+
+        # -------------------------------------------------------------
+        # CARD 3: VISUALIZER & PALETTE
+        # -------------------------------------------------------------
+        card_vis, layout_vis = create_card_frame("Visualizer & Palette")
+
         hbox_style = QHBoxLayout()
+        hbox_style.setSpacing(8)
+
         lbl_vis_mode = QLabel("Style:")
         lbl_vis_mode.setStyleSheet("color: #a1a1aa; font-weight: 600;")
         hbox_style.addWidget(lbl_vis_mode)
+
         self.combo_mode = NoScrollComboBox()
         self.combo_mode.addItems(["Cyber Bars", "Neon Wave", "Radial Core", "Dual Mirror"])
         self.combo_mode.currentTextChanged.connect(self.panel.on_vis_mode_changed)
-        hbox_style.addWidget(self.combo_mode)
+        hbox_style.addWidget(self.combo_mode, 1)
+
         lbl_vis_theme = QLabel("Palette:")
         lbl_vis_theme.setStyleSheet("color: #a1a1aa; font-weight: 600;")
         hbox_style.addWidget(lbl_vis_theme)
+
         self.combo_theme = NoScrollComboBox()
         self.combo_theme.addItems(list(COLOR_THEMES.keys()))
         self.combo_theme.currentTextChanged.connect(self.panel.on_vis_theme_changed)
-        hbox_style.addWidget(self.combo_theme)
-        content_layout.addLayout(hbox_style)
+        hbox_style.addWidget(self.combo_theme, 1)
 
-        # --- SECTION: CHARACTER & DISPLAY ---
-        content_layout.addWidget(create_section_header("Character"))
+        layout_vis.addLayout(hbox_style)
+        content_layout.addWidget(card_vis)
+
+        # -------------------------------------------------------------
+        # CARD 4: CHARACTER & DISPLAY
+        # -------------------------------------------------------------
+        card_char, layout_char = create_card_frame("Character & Display")
 
         # Eye sensitivity
         hbox_sens = QHBoxLayout()
-        lbl_sens = QLabel("Eye Sensitivity:")
-        lbl_sens.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_sens.setSpacing(6)
+        lbl_sens = QLabel("Sensitivity:")
+        lbl_sens.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 75px;")
         hbox_sens.addWidget(lbl_sens)
+
         self.slider_eye_sens = QSlider(Qt.Orientation.Horizontal)
         self.slider_eye_sens.setRange(20, 300)
         self.slider_eye_sens.setValue(100)
         self.slider_eye_sens.valueChanged.connect(self.panel.on_eye_sens_changed)
         hbox_sens.addWidget(self.slider_eye_sens)
+
         self.lbl_sens_val = QLabel("1.0x")
-        self.lbl_sens_val.setFixedWidth(36)
+        self.lbl_sens_val.setFixedWidth(40)
         self.lbl_sens_val.setStyleSheet(
-            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600;"
+            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
         )
         hbox_sens.addWidget(self.lbl_sens_val)
-        content_layout.addLayout(hbox_sens)
+        layout_char.addLayout(hbox_sens)
 
-        # Character size
+        # Character scale
         hbox_sz = QHBoxLayout()
-        lbl_sz = QLabel("Character Scale:")
-        lbl_sz.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_sz.setSpacing(6)
+        lbl_sz = QLabel("Scale:")
+        lbl_sz.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 75px;")
         hbox_sz.addWidget(lbl_sz)
+
         self.slider_size = QSlider(Qt.Orientation.Horizontal)
         self.slider_size.setRange(MIN_CHAR_SIZE, MAX_CHAR_SIZE)
         self.slider_size.setValue(self.panel.overlay.width())
         self.slider_size.valueChanged.connect(self.panel.on_size_change)
         hbox_sz.addWidget(self.slider_size)
-        content_layout.addLayout(hbox_sz)
+
+        self.lbl_size_val = QLabel(f"{self.panel.overlay.width()} px")
+        self.lbl_size_val.setFixedWidth(50)
+        self.lbl_size_val.setStyleSheet(
+            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
+        )
+        hbox_sz.addWidget(self.lbl_size_val)
+        layout_char.addLayout(hbox_sz)
 
         # Character opacity
         hbox_op = QHBoxLayout()
+        hbox_op.setSpacing(6)
         lbl_op = QLabel("Opacity:")
-        lbl_op.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        lbl_op.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 75px;")
         hbox_op.addWidget(lbl_op)
+
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
         self.slider_opacity.setRange(20, 100)
         self.slider_opacity.setValue(100)
         self.slider_opacity.valueChanged.connect(self.panel.on_opacity_change)
         hbox_op.addWidget(self.slider_opacity)
-        content_layout.addLayout(hbox_op)
 
-        # Feature Toggles
+        self.lbl_op_val = QLabel("100%")
+        self.lbl_op_val.setFixedWidth(40)
+        self.lbl_op_val.setStyleSheet(
+            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
+        )
+        hbox_op.addWidget(self.lbl_op_val)
+        layout_char.addLayout(hbox_op)
+
+        # Checkboxes
         hbox_toggles = QHBoxLayout()
+        hbox_toggles.setSpacing(12)
         self.chk_bass_pop = QCheckBox("Bass Reaction")
         self.chk_bass_pop.setChecked(True)
         self.chk_bass_pop.toggled.connect(self.panel.on_bass_pop_toggled)
         hbox_toggles.addWidget(self.chk_bass_pop)
 
+        self.chk_head_bop = QCheckBox("Head Bop")
+        self.chk_head_bop.setChecked(False)
+        self.chk_head_bop.setToolTip("Rhythmic head bobbing animation synchronized to music BPM")
+        self.chk_head_bop.toggled.connect(self.panel.on_head_bop_toggled)
+        hbox_toggles.addWidget(self.chk_head_bop)
+
         self.chk_discord_rpc = QCheckBox("Discord Presence")
         self.chk_discord_rpc.setChecked(True)
         self.chk_discord_rpc.toggled.connect(self.panel.on_discord_rpc_toggled)
         hbox_toggles.addWidget(self.chk_discord_rpc)
-        content_layout.addLayout(hbox_toggles)
+        layout_char.addLayout(hbox_toggles)
 
-        # --- SECTION: SETTINGS & ACTIONS ---
-        content_layout.addWidget(create_section_header("Actions"))
-        hbox_actions = QHBoxLayout()
+        content_layout.addWidget(card_char)
+
+        # -------------------------------------------------------------
+        # CARD 5: ACTIONS & SYSTEM
+        # -------------------------------------------------------------
+        card_actions, layout_actions = create_card_frame("Actions")
+
+        hbox_act_btns = QHBoxLayout()
+        hbox_act_btns.setSpacing(6)
+
         self.btn_save_settings = QPushButton("Save Settings")
         self.btn_save_settings.setObjectName("btnSaveSettings")
+        self.btn_save_settings.setStyleSheet(
+            "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold;"
+        )
         self.btn_save_settings.clicked.connect(self.panel.save_settings_action)
-        hbox_actions.addWidget(self.btn_save_settings)
+        hbox_act_btns.addWidget(self.btn_save_settings)
+
         self.btn_show_guide = QPushButton("Controls Guide")
         self.btn_show_guide.clicked.connect(self.panel.show_guide_dialog)
-        hbox_actions.addWidget(self.btn_show_guide)
+        hbox_act_btns.addWidget(self.btn_show_guide)
+
         btn_reload = QPushButton("Reload Assets")
         btn_reload.clicked.connect(self.panel.reload_art)
-        hbox_actions.addWidget(btn_reload)
-        content_layout.addLayout(hbox_actions)
+        hbox_act_btns.addWidget(btn_reload)
+
+        layout_actions.addLayout(hbox_act_btns)
+
         self.btn_exit_app = QPushButton("Exit Talia")
         self.btn_exit_app.setObjectName("btnExitApp")
+        self.btn_exit_app.setStyleSheet(
+            "background-color: #450a0a; color: #fca5a5; border: 1px solid #991b1b; font-weight: bold; margin-top: 4px;"
+        )
         self.btn_exit_app.clicked.connect(self.panel.overlay.close_application)
-        content_layout.addWidget(self.btn_exit_app)
+        layout_actions.addWidget(self.btn_exit_app)
+
+        content_layout.addWidget(card_actions)
+
         scroll_area.setWidget(content_widget)
         root_layout.addWidget(scroll_area)
         self.populate_fonts()

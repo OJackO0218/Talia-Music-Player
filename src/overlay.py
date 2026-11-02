@@ -167,6 +167,7 @@ class OverlayWindow(QWidget):
         self.breath_scale_y = 1.0
 
         # Tier 1 Live2D: Audio Head-Bop & Rhythmic Grooving to BPM
+        self.enable_head_bop = False
         self.head_bop_y = 0.0
         self.head_bop_tilt = 0.0
         self.bop_phase = 0.0  # 0.0 to 2.0 continuous phase (2 beats per left/right sway cycle)
@@ -1008,7 +1009,8 @@ class OverlayWindow(QWidget):
         else:
             self.bass_groove_activity = max(0.0, self.bass_groove_activity - 0.035)
         is_grooving = (
-            not self.eco_mode
+            self.enable_head_bop
+            and not self.eco_mode
             and is_audio_active
             and self.bass_groove_activity > 0.05
             and self.drowsy_level < 0.60
