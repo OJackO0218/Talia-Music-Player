@@ -138,6 +138,13 @@ class GuideDialog(QDialog):
                     "Ctrl+[ / Ctrl+] : Nudge lyric sync offset by -0.25s / +0.25s in real time",
                 ],
             ),
+            (
+                "Credits & Attribution",
+                [
+                    "Original Character Artwork: Dreamoon-Q (@dreamoon131 on X / Twitter)",
+                    "Live2D Slicing, Rigging, Expressions & Animations: Modified by JackO",
+                ],
+            ),
         ]
         for main_text, sub_items in guide_items:
             item_box = QWidget()

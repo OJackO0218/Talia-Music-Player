@@ -123,3 +123,10 @@ Switch modes at any time with **`[F10]`** or via the interface:
 * **CPU Usage**: Under 1% in Eco Mode (`[F11]`).
 * **Supported Audio Formats**: `.mp3`, `.wav`, `.flac`, `.ogg`, `.m4a`, `.opus`.
 * **OS**: Windows 10 / 11 (64-bit).
+
+---
+
+## Credits & Attribution
+
+* **Original Character Artwork**: Created by **[Dreamoon-Q](https://x.com/dreamoon131)** ([@dreamoon131](https://x.com/dreamoon131) on X / Twitter). Used under the artist's explicit permission.
+* **Character Rigging, Slicing & Visual Modifications**: Live2D layered eye-tracking rig, expression morphs (blinking, drowsy, asleep states), sprite slicing, and animation assets modified by **JackO**.
