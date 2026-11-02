@@ -235,8 +235,8 @@ class LyricsOverlayWindow(QWidget):
         """Dynamically scales window width and height to comfortably fit the current font size."""
         screen = QApplication.primaryScreen()
         screen_geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
-        target_w = min(screen_geo.width() - 40, max(900, int(self.base_font_size * 44)))
-        target_h = max(80, int(self.base_font_size * 4.4))
+        target_w = min(screen_geo.width() - 40, max(420, int(self.base_font_size * 23)))
+        target_h = max(56, int(self.base_font_size * 3.3))
 
         if keep_center:
             old_center = self.geometry().center()
@@ -409,11 +409,11 @@ class LyricsOverlayWindow(QWidget):
             )
             painter.setBrush(bg_color)
             painter.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 8, 8)
-            guide_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+            guide_font = QFont("Segoe UI", 8, QFont.Weight.Bold)
             painter.setFont(guide_font)
             painter.setPen(self.bloom_color)
             painter.drawText(
-                QRect(0, 4, self.width(), 20),
+                QRect(0, 3, self.width(), 16),
                 Qt.AlignmentFlag.AlignCenter,
                 "DRAG TO REPOSITION | SCROLL WHEEL TO RESIZE [F8 TO LOCK]",
             )
@@ -459,7 +459,7 @@ class LyricsOverlayWindow(QWidget):
 
         # Auto shrink-to-fit if text exceeds window width
         metrics = QFontMetrics(font)
-        max_w = self.width() - 80
+        max_w = self.width() - 36
         text_w = metrics.horizontalAdvance(text_to_draw)
         if text_w > max_w and text_w > 0:
             scale_ratio = max_w / float(text_w)
