@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: talia-party-relay
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r server/requirements.txt
+    startCommand: python server/server.py
+    healthCheckPath: /health
+    autoDeploy: true
