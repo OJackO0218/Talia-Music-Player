@@ -12,6 +12,8 @@ import logging
 import random
 import re
 import socket
+import subprocess
+import time
 import string
 import threading
 from typing import Any, Optional
@@ -62,6 +64,7 @@ class PartySyncService(QObject):
     status_message = pyqtSignal(str)         # UI notification
     error_occurred = pyqtSignal(str)         # Error message
     track_auto_downloaded = pyqtSignal(str, float, bool)  # target_dir, target_time, target_playing
+    tunnel_ready = pyqtSignal(str)           # public_tunnel_url
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,6 +81,8 @@ class PartySyncService(QObject):
         self._send_queue: Optional[asyncio.Queue] = None
         self._stop_event = threading.Event()
         self._embedded_server = None
+        self._tunnel_process = None
+        self.public_tunnel_url = ""
 
         self._ensure_worker_thread()
 
@@ -259,6 +264,46 @@ class PartySyncService(QObject):
             "sender": self.user_name,
         })
 
+    def _start_public_tunnel(self, local_port: int):
+        """Launches an automated public internet tunnel via OpenSSH so friends worldwide can join."""
+        def _worker():
+            try:
+                cmd = [
+                    "ssh",
+                    "-R", f"80:127.0.0.1:{local_port}",
+                    "-o", "StrictHostKeyChecking=accept-new",
+                    "-o", "ServerAliveInterval=30",
+                    "nokey@localhost.run"
+                ]
+                kwargs = {}
+                if sys.platform == "win32":
+                    kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+                self._tunnel_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    **kwargs
+                )
+                start_t = time.time()
+                while time.time() - start_t < 15:
+                    line = self._tunnel_process.stdout.readline()
+                    if not line:
+                        break
+                    m = re.search(r"https://([a-zA-Z0-9\.\-_]+\.lhr\.life)", line)
+                    if m:
+                        pub_url = f"wss://{m.group(1)}"
+                        self.public_tunnel_url = pub_url
+                        log.info("[PARTY TUNNEL] Worldwide tunnel active: %s", pub_url)
+                        self.tunnel_ready.emit(pub_url)
+                        break
+            except Exception as e:
+                log.info("[PARTY TUNNEL] Tunnel note: %s", e)
+
+        threading.Thread(target=_worker, daemon=True, name="PartyTunnelWorker").start()
+
     # -------------------------------------------------------------------------
     # Internal Async Networking Engine
     # -------------------------------------------------------------------------
@@ -289,6 +334,14 @@ class PartySyncService(QObject):
             except Exception:
                 pass
             self._embedded_server = None
+        if self._tunnel_process:
+            try:
+                self._tunnel_process.terminate()
+                self._tunnel_process.kill()
+            except Exception:
+                pass
+            self._tunnel_process = None
+        self.public_tunnel_url = ""
 
         self.is_connected = False
         self.disconnected.emit("Disconnected from session.")
@@ -407,6 +460,7 @@ class PartySyncService(QObject):
 
             log.info("Embedded local party server listening on %s:%d", host_candidate, chosen_port)
             self.status_message.emit(f"Local party server listening on port {chosen_port}.")
+            self._start_public_tunnel(chosen_port)
 
             # Connect locally
             local_url = f"ws://{host_candidate}:{chosen_port}"

@@ -230,6 +230,7 @@ class PartySyncDialog(QDialog):
         self.sync_service.reaction_received.connect(self._on_reaction_received)
         self.sync_service.status_message.connect(self._set_status)
         self.sync_service.error_occurred.connect(self._set_error)
+        self.sync_service.tunnel_ready.connect(self._on_tunnel_ready)
 
     # -------------------------------------------------------------------------
     # UI Event Handlers
@@ -253,10 +254,15 @@ class PartySyncDialog(QDialog):
 
     def _on_copy_invite_clicked(self):
         code = self.sync_service.room_code
-        lan_ip = get_local_lan_ip()
-        invite_str = f"{code}@{lan_ip}:8765"
+        pub_tunnel = getattr(self.sync_service, "public_tunnel_url", "")
+        if pub_tunnel:
+            invite_str = f"{code}@{pub_tunnel}"
+            self.lbl_status.setText("Copied Worldwide Invite! Send this to your friend.")
+        else:
+            lan_ip = get_local_lan_ip()
+            invite_str = f"{code}@{lan_ip}:8765"
+            self.lbl_status.setText(f"Copied invite '{invite_str}'! Friends can paste this directly into Join.")
         QApplication.clipboard().setText(invite_str)
-        self.lbl_status.setText(f"Copied invite '{invite_str}'! Friends can paste this directly into Join.")
 
     def _on_join_clicked(self):
         raw_text = self.edit_join_code.text().strip()
@@ -289,6 +295,13 @@ class PartySyncDialog(QDialog):
         if self.panel and hasattr(self.panel, "trigger_reaction_feedback"):
             self.panel.trigger_reaction_feedback(emoji, "You")
 
+    def _on_tunnel_ready(self, pub_url: str):
+        if self.sync_service.is_host:
+            code = self.sync_service.room_code
+            invite_str = f"{code}@{pub_url}"
+            self.lbl_share_info.setText(f"Worldwide Invite:\n{invite_str}")
+            self.lbl_status.setText("Internet tunnel active! Friends worldwide can join.")
+
     def _on_connected(self, room_code: str, is_host: bool, members: list):
         role_str = "Host (Broadcasting playback)" if is_host else "Listener (Synced with party)"
         self.lbl_active_status.setText(f"Connected: {room_code}")
@@ -296,7 +309,10 @@ class PartySyncDialog(QDialog):
         self.lbl_members_count.setText(f"Listeners in party: {len(members)}")
         lan_ip = get_local_lan_ip()
         if is_host:
-            self.lbl_share_info.setText(f"Friends on Wi-Fi/VPN join with code: {room_code}@{lan_ip}:8765")
+            if getattr(self.sync_service, "public_tunnel_url", ""):
+                self.lbl_share_info.setText(f"Worldwide Invite:\n{room_code}@{self.sync_service.public_tunnel_url}")
+            else:
+                self.lbl_share_info.setText(f"Starting worldwide internet tunnel... (or LAN: {room_code}@{lan_ip}:8765)")
             self.lbl_share_info.setVisible(True)
             self.btn_copy_invite.setVisible(True)
         else:
