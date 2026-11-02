@@ -1,0 +1,15 @@
+{
+  "name": "talia-cloud-relay",
+  "version": "1.0.0",
+  "description": "Talia Listen Together Cloud WebSocket Relay",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.x"
+  }
+}
