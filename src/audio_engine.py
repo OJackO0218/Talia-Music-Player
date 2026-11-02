@@ -202,6 +202,10 @@ class CyberAudioEngine:
         """Alias for set_folder."""
         self.set_folder(folder_path)
 
+    def set_music_folder(self, folder_path: str):
+        """Alias for set_folder."""
+        self.set_folder(folder_path)
+
     def _invalidate_preload_cache(self) -> None:
         """Drops cached preloads and makes in-flight preloads discard their result."""
         with self._preload_lock:

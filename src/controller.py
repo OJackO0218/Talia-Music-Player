@@ -944,20 +944,21 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.refresh_queue_ui()
 
     def choose_music_folder(self):
+        cur = self.audio_engine.folder_path or DEFAULT_MUSIC_DIR
         folder = QFileDialog.getExistingDirectory(
-            self, "Select Music Folder", self.audio_engine.folder_path
+            self, "Select Music Folder", cur
         )
-        if folder:
-            self.audio_engine.set_music_folder(folder)
-            self.populate_playlist_ui()
+        if folder and os.path.exists(folder):
+            self.audio_engine.set_folder(folder)
+            self.refresh_tracklist()
+            self.refresh_folder_switcher()
             if hasattr(self, "lbl_folder_path") and self.lbl_folder_path:
                 self.lbl_folder_path.setText(f"{folder}")
             if hasattr(self, "settings_dialog") and hasattr(
                 self.settings_dialog, "lbl_folder_path"
             ):
                 self.settings_dialog.lbl_folder_path.setText(f"{folder}")
-            cfg = self.get_current_settings_dict()
-            save_settings(cfg)
+            self.save_settings()
 
     def open_music_folder_explorer(self):
         folder = self.audio_engine.folder_path
@@ -1565,8 +1566,8 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             self.set_audio_mode(audio_mode)
 
         # Shuffle
-        if cfg.get("shuffle", False) != self.audio_engine.shuffle:
-            self.toggle_shuffle()
+        self.audio_engine.shuffle = bool(cfg.get("shuffle", False))
+        self.update_shuffle_ui()
 
         # Lyrics Overlay Position & Visibility
         if self.lyrics_overlay:
@@ -1640,6 +1641,11 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def _reset_save_btn(self):
         self.btn_save_settings.setText("Save Settings")
         self.btn_save_settings.setStyleSheet("")
+
+    def save_settings(self):
+        """Saves current settings to disk."""
+        cfg = self.get_current_settings_dict()
+        return save_settings(cfg)
 
     def save_settings_action(self):
         """Triggered by the Save Settings button."""
@@ -1926,9 +1932,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             self.choose_music_folder()
             self.refresh_folder_switcher()
             return
-        if target and os.path.exists(target):
+        if target and target != "__browse__" and os.path.exists(target):
             cur = os.path.abspath(self.audio_engine.folder_path) if self.audio_engine.folder_path else ""
             if cur != os.path.abspath(target):
                 self.audio_engine.set_folder(target)
                 self.refresh_tracklist()
+                if hasattr(self, "lbl_folder_path") and self.lbl_folder_path:
+                    self.lbl_folder_path.setText(f"{target}")
+                if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "lbl_folder_path"):
+                    self.settings_dialog.lbl_folder_path.setText(f"{target}")
                 self.save_settings()
