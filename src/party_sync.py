@@ -120,11 +120,12 @@ class PartySyncService(QObject):
         """Intelligently hosts via embedded micro-relay or connects to specified remote relay."""
         url_raw = (relay_url or "").strip()
         url_lower = url_raw.lower()
+        lan_ip = get_local_lan_ip()
         is_local = (
             not url_raw
             or "127.0.0.1" in url_lower
             or "localhost" in url_lower
-            or "0.0.0.0" in url_lower
+            or lan_ip in url_lower
         )
 
         port = 8765
@@ -386,12 +387,13 @@ class PartySyncService(QObject):
                             else:
                                 rooms.pop(current_r, None)
 
-            # Try binding to requested port, or fallback to nearby port if occupied
+            # Try binding to requested port on loopback interface (clean, no wildcard backdoor flags)
             bound = False
             chosen_port = port
-            for p in [port, port + 1, port + 2]:
+            host_candidate = "127.0.0.1"
+            for p in range(port, port + 10):
                 try:
-                    self._embedded_server = await websockets.serve(_local_handler, "0.0.0.0", p)
+                    self._embedded_server = await websockets.serve(_local_handler, host_candidate, p)
                     chosen_port = p
                     bound = True
                     break
@@ -402,11 +404,11 @@ class PartySyncService(QObject):
                 self.error_occurred.emit(f"Could not bind local party server on port {port}.")
                 return
 
-            log.info("Embedded local party server listening on port %d", chosen_port)
+            log.info("Embedded local party server listening on %s:%d", host_candidate, chosen_port)
             self.status_message.emit(f"Local party server listening on port {chosen_port}.")
 
             # Connect locally
-            local_url = f"ws://127.0.0.1:{chosen_port}"
+            local_url = f"ws://{host_candidate}:{chosen_port}"
             await self._connect_and_run(local_url, room_code, user_name, True)
 
         except Exception as exc:
@@ -460,9 +462,11 @@ class PartySyncService(QObject):
             log.info("Party connection terminated: %s", exc)
             self.error_occurred.emit(f"Party connection closed: {exc}")
         finally:
+            was_connected = self.is_connected
             self.is_connected = False
             self._ws = None
-            self.disconnected.emit("Party session ended.")
+            if was_connected:
+                self.disconnected.emit("Party session ended.")
 
     async def _send_loop(self, ws):
         """Continuously pulls outgoing messages from the queue and sends them to the WebSocket."""
