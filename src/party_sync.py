@@ -61,6 +61,7 @@ class PartySyncService(QObject):
     reaction_received = pyqtSignal(str, str) # emoji, sender
     status_message = pyqtSignal(str)         # UI notification
     error_occurred = pyqtSignal(str)         # Error message
+    track_auto_downloaded = pyqtSignal(str, float, bool)  # target_dir, target_time, target_playing
 
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -140,6 +140,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.party_sync.pause_received.connect(self._on_party_pause_received)
         self.party_sync.seek_received.connect(self._on_party_seek_received)
         self.party_sync.heartbeat_received.connect(self._on_party_heartbeat_received)
+        self.party_sync.track_auto_downloaded.connect(self._on_party_track_downloaded)
         self._is_handling_party_event = False
         self._last_party_heartbeat = 0.0
 
@@ -1616,7 +1617,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if hasattr(self, "downloader") and self.downloader:
             ok = self.downloader.download_sync_query(query, target_dir)
             if ok:
-                QTimer.singleShot(0, lambda: self._on_party_track_downloaded(target_dir, target_time, target_playing))
+                self.party_sync.track_auto_downloaded.emit(target_dir, target_time, target_playing)
 
     def _on_party_track_downloaded(self, target_dir: str, target_time: float, target_playing: bool):
         self.refresh_playlist()
