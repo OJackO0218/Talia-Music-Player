@@ -7,7 +7,6 @@ from spotify_sync import SpotifySyncService
 import logging
 import os
 import random
-import subprocess
 import sys
 
 from PyQt6.QtCore import QSize, Qt, QTimer
@@ -813,9 +812,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def open_music_folder_explorer(self):
         folder = self.audio_engine.folder_path
         if folder and os.path.exists(folder):
-            import subprocess
-
-            subprocess.run(["explorer", os.path.normpath(folder)])
+            if sys.platform == "win32":
+                os.startfile(os.path.normpath(folder))
+            else:
+                                subprocess.run(["xdg-open", os.path.normpath(folder)])
 
     def refresh_tracklist(self):
         self.audio_engine.refresh_playlist()
@@ -1168,7 +1168,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def open_fonts_folder(self):
         os.makedirs(FONTS_DIR, exist_ok=True)
-        subprocess.run(["explorer", os.path.normpath(FONTS_DIR)])
+        if sys.platform == "win32":
+            os.startfile(os.path.normpath(FONTS_DIR))
+        else:
+                        subprocess.run(["xdg-open", os.path.normpath(FONTS_DIR)])
 
     def open_lyric_fetcher(self):
         # Open automated lyric fetcher GUI
@@ -1202,15 +1205,9 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         except Exception as e:
             log.info(f"[ERROR] In-process lyric fetcher launch failed: {e}")
             try:
-                bat_path = os.path.join(
-                    PROJECT_ROOT, "Talia Lyrics Fetch Automated", "run_fetcher.bat"
-                )
-                if os.path.exists(bat_path):
-                    subprocess.Popen(["cmd.exe", "/c", bat_path], cwd=os.path.dirname(bat_path))
-                else:
-                    folder = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
-                    if os.path.exists(folder):
-                        os.startfile(folder)
+                folder = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
+                if os.path.exists(folder):
+                    os.startfile(folder)
             except Exception as e2:
                 log.info(f"[ERROR] Fallback lyric fetcher launch failed: {e2}")
 

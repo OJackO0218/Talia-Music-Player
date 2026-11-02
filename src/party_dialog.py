@@ -56,7 +56,7 @@ class PartySyncDialog(QDialog):
         )
         main_layout.addWidget(lbl_title)
 
-        lbl_desc = QLabel("Synchronize tracks, karaoke lyrics, and Talia reactions with friends in real-time.")
+        lbl_desc = QLabel("Synchronize playback and lyrics with friends in real-time.")
         lbl_desc.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         lbl_desc.setWordWrap(True)
         main_layout.addWidget(lbl_desc)
@@ -87,7 +87,7 @@ class PartySyncDialog(QDialog):
         lbl_relay.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 70px;")
         hbox_relay.addWidget(lbl_relay)
         self.edit_relay_url = QLineEdit(DEFAULT_RELAY_URL)
-        self.edit_relay_url.setPlaceholderText("ws://127.0.0.1:8765")
+        self.edit_relay_url.setPlaceholderText("wss://soft-mongoose-6754.ojacko0218.deno.net")
         hbox_relay.addWidget(self.edit_relay_url)
         setup_layout.addLayout(hbox_relay)
 
@@ -131,7 +131,7 @@ class PartySyncDialog(QDialog):
         hbox_join = QHBoxLayout()
         self.edit_join_code = QLineEdit()
         self.edit_join_code.setPlaceholderText("Enter 5-character Code (e.g. CYBER)")
-        self.edit_join_code.setMaxLength(8)
+        self.edit_join_code.setMaxLength(128)
         self.edit_join_code.setStyleSheet("font-family: 'Consolas', monospace; font-size: 13px; font-weight: bold; text-transform: uppercase;")
         hbox_join.addWidget(self.edit_join_code, 1)
 
@@ -216,7 +216,6 @@ class PartySyncDialog(QDialog):
         self.sync_service.peer_left.connect(self._on_peer_left)
         self.sync_service.status_message.connect(self._set_status)
         self.sync_service.error_occurred.connect(self._set_error)
-        self.sync_service.tunnel_ready.connect(self._on_tunnel_ready)
 
     # -------------------------------------------------------------------------
     # UI Event Handlers
@@ -240,15 +239,8 @@ class PartySyncDialog(QDialog):
 
     def _on_copy_invite_clicked(self):
         code = self.sync_service.room_code
-        pub_tunnel = getattr(self.sync_service, "public_tunnel_url", "")
-        if pub_tunnel:
-            invite_str = f"{code}@{pub_tunnel}"
-            self.lbl_status.setText("Copied Worldwide Invite! Send this to your friend.")
-        else:
-            lan_ip = get_local_lan_ip()
-            invite_str = f"{code}@{lan_ip}:8765"
-            self.lbl_status.setText(f"Copied invite '{invite_str}'! Friends can paste this directly into Join.")
-        QApplication.clipboard().setText(invite_str)
+        self.lbl_status.setText(f"Copied '{code}' to clipboard.")
+        QApplication.clipboard().setText(code)
 
     def _on_join_clicked(self):
         raw_text = self.edit_join_code.text().strip()
@@ -276,12 +268,6 @@ class PartySyncDialog(QDialog):
         self.sync_service.disconnect_session()
 
 
-    def _on_tunnel_ready(self, pub_url: str):
-        if self.sync_service.is_host:
-            code = self.sync_service.room_code
-            invite_str = f"{code}@{pub_url}"
-            self.lbl_share_info.setText(f"Worldwide Invite:\n{invite_str}")
-            self.lbl_status.setText("Internet tunnel active! Friends worldwide can join.")
 
     def _on_connected(self, room_code: str, is_host: bool, members: list):
         role_str = "Host (Broadcasting playback)" if is_host else "Listener (Synced with party)"
@@ -290,12 +276,10 @@ class PartySyncDialog(QDialog):
         self.lbl_members_count.setText(f"Listeners in party: {len(members)}")
         lan_ip = get_local_lan_ip()
         if is_host:
-            if getattr(self.sync_service, "public_tunnel_url", ""):
-                self.lbl_share_info.setText(f"Worldwide Invite:\n{room_code}@{self.sync_service.public_tunnel_url}")
-            else:
-                self.lbl_share_info.setText(f"Starting worldwide internet tunnel... (or LAN: {room_code}@{lan_ip}:8765)")
+            self.lbl_share_info.setText(f"Room Code: {room_code}")
             self.lbl_share_info.setVisible(True)
             self.btn_copy_invite.setVisible(True)
+            self.btn_copy_invite.setText("Copy Code")
         else:
             self.lbl_share_info.setVisible(False)
             self.btn_copy_invite.setVisible(False)
