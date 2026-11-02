@@ -58,3 +58,66 @@ def test_settings_dialog_exposes_all_sections(qapp):
     panel.hide()
     lyrics.hide()
     overlay.hide()
+
+
+@pytest.mark.gui
+def test_lyrics_font_sizing_and_wheel(qapp):
+    from PyQt6.QtCore import QPoint, QPointF, Qt
+    from PyQt6.QtGui import QWheelEvent
+    engine = CyberAudioEngine()
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    assert panel.settings_dialog.slider_lyric_size.value() == 25
+    assert panel.settings_dialog.slider_lyric_size.minimum() == 14
+    assert panel.settings_dialog.slider_lyric_size.maximum() == 60
+
+    # Test slider change
+    panel.settings_dialog.slider_lyric_size.setValue(32)
+    assert lyrics.base_font_size == 32
+    assert "32 pt" in panel.lbl_lyric_size_val.text()
+
+    # Test set_font_size directly
+    lyrics.set_font_size(40)
+    assert lyrics.base_font_size == 40
+
+    # Test wheel event in move mode
+    lyrics.set_move_mode(True)
+    assert lyrics.move_mode is True
+
+    # Wheel up (+120 delta)
+    wheel_up = QWheelEvent(
+        QPointF(50, 50),
+        QPointF(50, 50),
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    lyrics.wheelEvent(wheel_up)
+    assert lyrics.base_font_size == 42
+    assert panel.slider_lyric_size.value() == 42
+
+    # Wheel down (-120 delta)
+    wheel_down = QWheelEvent(
+        QPointF(50, 50),
+        QPointF(50, 50),
+        QPoint(0, 0),
+        QPoint(0, -120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    lyrics.wheelEvent(wheel_down)
+    assert lyrics.base_font_size == 40
+    assert panel.slider_lyric_size.value() == 40
+
+    lyrics.set_move_mode(False)
+    panel.settings_dialog.hide()
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()

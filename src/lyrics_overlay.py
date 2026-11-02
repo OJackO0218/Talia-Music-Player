@@ -88,8 +88,9 @@ class LyricsOverlayWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
 
-        # Default dimensions & position: middle-bottom (not too bottom, 180px above taskbar)
-        self.resize(1100, 110)
+        # Font size & dynamic window dimensions (14pt to 60pt)
+        self.base_font_size = 25
+        self._update_window_dimensions(keep_center=False)
         self.init_position()
 
         # By default, lyrics are 100% click-through so they never block games or apps
@@ -220,6 +221,32 @@ class LyricsOverlayWindow(QWidget):
         super().hideEvent(event)
         self.anim_timer.stop()
 
+    def set_font_size(self, size: int, keep_center: bool = True):
+        """Sets the base font size (clamped 14-60 pt) and updates window dimensions."""
+        size = max(14, min(60, int(size)))
+        if getattr(self, "base_font_size", 25) == size:
+            return
+        self.base_font_size = size
+        self._cached_layout_key = None
+        self._update_window_dimensions(keep_center=keep_center)
+        self.update()
+
+    def _update_window_dimensions(self, keep_center: bool = True):
+        """Dynamically scales window width and height to comfortably fit the current font size."""
+        screen = QApplication.primaryScreen()
+        screen_geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
+        target_w = min(screen_geo.width() - 40, max(900, int(self.base_font_size * 44)))
+        target_h = max(80, int(self.base_font_size * 4.4))
+
+        if keep_center:
+            old_center = self.geometry().center()
+            self.resize(target_w, target_h)
+            new_x = max(0, min(screen_geo.width() - target_w, old_center.x() - target_w // 2))
+            new_y = max(0, min(screen_geo.height() - target_h, old_center.y() - target_h // 2))
+            self.move(new_x, new_y)
+        else:
+            self.resize(target_w, target_h)
+
     def set_move_mode(self, enabled: bool):
         """Toggles Move/Repositioning mode. When enabled, displays '(lyrics subtitle is here)' and allows dragging."""
         self.move_mode = enabled
@@ -227,13 +254,13 @@ class LyricsOverlayWindow(QWidget):
         self.set_click_through(not enabled)
         if enabled:
             self.setCursor(Qt.CursorShape.SizeAllCursor)
-            self.displayed_text = "(lyrics subtitle is here)"
+            self.displayed_text = f"(lyrics subtitle is here - {self.base_font_size} pt)"
             self.pop_progress = 1.0
             self.line_opacity = 1.0
         else:
             self.unsetCursor()
             # Immediately clear '(lyrics subtitle is here)' when move mode is turned off
-            if self.displayed_text == "(lyrics subtitle is here)":
+            if self.displayed_text.startswith("(lyrics subtitle is here"):
                 self.displayed_text = ""
                 self.current_line_idx = -1
                 self.line_opacity = 0.0
@@ -256,7 +283,7 @@ class LyricsOverlayWindow(QWidget):
 
         # In Move Mode: always show '(lyrics subtitle is here)' as requested
         if self.move_mode:
-            target_text = "(lyrics subtitle is here)"
+            target_text = f"(lyrics subtitle is here - {self.base_font_size} pt)"
             if self.displayed_text != target_text:
                 self.displayed_text = target_text
                 self.pop_progress = 1.0
@@ -265,7 +292,7 @@ class LyricsOverlayWindow(QWidget):
             self._pause_timed_out = False
         else:
             # When Move Mode is OFF, remove '(lyrics subtitle is here)' immediately
-            if self.displayed_text == "(lyrics subtitle is here)":
+            if self.displayed_text.startswith("(lyrics subtitle is here"):
                 self.displayed_text = ""
                 self.current_line_idx = -1
                 self.line_opacity = 0.0
@@ -388,7 +415,7 @@ class LyricsOverlayWindow(QWidget):
             painter.drawText(
                 QRect(0, 4, self.width(), 20),
                 Qt.AlignmentFlag.AlignCenter,
-                "DRAG TO REPOSITION LYRICS [F8 OR HOLD TALIA TO LOCK]",
+                "DRAG TO REPOSITION | SCROLL WHEEL TO RESIZE [F8 TO LOCK]",
             )
             painter.restore()
 
@@ -411,7 +438,7 @@ class LyricsOverlayWindow(QWidget):
         painter.translate(-cx, -cy)
 
         # Spotify-style sleek bold typography
-        base_pt = 25
+        base_pt = getattr(self, "base_font_size", 25)
         font = QFont()
         families = []
         if getattr(self, "custom_font_family", None):
@@ -637,6 +664,26 @@ class LyricsOverlayWindow(QWidget):
         painter.setPen(fg_color)
         painter.drawText(draw_rect, Qt.AlignmentFlag.AlignCenter, text_to_draw)
 
+    def wheelEvent(self, event):
+        """Scroll wheel in Move Mode resizes the floating lyrics (like Talia character scaling)."""
+        if self.move_mode:
+            delta = event.angleDelta().y()
+            if abs(delta) >= 120:
+                step = 2 if delta > 0 else -2
+            elif delta != 0:
+                step = 1 if delta > 0 else -1
+            else:
+                step = 0
+            if step != 0:
+                new_size = max(14, min(60, self.base_font_size + step))
+                if new_size != self.base_font_size:
+                    self.set_font_size(new_size, keep_center=True)
+                    if self.panel:
+                        self.panel.sync_lyric_size(new_size)
+            event.accept()
+        else:
+            event.ignore()
+
     def mousePressEvent(self, event):
         if self.move_mode and event.button() in (
             Qt.MouseButton.LeftButton,
@@ -664,6 +711,7 @@ class LyricsOverlayWindow(QWidget):
                     cfg = self.panel.get_current_settings_dict()
                     cfg["lyrics_x"] = self.x()
                     cfg["lyrics_y"] = self.y()
+                    cfg["lyrics_font_size"] = self.base_font_size
                     save_settings(cfg)
                 except Exception:
                     pass

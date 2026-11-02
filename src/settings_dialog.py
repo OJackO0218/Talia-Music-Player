@@ -151,6 +151,27 @@ class SettingsDialog(QDialog):
         self.lbl_lyric_disclaimer.setWordWrap(True)
         content_layout.addWidget(self.lbl_lyric_disclaimer)
 
+        # Lyrics Size slider row
+        hbox_size = QHBoxLayout()
+        lbl_size_title = QLabel("Size:")
+        lbl_size_title.setStyleSheet("color: #a1a1aa; font-weight: 600;")
+        hbox_size.addWidget(lbl_size_title)
+        self.slider_lyric_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_lyric_size.setRange(14, 60)
+        init_size = 25
+        if self.panel and getattr(self.panel, "lyrics_overlay", None):
+            init_size = getattr(self.panel.lyrics_overlay, "base_font_size", 25)
+        self.slider_lyric_size.setValue(init_size)
+        self.slider_lyric_size.valueChanged.connect(self.panel.on_lyric_size_changed)
+        hbox_size.addWidget(self.slider_lyric_size)
+        self.lbl_lyric_size_val = QLabel(f"{init_size} pt")
+        self.lbl_lyric_size_val.setFixedWidth(42)
+        self.lbl_lyric_size_val.setStyleSheet(
+            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600;"
+        )
+        hbox_size.addWidget(self.lbl_lyric_size_val)
+        content_layout.addLayout(hbox_size)
+
         # Font dropdown row
         hbox_font = QHBoxLayout()
         lbl_font_title = QLabel("Font:")

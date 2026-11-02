@@ -95,6 +95,7 @@ DEFAULT_SETTINGS = {
     "lyrics_color": "#f472b6",
     "lyrics_word_glow": True,
     "lyrics_font": "Rajdhani",
+    "lyrics_font_size": 25,
     "lyrics_offsets": {},
     "show_startup_guide": True,
     "eco_mode": False,
@@ -149,6 +150,11 @@ def load_settings(path: str | None = None) -> dict:
             settings[key] = resolve_path(settings[key])
     if not isinstance(settings.get("lyrics_offsets"), dict):
         settings["lyrics_offsets"] = {}
+    try:
+        val = int(settings.get("lyrics_font_size", 25))
+        settings["lyrics_font_size"] = max(14, min(60, val))
+    except (TypeError, ValueError):
+        settings["lyrics_font_size"] = 25
     settings["_version"] = SETTINGS_VERSION
     return settings
 

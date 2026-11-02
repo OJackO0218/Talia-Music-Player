@@ -113,6 +113,8 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.combo_theme = self.settings_dialog.combo_theme
         self.combo_lyric_color = self.settings_dialog.combo_lyric_color
         self.combo_font = self.settings_dialog.combo_font
+        self.slider_lyric_size = self.settings_dialog.slider_lyric_size
+        self.lbl_lyric_size_val = self.settings_dialog.lbl_lyric_size_val
         self.btn_pick_color = self.settings_dialog.btn_pick_color
         self.chk_word_glow = self.settings_dialog.chk_word_glow
         self.lbl_sync_offset = self.settings_dialog.lbl_sync_offset
@@ -998,6 +1000,36 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             )
             self.lbl_sync_offset.setText(f"{offset:+.2f}s")
 
+    def on_lyric_size_changed(self, val: int):
+        val = max(14, min(60, int(val)))
+        if hasattr(self, "lbl_lyric_size_val"):
+            self.lbl_lyric_size_val.setText(f"{val} pt")
+        if self.lyrics_overlay:
+            self.lyrics_overlay.set_font_size(val, keep_center=True)
+        if not getattr(self, "is_loading_settings", False):
+            try:
+                cfg = self.get_current_settings_dict()
+                cfg["lyrics_font_size"] = val
+                save_settings(cfg)
+            except Exception:
+                pass
+
+    def sync_lyric_size(self, val: int):
+        val = max(14, min(60, int(val)))
+        if hasattr(self, "slider_lyric_size"):
+            self.slider_lyric_size.blockSignals(True)
+            self.slider_lyric_size.setValue(val)
+            self.slider_lyric_size.blockSignals(False)
+        if hasattr(self, "lbl_lyric_size_val"):
+            self.lbl_lyric_size_val.setText(f"{val} pt")
+        if not getattr(self, "is_loading_settings", False):
+            try:
+                cfg = self.get_current_settings_dict()
+                cfg["lyrics_font_size"] = val
+                save_settings(cfg)
+            except Exception:
+                pass
+
     def on_word_glow_toggled(self, checked: bool):
         if self.lyrics_overlay:
             self.lyrics_overlay.word_glow = checked
@@ -1220,6 +1252,9 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if self.lyrics_overlay:
             settings_dict["lyrics_x"] = int(self.lyrics_overlay.pos().x())
             settings_dict["lyrics_y"] = int(self.lyrics_overlay.pos().y())
+            settings_dict["lyrics_font_size"] = int(
+                getattr(self.lyrics_overlay, "base_font_size", 25)
+            )
             settings_dict["show_lyrics"] = bool(self.lyrics_overlay.is_enabled)
             settings_dict["lyrics_color"] = str(
                 getattr(self.lyrics_overlay, "color_hex", "#ffffff")
@@ -1302,6 +1337,16 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             ly = int(cfg.get("lyrics_y", -1))
             if 0 <= lx < screen.width() and 0 <= ly < screen.height():
                 self.lyrics_overlay.move(lx, ly)
+            font_size = int(cfg.get("lyrics_font_size", 25))
+            font_size = max(14, min(60, font_size))
+            self.lyrics_overlay.set_font_size(font_size, keep_center=False)
+            if hasattr(self, "slider_lyric_size"):
+                self.slider_lyric_size.blockSignals(True)
+                self.slider_lyric_size.setValue(font_size)
+                self.slider_lyric_size.blockSignals(False)
+            if hasattr(self, "lbl_lyric_size_val"):
+                self.lbl_lyric_size_val.setText(f"{font_size} pt")
+
             show_lyrics = bool(cfg.get("show_lyrics", True))
             self.lyrics_overlay.is_enabled = show_lyrics
             if show_lyrics:

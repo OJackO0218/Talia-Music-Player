@@ -55,3 +55,25 @@ def test_save_is_atomic_under_repeat_calls(tmp_path):
         loaded = load_settings(str(target))
         assert loaded["volume"] == index / 20
     assert list(tmp_path.glob(".talia-settings-*.tmp")) == []
+
+
+def test_lyrics_font_size_default_and_clamping(tmp_path):
+    target = tmp_path / "settings.json"
+    # Defaults
+    loaded = load_settings(str(target))
+    assert loaded["lyrics_font_size"] == 25
+
+    # Valid custom value
+    save_settings({"lyrics_font_size": 36}, str(target))
+    loaded = load_settings(str(target))
+    assert loaded["lyrics_font_size"] == 36
+
+    # Clamping below minimum
+    save_settings({"lyrics_font_size": 5}, str(target))
+    loaded = load_settings(str(target))
+    assert loaded["lyrics_font_size"] == 14
+
+    # Clamping above maximum
+    save_settings({"lyrics_font_size": 999}, str(target))
+    loaded = load_settings(str(target))
+    assert loaded["lyrics_font_size"] == 60

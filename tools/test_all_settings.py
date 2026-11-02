@@ -167,6 +167,14 @@ def run_audit():
     panel.adjust_lyrics_offset(-0.25)
     assert abs(l_mgr.manual_offset) < 0.001
 
+    # Lyrics font size slider & scaling
+    assert hasattr(sd, "slider_lyric_size")
+    sd.slider_lyric_size.setValue(35)
+    assert l_overlay.base_font_size == 35
+    assert "35 pt" in sd.lbl_lyric_size_val.text()
+    sd.slider_lyric_size.setValue(25)
+    assert l_overlay.base_font_size == 25
+
     print("[PASS] Lyrics settings verified.")
 
     # 7. Settings persistence
