@@ -87,7 +87,6 @@ def test_party_sync_local_exchange():
     received_plays = []
     received_pauses = []
     received_seeks = []
-    received_reactions = []
 
     host_svc.connected.connect(lambda code, is_h, mem: host_connected.append(code))
     guest_svc.connected.connect(lambda code, is_h, mem: guest_connected.append(code))
@@ -95,7 +94,6 @@ def test_party_sync_local_exchange():
     guest_svc.play_received.connect(lambda ts: received_plays.append(ts))
     guest_svc.pause_received.connect(lambda ts: received_pauses.append(ts))
     guest_svc.seek_received.connect(lambda ts: received_seeks.append(ts))
-    guest_svc.reaction_received.connect(lambda em, sender: received_reactions.append((em, sender)))
 
     # Start local server on test port 9876
     test_port = 9876
@@ -136,11 +134,10 @@ def test_party_sync_local_exchange():
     host_svc.broadcast_play(15.2)
     host_svc.broadcast_pause(15.2)
     host_svc.broadcast_seek(45.0)
-    host_svc.broadcast_reaction("🔥")
 
     for _ in range(25):
         QCoreApplication.processEvents()
-        if received_tracks and received_plays and received_pauses and received_seeks and received_reactions:
+        if received_tracks and received_plays and received_pauses and received_seeks:
             break
         time.sleep(0.05)
 
@@ -157,8 +154,6 @@ def test_party_sync_local_exchange():
     assert len(received_seeks) >= 1
     assert received_seeks[0] == 45.0
 
-    assert len(received_reactions) >= 1
-    assert received_reactions[0][0] == "🔥"
 
     # Cleanup
     host_svc.disconnect_session()

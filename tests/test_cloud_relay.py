@@ -76,16 +76,6 @@ def test_cloud_relay_health_and_messaging():
                 assert guest_track["title"] == "Starboy"
                 assert guest_track["artist"] == "The Weeknd"
 
-                # 4. Guest sends reaction
-                await ws_guest.send(json.dumps({
-                    "type": "reaction",
-                    "emoji": "HYPE",
-                }))
-                host_reaction = json.loads(await asyncio.wait_for(ws_host.recv(), timeout=3.0))
-                assert host_reaction["type"] == "reaction"
-                assert host_reaction["emoji"] == "HYPE"
-                assert host_reaction["sender"] == "GuestBob"
-
         finally:
             await runner.cleanup()
 

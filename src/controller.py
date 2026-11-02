@@ -220,7 +220,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         self.btn_party_sync = QPushButton("Listen Together")
         self.btn_party_sync.setObjectName("btnPartySync")
-        self.btn_party_sync.setToolTip("Listen together with friends in real-time with synchronized lyrics and reactions")
+        self.btn_party_sync.setToolTip("Listen together with friends in real-time with synchronized lyrics and playback")
         self.btn_party_sync.setStyleSheet(
             "background-color: #1e1b4b; color: #a78bfa; border: 1px solid #7c3aed; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
         )
@@ -1541,11 +1541,6 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                     "background-color: #1e1b4b; color: #a78bfa; border: 1px solid #7c3aed; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
                 )
 
-    def trigger_reaction_feedback(self, emoji: str, sender: str):
-        if hasattr(self, "overlay") and self.overlay:
-            self.overlay.current_volume = min(1.0, self.overlay.current_volume + 0.12)
-            self.overlay._apply_pupil_saturation()
-            self.overlay.update()
 
     def _broadcast_party_track(self):
         if not hasattr(self, "party_sync") or not self.party_sync.is_connected:

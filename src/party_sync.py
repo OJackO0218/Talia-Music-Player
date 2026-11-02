@@ -60,7 +60,6 @@ class PartySyncService(QObject):
     pause_received = pyqtSignal(float)       # timestamp
     seek_received = pyqtSignal(float)        # timestamp
     heartbeat_received = pyqtSignal(float, bool)  # timestamp, is_playing
-    reaction_received = pyqtSignal(str, str) # emoji, sender
     status_message = pyqtSignal(str)         # UI notification
     error_occurred = pyqtSignal(str)         # Error message
     track_auto_downloaded = pyqtSignal(str, float, bool)  # target_dir, target_time, target_playing
@@ -254,15 +253,6 @@ class PartySyncService(QObject):
             "is_playing": bool(is_playing),
         })
 
-    def broadcast_reaction(self, emoji: str):
-        """Broadcasts an emoji reaction or nudge to party members."""
-        if not self.is_connected:
-            return
-        self._queue_message({
-            "type": "reaction",
-            "emoji": str(emoji),
-            "sender": self.user_name,
-        })
 
     def _start_public_tunnel(self, local_port: int):
         """Launches an automated public internet tunnel via OpenSSH so friends worldwide can join."""
@@ -559,10 +549,6 @@ class PartySyncService(QObject):
                     ts = float(data.get("timestamp", 0.0))
                     playing = bool(data.get("is_playing", False))
                     self.heartbeat_received.emit(ts, playing)
-                elif mtype == "reaction":
-                    emoji = str(data.get("emoji", "HYPE"))
-                    sender = str(data.get("sender", "Peer"))
-                    self.reaction_received.emit(emoji, sender)
                 elif mtype == "peer_joined":
                     pname = str(data.get("name", "Listener"))
                     count = int(data.get("count", 1))

@@ -184,19 +184,6 @@ class PartySyncDialog(QDialog):
 
         active_layout.addWidget(card)
 
-        # Reactions bar
-        active_layout.addWidget(create_section_header("Send Live Reaction"))
-        hbox_reactions = QHBoxLayout()
-        hbox_reactions.setSpacing(8)
-        for tag, label in [("HYPE", "Hype"), ("LOVE", "Love"), ("VIBE", "Vibe"), ("PULSE", "Pulse"), ("PARTY", "Party")]:
-            btn_react = QPushButton(label)
-            btn_react.setStyleSheet(
-                "font-size: 11px; font-weight: 600; padding: 6px 12px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 4px; color: #e4e4e7;"
-            )
-            btn_react.clicked.connect(lambda _, t=tag: self._on_send_reaction(t))
-            hbox_reactions.addWidget(btn_react)
-        active_layout.addLayout(hbox_reactions)
-
         # Event log
         active_layout.addWidget(create_section_header("Party Feed"))
         self.lbl_feed = QLabel("Session active. Play any track to synchronize.")
@@ -227,7 +214,6 @@ class PartySyncDialog(QDialog):
         self.sync_service.disconnected.connect(self._on_disconnected)
         self.sync_service.peer_joined.connect(self._on_peer_joined)
         self.sync_service.peer_left.connect(self._on_peer_left)
-        self.sync_service.reaction_received.connect(self._on_reaction_received)
         self.sync_service.status_message.connect(self._set_status)
         self.sync_service.error_occurred.connect(self._set_error)
         self.sync_service.tunnel_ready.connect(self._on_tunnel_ready)
@@ -289,11 +275,6 @@ class PartySyncDialog(QDialog):
     def _on_leave_clicked(self):
         self.sync_service.disconnect_session()
 
-    def _on_send_reaction(self, emoji: str):
-        self.sync_service.broadcast_reaction(emoji)
-        self.lbl_feed.setText(f"You sent reaction: {emoji}")
-        if self.panel and hasattr(self.panel, "trigger_reaction_feedback"):
-            self.panel.trigger_reaction_feedback(emoji, "You")
 
     def _on_tunnel_ready(self, pub_url: str):
         if self.sync_service.is_host:
@@ -337,10 +318,6 @@ class PartySyncDialog(QDialog):
         self.lbl_members_count.setText(f"Listeners in party: {count}")
         self.lbl_feed.setText(f"{name} left the room.")
 
-    def _on_reaction_received(self, emoji: str, sender: str):
-        self.lbl_feed.setText(f"{sender} reacted: {emoji}")
-        if self.panel and hasattr(self.panel, "trigger_reaction_feedback"):
-            self.panel.trigger_reaction_feedback(emoji, sender)
 
     def _set_status(self, text: str):
         self.lbl_status.setText(text)
