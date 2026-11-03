@@ -324,7 +324,7 @@ def test_party_sync_reject_phantom_room():
     # Join random room with no host online
     guest_svc.join_session("NO_HOST_ROOM_XYZ", user_name="Bob", relay_url="wss://soft-mongoose-6754.ojacko0218.deno.net")
 
-    for _ in range(60):
+    for _ in range(120):
         QCoreApplication.processEvents()
         if error_list:
             break
