@@ -937,14 +937,25 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
                 self.discord_service.update_playback(raw_title, is_playing, pos, dur)
 
-        # Auto-advance to next track when song finishes
+        # Auto-advance / 4-second DJ crossfade when song approaches end or finishes
         if self.audio_engine.audio_mode != "desktop":
             is_finished = self.audio_engine.track_finished or (
                 dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)
             )
-            if is_finished:
+            crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 4.0)
+            if (
+                dur > (crossfade_dur * 2.0)
+                and pos >= (dur - crossfade_dur)
+                and not getattr(self.audio_engine, "_in_crossfade", False)
+                and self.audio_engine.is_playing
+                and len(self.audio_engine.playlist) > 1
+            ):
+                self.audio_engine.next_track(crossfade=True)
+                self.sync_play_state()
+                self.refresh_queue_ui()
+            elif is_finished:
                 self.audio_engine.track_finished = False
-                self.audio_engine.next_track()
+                self.audio_engine.next_track(crossfade=False)
                 self.sync_play_state()
                 self.refresh_queue_ui()
 

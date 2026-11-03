@@ -1074,15 +1074,27 @@ class OverlayWindow(QWidget):
                 self.osd_timer = 0.0
                 self.osd_symbol = None
 
-        # Instant auto-advance when song finishes (works even when ControlPanel is closed)
+        # Instant auto-advance / 4-second DJ crossfade when song finishes
         if self.audio_engine.audio_mode != "desktop":
             dur = self.audio_engine.get_duration()
             pos = self.audio_engine.get_position()
-            if self.audio_engine.track_finished or (
+            crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 4.0)
+            if (
+                dur > (crossfade_dur * 2.0)
+                and pos >= (dur - crossfade_dur)
+                and not getattr(self.audio_engine, "_in_crossfade", False)
+                and self.audio_engine.is_playing
+                and len(self.audio_engine.playlist) > 1
+            ):
+                self.audio_engine.next_track(crossfade=True)
+                if self.panel:
+                    self.panel.sync_play_state()
+                    self.panel.update_timeline()
+            elif self.audio_engine.track_finished or (
                 dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)
             ):
                 self.audio_engine.track_finished = False
-                self.audio_engine.next_track()
+                self.audio_engine.next_track(crossfade=False)
                 if self.panel:
                     self.panel.sync_play_state()
                     self.panel.update_timeline()

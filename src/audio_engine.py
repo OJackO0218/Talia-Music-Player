@@ -104,6 +104,16 @@ class CyberAudioEngine:
         self._prev_bass_diff = 0.0
         self.is_beat_kick = False
 
+        # True 4-second DJ Overlap Crossfade
+        self._crossfade_duration = 4.0
+        self._in_crossfade = False
+        self._fading_out_feeder = None
+        self._fading_out_sf = None
+        self._fading_out_total = 0
+        self._fading_out_remaining = 0
+        self._fade_in_total = 0
+        self._fade_in_remaining = 0
+
         # Zero-freeze Stream Reuse & Predictive Preloader
         self._audio_lock = threading.Lock()
         self._preload_lock = threading.Lock()
@@ -249,6 +259,30 @@ class CyberAudioEngine:
         self.feeder = None
         if feeder is not None:
             feeder.stop()
+
+    def _stop_fading_out_locked(self) -> None:
+        """Stops and cleans up the fading out track stream. Caller must hold _audio_lock."""
+        feeder = self._fading_out_feeder
+        sf_obj = self._fading_out_sf
+        self._fading_out_feeder = None
+        self._fading_out_sf = None
+        self._in_crossfade = False
+        self._fading_out_remaining = 0
+        if feeder is not None or sf_obj is not None:
+            threading.Thread(target=self._async_close_feeder, args=(feeder, sf_obj), daemon=True).start()
+
+    @staticmethod
+    def _async_close_feeder(feeder, sf_obj) -> None:
+        if feeder is not None:
+            try:
+                feeder.stop()
+            except Exception:
+                pass
+        if sf_obj is not None:
+            try:
+                sf_obj.close()
+            except Exception:
+                pass
 
     def add_to_queue(self, track_path: str) -> bool:
         """Appends a track to the upcoming playback queue."""
@@ -406,8 +440,8 @@ class CyberAudioEngine:
             self._shuffle_order.clear()
             self._shuffle_pos = -1
 
-    def play_index(self, idx: int) -> bool:
-        """Loads and plays the track at the specified index."""
+    def play_index(self, idx: int, auto_play: bool = True, crossfade: bool = False) -> bool:
+        """Loads and plays the track at the specified index with optional crossfade."""
         if not self.playlist or idx < 0 or idx >= len(self.playlist):
             return False
 
@@ -431,27 +465,51 @@ class CyberAudioEngine:
             else:
                 self.rebuild_shuffle_order(starting_index=idx)
         path = self.playlist[idx]
-        return self.load_file(path, auto_play=True)
+        if crossfade:
+            return self.load_file(path, auto_play=auto_play, crossfade=True)
+        return self.load_file(path, auto_play=auto_play)
 
-    def load_file(self, file_path: str, auto_play: bool = True, blocking: bool = False) -> bool:
+    def load_file(self, file_path: str, auto_play: bool = True, blocking: bool = False, crossfade: bool = False) -> bool:
         """Loads a track and starts a background feeder for smooth, disk-independent playback."""
-        # Stop feeding the callback before swapping files so a track change can
-        # never play a stale chunk from the previous song.
         self.is_playing = False
         try:
             with self._audio_lock:
-                self._stop_feeder_locked()
-                if self.active_sf is not None:
-                    try:
-                        self.active_sf.close()
-                    except Exception as exc:
-                        log.debug("Could not close previous audio file: %s", exc)
+                new_sf = sf.SoundFile(file_path, "r")
+                can_crossfade = (
+                    crossfade
+                    and self.feeder is not None
+                    and self.active_sf is not None
+                    and getattr(self, "sr", 0) == new_sf.samplerate
+                    and getattr(self, "channels", 0) == new_sf.channels
+                )
+
+                if can_crossfade:
+                    self._stop_fading_out_locked()
+                    self._fading_out_feeder = self.feeder
+                    self._fading_out_sf = self.active_sf
+                    fade_frames = int(self._crossfade_duration * new_sf.samplerate)
+                    self._fading_out_total = fade_frames
+                    self._fading_out_remaining = fade_frames
+                    self._fade_in_total = fade_frames
+                    self._fade_in_remaining = fade_frames
+                    self._in_crossfade = True
+                    self.feeder = None
                     self.active_sf = None
+                else:
+                    self._stop_fading_out_locked()
+                    self._stop_feeder_locked()
+                    if self.active_sf is not None:
+                        try:
+                            self.active_sf.close()
+                        except Exception as exc:
+                            log.debug("Could not close previous audio file: %s", exc)
+                        self.active_sf = None
+                    self._in_crossfade = False
+                    self._fade_in_remaining = 0
 
                 # 1. Check preload cache (strictly 1 track, 15s head buffer)
                 with self._preload_lock:
                     cached = self._preload_cache.pop(file_path, None)
-                new_sf = sf.SoundFile(file_path, "r")
                 self.active_sf = new_sf
                 self.sr = new_sf.samplerate
                 self.channels = new_sf.channels
@@ -668,7 +726,7 @@ class CyberAudioEngine:
             return getattr(self, "desktop_playing", True)
         return self.is_playing
 
-    def next_track(self):
+    def next_track(self, crossfade: bool = False):
         if self.audio_mode == "desktop":
             user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 0, 0)
             user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 2, 0)
@@ -720,7 +778,7 @@ class CyberAudioEngine:
                 self._shuffle_pos = self._shuffle_order.index(idx)
         else:
             idx = (self.current_index + 1) % len(self.playlist)
-        self.play_index(idx)
+        self.play_index(idx, crossfade=crossfade)
 
     def prev_track(self):
         if self.audio_mode == "desktop":
@@ -763,6 +821,9 @@ class CyberAudioEngine:
             self._leftover = None
             self.current_frame = target_frame
             self.track_finished = False
+            self._stop_fading_out_locked()
+            self._fade_in_remaining = 0
+            self._in_crossfade = False
             self.reset_bpm_tracking()
         except Exception as exc:
             log.error("Seek failed: %s", exc)
@@ -795,8 +856,6 @@ class CyberAudioEngine:
 
     def _audio_callback(self, outdata, frames, time_info, status):
         """Real-time callback: consumes memory chunks only, never touches the disk."""
-        # Keep a local reference: a track switch on the UI thread may clear
-        # self.feeder after this check, and the callback must not dereference None.
         feeder = self.feeder
         if not self.is_playing or feeder is None:
             outdata.fill(0)
@@ -815,17 +874,58 @@ class CyberAudioEngine:
             return
         gain = self.effective_gain
         count = min(len(chunk), frames)
-        if chunk.ndim == 1:
-            outdata[:count, 0] = chunk[:count] * gain
-            if outdata.shape[1] > 1:
-                outdata[:count, 1] = chunk[:count] * gain
+
+        # 1. Primary incoming track (Song B) with equal-power fade-in during crossfade
+        if self._fade_in_remaining > 0 and self._fade_in_total > 0:
+            start_off = self._fade_in_total - self._fade_in_remaining
+            t_in = np.clip((start_off + np.arange(count, dtype=np.float32)) / float(self._fade_in_total), 0.0, 1.0)
+            in_gain = gain * np.sin(t_in * (np.pi / 2.0))
+            self._fade_in_remaining = max(0, self._fade_in_remaining - count)
+            if self._fade_in_remaining == 0:
+                self._in_crossfade = False
+            if chunk.ndim == 1:
+                outdata[:count, 0] = chunk[:count] * in_gain
+                if outdata.shape[1] > 1:
+                    outdata[:count, 1] = chunk[:count] * in_gain
+            else:
+                outdata[:count] = chunk[:count] * in_gain[:, None]
         else:
-            outdata[:count] = chunk[:count] * gain
+            if chunk.ndim == 1:
+                outdata[:count, 0] = chunk[:count] * gain
+                if outdata.shape[1] > 1:
+                    outdata[:count, 1] = chunk[:count] * gain
+            else:
+                outdata[:count] = chunk[:count] * gain
+
         if count < frames:
             outdata[count:] = 0
         if count < len(chunk):
             self._leftover = chunk[count:]
         self.current_frame = min(self.total_frames, self.current_frame + count)
+
+        # 2. Overlapping crossfade track (Song A fading out simultaneously)
+        fading_feeder = self._fading_out_feeder
+        if fading_feeder is not None:
+            fade_chunk = fading_feeder.get_chunk()
+            if fade_chunk is not None and self._fading_out_remaining > 0:
+                f_count = min(len(fade_chunk), count)
+                t_out = np.clip((self._fading_out_remaining - np.arange(f_count, dtype=np.float32)) / float(self._fading_out_total), 0.0, 1.0)
+                out_gain = gain * np.sin(t_out * (np.pi / 2.0))
+                self._fading_out_remaining = max(0, self._fading_out_remaining - f_count)
+                if fade_chunk.ndim == 1:
+                    outdata[:f_count, 0] += fade_chunk[:f_count] * out_gain
+                    if outdata.shape[1] > 1:
+                        outdata[:f_count, 1] += fade_chunk[:f_count] * out_gain
+                else:
+                    outdata[:f_count] += fade_chunk[:f_count] * out_gain[:, None]
+
+            if fade_chunk is None or self._fading_out_remaining <= 0:
+                old_feeder = self._fading_out_feeder
+                old_sf = self._fading_out_sf
+                self._fading_out_feeder = None
+                self._fading_out_sf = None
+                self._in_crossfade = False
+                threading.Thread(target=self._async_close_feeder, args=(old_feeder, old_sf), daemon=True).start()
 
         # Mono buffer for visualizer FFT
         n = min(1024, frames)

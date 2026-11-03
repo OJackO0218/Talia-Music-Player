@@ -109,3 +109,40 @@ def test_callback_is_silent_when_not_playing():
     engine._audio_callback(out, 256, None, None)
 
     np.testing.assert_allclose(out, 0.0)
+
+
+def test_callback_dj_overlap_crossfade():
+    """Verifies simultaneous mixing of fading out track and incoming track with equal power curve."""
+    engine = _engine_with(FakeFeeder([np.ones((1024, 2), dtype=np.float32)]))
+    engine.sr = 44100
+    engine.set_volume(1.0)
+    fade_len = int(4.0 * 44100)
+
+    # Incoming Song B
+    engine._fade_in_total = fade_len
+    engine._fade_in_remaining = fade_len
+
+    # Outgoing Song A
+    engine._fading_out_feeder = FakeFeeder([np.ones((1024, 2), dtype=np.float32)])
+    engine._fading_out_total = fade_len
+    engine._fading_out_remaining = fade_len
+
+    out = np.zeros((1024, 2), dtype=np.float32)
+    engine._audio_callback(out, 1024, None, None)
+
+    # Start of crossfade: Song A is at ~1.0, Song B is near 0.0, total sum is ~1.0
+    assert out[0, 0] > 0.98
+    assert out[0, 0] <= 1.02
+
+    # Midpoint test (2.0s in): both tracks are at equal power ~0.7071
+    engine.feeder = FakeFeeder([np.ones((1024, 2), dtype=np.float32)])
+    engine._fading_out_feeder = FakeFeeder([np.ones((1024, 2), dtype=np.float32)])
+    engine._fade_in_remaining = fade_len // 2
+    engine._fading_out_remaining = fade_len // 2
+
+    out_mid = np.zeros((1024, 2), dtype=np.float32)
+    engine._audio_callback(out_mid, 1024, None, None)
+
+    # Midpoint acoustic power sum: (0.7071)^2 + (0.7071)^2 ≈ 1.0
+    # Linear amplitude sum: 0.7071 + 0.7071 ≈ 1.414
+    np.testing.assert_allclose(out_mid[0, 0], np.sqrt(2.0), rtol=0.02)
