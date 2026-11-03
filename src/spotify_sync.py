@@ -133,14 +133,16 @@ class SpotifySyncService(QObject):
 
             # Case A: Single Track
             if entity_type == "track":
-                t_title = html.unescape(entity.get("title") or entity.get("name") or "Track").strip()
+                t_title = re.sub(r"\s+", " ", html.unescape(entity.get("title") or entity.get("name") or "Track")).strip()
                 artists = entity.get("artists", [])
                 artist_names = ", ".join(a.get("name", "") for a in artists if a.get("name"))
-                t_artist = html.unescape(artist_names or entity.get("subtitle") or "").strip()
+                t_artist = re.sub(r"\s+", " ", html.unescape(artist_names or entity.get("subtitle") or "")).strip()
                 t_dur_ms = int(entity.get("duration", 0))
 
                 query = f"{t_artist} - {t_title}" if t_artist else t_title
                 track_item = {
+                    "track_number": 1,
+                    "total_tracks": 1,
                     "title": t_title,
                     "artist": t_artist,
                     "duration_ms": t_dur_ms,
@@ -160,14 +162,15 @@ class SpotifySyncService(QObject):
                 return result
 
             # Case B: Playlist or Album
-            title = html.unescape(entity.get("title") or entity.get("name") or "Spotify Playlist")
-            subtitle = html.unescape(entity.get("subtitle") or "")
+            title = re.sub(r"\s+", " ", html.unescape(entity.get("title") or entity.get("name") or "Spotify Playlist")).strip()
+            subtitle = re.sub(r"\s+", " ", html.unescape(entity.get("subtitle") or "")).strip()
             raw_track_list = entity.get("trackList", [])
 
+            total_items = len(raw_track_list)
             parsed_tracks = []
-            for item in raw_track_list:
-                t_title = html.unescape(item.get("title") or "").strip()
-                t_artist = html.unescape(item.get("subtitle") or "").strip()
+            for idx, item in enumerate(raw_track_list, start=1):
+                t_title = re.sub(r"\s+", " ", html.unescape(item.get("title") or "")).strip()
+                t_artist = re.sub(r"\s+", " ", html.unescape(item.get("subtitle") or "")).strip()
                 t_dur_ms = int(item.get("duration", 0))
 
                 if not t_title:
@@ -175,6 +178,8 @@ class SpotifySyncService(QObject):
 
                 query = f"{t_artist} - {t_title}" if t_artist else t_title
                 parsed_tracks.append({
+                    "track_number": idx,
+                    "total_tracks": total_items,
                     "title": t_title,
                     "artist": t_artist,
                     "duration_ms": t_dur_ms,

@@ -189,7 +189,13 @@ def download_and_sync_lrc(
         t_artist = str(track_info.get("artist") or "").strip()
         t_title = str(track_info.get("title") or "").strip()
         if t_artist and t_title:
-            clean_target_stem = sanitize_filename(f"{t_artist} - {t_title}")
+            track_num = track_info.get("track_number")
+            total_tracks = track_info.get("total_tracks", 0)
+            prefix = ""
+            if track_num and total_tracks > 1:
+                pad = max(2, len(str(total_tracks)))
+                prefix = f"{int(track_num):0{pad}d}. "
+            clean_target_stem = sanitize_filename(f"{prefix}{t_artist} - {t_title}")
             outtmpl = os.path.join(download_dir, f"{clean_target_stem}.%(ext)s")
 
     ydl_opts = {
@@ -340,8 +346,31 @@ class SongDownloaderService(QObject):
 
             # Check if file already exists in target_dir to skip duplicate work
             if track_info and track_info.get("title") and track_info.get("artist"):
-                t_stem = sanitize_filename(f"{track_info['artist']} - {track_info['title']}")
+                t_artist = str(track_info.get("artist") or "").strip()
+                t_title = str(track_info.get("title") or "").strip()
+                track_num = track_info.get("track_number")
+                total_tracks = track_info.get("total_tracks", 0)
+                prefix = ""
+                if track_num and total_tracks > 1:
+                    pad = max(2, len(str(total_tracks)))
+                    prefix = f"{int(track_num):0{pad}d}. "
+
+                t_stem = sanitize_filename(f"{prefix}{t_artist} - {t_title}")
                 exist_opus = os.path.join(target_dir, f"{t_stem}.opus")
+
+                # If an un-numbered version exists from an earlier download, rename it!
+                old_stem = sanitize_filename(f"{t_artist} - {t_title}")
+                old_opus = os.path.join(target_dir, f"{old_stem}.opus")
+                if prefix and os.path.exists(old_opus) and not os.path.exists(exist_opus):
+                    try:
+                        os.rename(old_opus, exist_opus)
+                        old_lrc = os.path.join(target_dir, f"{old_stem}.lrc")
+                        new_lrc = os.path.join(target_dir, f"{t_stem}.lrc")
+                        if os.path.exists(old_lrc) and not os.path.exists(new_lrc):
+                            os.rename(old_lrc, new_lrc)
+                    except Exception as e:
+                        log.warning("Could not rename existing track %s: %s", old_stem, e)
+
                 if os.path.exists(exist_opus):
                     exist_lrc = os.path.join(target_dir, f"{t_stem}.lrc")
                     if os.path.exists(exist_lrc):

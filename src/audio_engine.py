@@ -8,6 +8,7 @@ import math
 import logging
 import os
 import random
+import re
 import threading
 
 import numpy as np
@@ -411,11 +412,53 @@ class CyberAudioEngine:
                 if f.lower().endswith(SUPPORTED_AUDIO_EXTS):
                     files.append(os.path.normpath(os.path.join(root, f)))
 
-        # Group root files and subfolders neatly
-        try:
-            files.sort(key=lambda p: os.path.relpath(p, self.folder_path).lower())
-        except Exception:
-            files.sort()
+        def natural_sort_key(p: str):
+            try:
+                rel = os.path.relpath(p, self.folder_path).lower()
+            except Exception:
+                rel = os.path.basename(p).lower()
+            return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", rel)]
+
+        # Check if an .m3u8 or .m3u playlist exists to preserve explicit playlist ordering (e.g. Spotify Sync)
+        playlist_file = None
+        for cand in ("playlist.m3u8", "playlist.m3u"):
+            cand_path = os.path.join(self.folder_path, cand)
+            if os.path.isfile(cand_path):
+                playlist_file = cand_path
+                break
+        if not playlist_file:
+            try:
+                for item in os.listdir(self.folder_path):
+                    if item.lower().endswith((".m3u8", ".m3u")) and os.path.isfile(os.path.join(self.folder_path, item)):
+                        playlist_file = os.path.join(self.folder_path, item)
+                        break
+            except Exception:
+                pass
+
+        if playlist_file:
+            ordered_files = []
+            seen = set()
+            try:
+                base_p = os.path.dirname(playlist_file)
+                with open(playlist_file, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        track_p = os.path.normpath(os.path.join(base_p, line))
+                        if os.path.isfile(track_p) and track_p.lower().endswith(SUPPORTED_AUDIO_EXTS):
+                            if track_p not in seen:
+                                ordered_files.append(track_p)
+                                seen.add(track_p)
+                remaining = [f for f in files if f not in seen]
+                remaining.sort(key=natural_sort_key)
+                files = ordered_files + remaining
+            except Exception as e:
+                log.warning("Could not read playlist file %s: %s", playlist_file, e)
+                files.sort(key=natural_sort_key)
+        else:
+            files.sort(key=natural_sort_key)
+
         self.playlist = files
         if current_track and current_track in files:
             self.current_index = files.index(current_track)

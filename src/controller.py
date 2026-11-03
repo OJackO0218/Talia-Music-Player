@@ -1610,13 +1610,14 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         # Lyrics Overlay Position & Visibility
         if self.lyrics_overlay:
-            lx = int(cfg.get("lyrics_x", -1))
-            ly = int(cfg.get("lyrics_y", -1))
-            if 0 <= lx < screen.width() and 0 <= ly < screen.height():
-                self.lyrics_overlay.move(lx, ly)
             font_size = int(cfg.get("lyrics_font_size", 25))
             font_size = max(14, min(60, font_size))
             self.lyrics_overlay.set_font_size(font_size, keep_center=False)
+            lx = int(cfg.get("lyrics_x", -1))
+            ly = int(cfg.get("lyrics_y", -1))
+            if 0 <= lx < screen.width() and 0 <= ly < screen.height():
+                clamped_x = max(10, min(lx, screen.width() - self.lyrics_overlay.width() - 10))
+                self.lyrics_overlay.move(clamped_x, ly)
             if hasattr(self, "slider_lyric_size"):
                 self.slider_lyric_size.blockSignals(True)
                 self.slider_lyric_size.setValue(font_size)

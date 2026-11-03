@@ -9,6 +9,7 @@ the Qt UI loop or audio playback.
 import logging
 import os
 import queue
+import re
 import threading
 import time
 from typing import Optional
@@ -29,6 +30,8 @@ except Exception:
 def parse_track_info(raw_title: str) -> tuple[str, str]:
     """Splits 'Artist - Title.ext' into clean (title, artist) strings."""
     clean = os.path.splitext(raw_title)[0].strip()
+    # Strip any leading track number prefix (e.g. "01. ", "01 - ", "001. ")
+    clean = re.sub(r"^\d{1,3}(?:[\.\-_]|\s+-)\s*", "", clean).strip()
     if " - " in clean:
         parts = clean.split(" - ", 1)
         artist = parts[0].strip()

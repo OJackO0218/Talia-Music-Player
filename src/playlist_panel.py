@@ -69,7 +69,8 @@ class TrackRowWidget(QWidget):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(1)
 
-        self.lbl_title = QLabel(filename)
+        display_title = re.sub(r"^\d{1,3}(?:[\.\-_]|\s+-)\s*", "", filename).strip()
+        self.lbl_title = QLabel(display_title or filename)
         self.lbl_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         if is_current:
             self.lbl_title.setStyleSheet("color: #60a5fa; font-weight: bold; font-size: 11px;")

@@ -339,7 +339,9 @@ class SpotifySyncDialog(QDialog):
 
         # Populate tracks
         for t in tracks:
-            label_txt = f"{t['artist']} - {t['title']}  ({t.get('duration_str', '')})"
+            track_no = t.get("track_number", 0)
+            prefix = f"{track_no:02d}. " if track_no else ""
+            label_txt = f"{prefix}{t['artist']} - {t['title']}  ({t.get('duration_str', '')})"
             chk = QCheckBox(label_txt)
             chk.setChecked(True)
             chk.setStyleSheet("color: #f4f4f5; font-size: 11px;")
@@ -540,6 +542,34 @@ class SpotifySyncDialog(QDialog):
                 msg += f" ({failed} skipped or failed)"
             self.lbl_status.setText(msg)
             self.lbl_status.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 11px;")
+
+        # Write/Update playlist.m3u8 in sequential Spotify playlist order
+        if success > 0:
+            try:
+                from song_downloader import sanitize_filename
+                m3u_path = os.path.join(target_dir, "playlist.m3u8")
+                lines = ["#EXTM3U\n"]
+                for chk, t, _ in self._track_checkboxes:
+                    t_artist = str(t.get("artist") or "").strip()
+                    t_title = str(t.get("title") or "").strip()
+                    track_num = t.get("track_number")
+                    total_tracks = t.get("total_tracks", 0)
+                    prefix = ""
+                    if track_num and total_tracks > 1:
+                        pad = max(2, len(str(total_tracks)))
+                        prefix = f"{int(track_num):0{pad}d}. "
+                    stem = sanitize_filename(f"{prefix}{t_artist} - {t_title}")
+                    opus_name = f"{stem}.opus"
+                    if not os.path.exists(os.path.join(target_dir, opus_name)):
+                        old_name = f"{sanitize_filename(f'{t_artist} - {t_title}')}.opus"
+                        if os.path.exists(os.path.join(target_dir, old_name)):
+                            opus_name = old_name
+                    dur_s = int(t.get("duration_ms", 0) / 1000)
+                    lines.append(f"#EXTINF:{dur_s},{t_artist} - {t_title}\n{opus_name}\n")
+                with open(m3u_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+            except Exception as exc:
+                log.warning("Could not write playlist.m3u8: %s", exc)
 
         # Automatically refresh Talia's player playlist and switch to target folder
         if success > 0 and self.panel and hasattr(self.panel, "refresh_playlist"):

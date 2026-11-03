@@ -97,6 +97,9 @@ class LyricsManager:
         """Strips tags, file extensions, and common packaging noise to isolate song title."""
         stem = os.path.splitext(os.path.basename(filename))[0]
 
+        # Strip track number prefix: e.g. "01. ", "01 - "
+        stem = re.sub(r"^\d{1,3}(?:[\.\-_]|\s+-)\s*", "", stem).strip()
+
         # Remove tags like CPE-2, _Compressed_, 1080p, etc.
         stem = re.sub(
             r"[-_]?(CPE|Compressed|1080p|720p|Official|Remastered)[-_0-9]*", "", stem, flags=re.I

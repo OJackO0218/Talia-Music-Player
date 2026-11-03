@@ -204,6 +204,8 @@ class LyricsOverlayWindow(QWidget):
         """Cleans and isolates the primary artist so dialogue speaker tags stay compact and legible."""
         if not artist:
             return ""
+        # Strip any leading track numbering prefix if present (e.g. "01. ", "01 - ")
+        artist = re.sub(r"^\d{1,3}(?:[\.\-_]|\s+-)\s*", "", artist).strip()
         # Split on commas, featuring tags, or slashes (multi-artist ensemble lists)
         split_pattern = r"(?:,|\s+feat\.?|\s+ft\.?|\s+featuring|\s*/\s*|\s+x\s+)"
         parts = re.split(split_pattern, artist, flags=re.IGNORECASE)
@@ -288,8 +290,8 @@ class LyricsOverlayWindow(QWidget):
         """Dynamically scales window width and height to comfortably fit the current font size."""
         screen = QApplication.primaryScreen()
         screen_geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
-        # Expanded width by ~56% (+20% then +30%) to fit Cyberpunk dialogue speaker tag comfortably
-        target_w = min(screen_geo.width() - 40, max(655, int(self.base_font_size * 36.4)))
+        # Expanded width by +40% (multiplier 51.0, min 917) to comfortably fit long lines and Cyberpunk dialogue tags
+        target_w = min(screen_geo.width() - 40, max(917, int(self.base_font_size * 51.0)))
         target_h = max(56, int(self.base_font_size * 3.3))
 
         if keep_center:

@@ -359,3 +359,61 @@ def test_duplicate_track_to_folder_same_folder(tmp_path, qapp, monkeypatch):
     panel.hide()
     lyrics.hide()
     overlay.hide()
+
+
+def test_natural_sort_order(tmp_path):
+    """Ensures tracks like 1., 2., 10. are sorted in natural numerical order rather than lexicographical."""
+    import os
+    _touch(tmp_path / "10. Song Ten.opus")
+    _touch(tmp_path / "1. Song One.opus")
+    _touch(tmp_path / "2. Song Two.opus")
+
+    engine = CyberAudioEngine()
+    engine.folder_path = str(tmp_path)
+    engine.refresh_playlist()
+
+    basenames = [os.path.basename(p) for p in engine.playlist]
+    assert basenames == ["1. Song One.opus", "2. Song Two.opus", "10. Song Ten.opus"]
+
+
+def test_m3u8_playlist_order(tmp_path):
+    """Ensures that a playlist.m3u8 file takes precedence to define track playback order."""
+    import os
+    _touch(tmp_path / "track_z.mp3")
+    _touch(tmp_path / "track_a.mp3")
+    _touch(tmp_path / "track_m.mp3")
+
+    m3u = tmp_path / "playlist.m3u8"
+    m3u.write_text("#EXTM3U\ntrack_z.mp3\ntrack_m.mp3\ntrack_a.mp3\n", encoding="utf-8")
+
+    engine = CyberAudioEngine()
+    engine.folder_path = str(tmp_path)
+    engine.refresh_playlist()
+
+    basenames = [os.path.basename(p) for p in engine.playlist]
+    assert basenames == ["track_z.mp3", "track_m.mp3", "track_a.mp3"]
+
+
+def test_dialogue_speaker_track_number_cleaning():
+    from lyrics_overlay import LyricsOverlayWindow
+    assert LyricsOverlayWindow.clean_dialogue_speaker("01. Lin-Manuel Miranda") == "Lin-Manuel Miranda"
+    assert LyricsOverlayWindow.clean_dialogue_speaker("05 - Ariana DeBose, Lin-Manuel Miranda") == "Ariana DeBose"
+    assert LyricsOverlayWindow.clean_dialogue_speaker("100. Queen") == "Queen"
+
+
+def test_lyric_box_width_expansion(qapp):
+    from audio_engine import CyberAudioEngine
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from PyQt6.QtWidgets import QApplication
+    engine = CyberAudioEngine()
+    mgr = LyricsManager()
+    overlay = LyricsOverlayWindow(engine, mgr)
+    screen = QApplication.primaryScreen()
+    screen_w = screen.geometry().width() if screen else 1920
+    # Formula expands width by ~40% (multiplier 51.0 vs 36.4, min 917 vs 655)
+    expected_w = min(screen_w - 40, max(917, int(25 * 51.0)))
+    assert overlay.width() == expected_w
+    assert int(25 * 51.0) == 1275
+    assert int(25 * 51.0) >= int(25 * 36.4 * 1.39)
+    overlay.hide()
