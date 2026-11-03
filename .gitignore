@@ -32,6 +32,8 @@ _temp*
 # Scratch & unneeded raw extraction assets
 assets_eyes/
 assets/sounds/legacy/
+assets/lyrics_cache/*.lrc
+!assets/lyrics_cache/click_button.lrc
 build_stage/
 # Music tracking rule: Only track Cyberpunk Edgerunners and empty Downloaded Songs folder
 music/*

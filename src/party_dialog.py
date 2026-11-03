@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -36,11 +37,13 @@ class PartySyncDialog(QDialog):
         self.sync_service = panel.party_sync
 
         self.setWindowTitle("Listen Together - Party Sync")
-        self.setFixedSize(480, 520)
+        self.setMinimumSize(460, 500)
+        self.resize(480, 540)
         self.setWindowFlags(Qt.WindowType.Dialog)
         self.setStyleSheet(SHARED_PANEL_STYLE)
 
         self._generated_code = generate_room_code()
+        self.members: list[str] = []
         self.init_ui()
         self._wire_signals()
 
@@ -143,6 +146,14 @@ class PartySyncDialog(QDialog):
         hbox_join.addWidget(self.btn_join)
         setup_layout.addLayout(hbox_join)
 
+        self.lbl_join_error = QLabel("")
+        self.lbl_join_error.setStyleSheet("color: #f87171; font-size: 11px; font-weight: bold; padding: 2px 0;")
+        self.lbl_join_error.setVisible(False)
+        self.lbl_join_error.setWordWrap(True)
+        setup_layout.addWidget(self.lbl_join_error)
+
+        self.edit_join_code.textChanged.connect(lambda: self.lbl_join_error.setVisible(False))
+
         setup_layout.addStretch(1)
         self.stack.addWidget(page_setup)
 
@@ -158,9 +169,19 @@ class PartySyncDialog(QDialog):
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(6)
 
+        # Header row: Connected Code + Copy Code Button
+        hbox_card_top = QHBoxLayout()
         self.lbl_active_status = QLabel("Connected: NEON7")
         self.lbl_active_status.setStyleSheet("color: #4ade80; font-size: 14px; font-weight: bold;")
-        card_layout.addWidget(self.lbl_active_status)
+        hbox_card_top.addWidget(self.lbl_active_status, 1)
+
+        self.btn_copy_invite = QPushButton("Copy Code")
+        self.btn_copy_invite.setStyleSheet(
+            "padding: 4px 12px; font-size: 11px; font-weight: 600; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 4px; color: #f4f4f5;"
+        )
+        self.btn_copy_invite.clicked.connect(self._on_copy_invite_clicked)
+        hbox_card_top.addWidget(self.btn_copy_invite)
+        card_layout.addLayout(hbox_card_top)
 
         self.lbl_active_role = QLabel("Role: Host (Broadcasting playback)")
         self.lbl_active_role.setStyleSheet("color: #a1a1aa; font-size: 11px;")
@@ -170,17 +191,36 @@ class PartySyncDialog(QDialog):
         self.lbl_members_count.setStyleSheet("color: #e4e4e7; font-size: 12px; font-weight: 600;")
         card_layout.addWidget(self.lbl_members_count)
 
-        self.lbl_share_info = QLabel("Share with friends:")
-        self.lbl_share_info.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 500;")
-        self.lbl_share_info.setWordWrap(True)
-        card_layout.addWidget(self.lbl_share_info)
-
-        self.btn_copy_invite = QPushButton("Copy Room Invite for Friends")
-        self.btn_copy_invite.setStyleSheet(
-            "padding: 5px 10px; font-size: 11px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 4px; color: #f4f4f5;"
+        # Host Transfer row (visible to Host when listeners are present)
+        self.frame_transfer = QFrame()
+        self.frame_transfer.setFixedHeight(42)
+        self.frame_transfer.setStyleSheet(
+            "background-color: #121215; border: 1px solid #27272a; border-radius: 6px; padding: 3px 8px;"
         )
-        self.btn_copy_invite.clicked.connect(self._on_copy_invite_clicked)
-        card_layout.addWidget(self.btn_copy_invite)
+        transfer_layout = QHBoxLayout(self.frame_transfer)
+        transfer_layout.setContentsMargins(6, 2, 6, 2)
+        transfer_layout.setSpacing(8)
+
+        lbl_transfer = QLabel("Transfer Host:")
+        lbl_transfer.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 600;")
+        transfer_layout.addWidget(lbl_transfer)
+
+        self.combo_members = QComboBox()
+        self.combo_members.setFixedHeight(26)
+        self.combo_members.setStyleSheet(
+            "background-color: #18181b; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        transfer_layout.addWidget(self.combo_members, 1)
+
+        self.btn_transfer = QPushButton("Make Host")
+        self.btn_transfer.setFixedHeight(26)
+        self.btn_transfer.setStyleSheet(
+            "background-color: #7c3aed; color: #ffffff; font-weight: bold; padding: 3px 10px; border-radius: 4px; font-size: 11px;"
+        )
+        self.btn_transfer.clicked.connect(self._on_transfer_clicked)
+        transfer_layout.addWidget(self.btn_transfer)
+        self.frame_transfer.setVisible(False)
+        card_layout.addWidget(self.frame_transfer)
 
         active_layout.addWidget(card)
 
@@ -214,6 +254,7 @@ class PartySyncDialog(QDialog):
         self.sync_service.disconnected.connect(self._on_disconnected)
         self.sync_service.peer_joined.connect(self._on_peer_joined)
         self.sync_service.peer_left.connect(self._on_peer_left)
+        self.sync_service.host_transferred.connect(self._on_host_transferred)
         self.sync_service.status_message.connect(self._set_status)
         self.sync_service.error_occurred.connect(self._set_error)
 
@@ -270,19 +311,20 @@ class PartySyncDialog(QDialog):
 
 
     def _on_connected(self, room_code: str, is_host: bool, members: list):
-        role_str = "Host (Broadcasting playback)" if is_host else "Listener (Synced with party)"
-        self.lbl_active_status.setText(f"Connected: {room_code}")
-        self.lbl_active_role.setText(f"Role: {role_str}")
-        self.lbl_members_count.setText(f"Listeners in party: {len(members)}")
-        lan_ip = get_local_lan_ip()
+        relay_url = self.edit_relay_url.text().strip().lower()
+        is_lan = "127.0.0.1" in relay_url or "localhost" in relay_url
         if is_host:
-            self.lbl_share_info.setText(f"Room Code: {room_code}")
-            self.lbl_share_info.setVisible(True)
-            self.btn_copy_invite.setVisible(True)
-            self.btn_copy_invite.setText("Copy Code")
+            role_str = "Role: Host (LAN Mode)" if is_lan else "Role: Host (Cloud Relay)"
         else:
-            self.lbl_share_info.setVisible(False)
-            self.btn_copy_invite.setVisible(False)
+            role_str = "Role: Listener (Synced with party)"
+
+        self.lbl_active_status.setText(f"Connected: {room_code}")
+        self.lbl_active_role.setText(role_str)
+        self.lbl_members_count.setText(f"Listeners in party: {len(members)}")
+        self.btn_copy_invite.setVisible(is_host)
+
+        self.members = list(members)
+        self._update_transfer_ui()
         self.lbl_feed.setText(f"Connected to room {room_code}. Members: {', '.join(members)}")
         self.stack.setCurrentIndex(1)
         if self.panel and hasattr(self.panel, "update_party_hud"):
@@ -294,13 +336,55 @@ class PartySyncDialog(QDialog):
         if self.panel and hasattr(self.panel, "update_party_hud"):
             self.panel.update_party_hud(False, "", False)
 
+    def _update_transfer_ui(self):
+        is_host = self.sync_service.is_host
+        current_user = self.sync_service.user_name
+        other_members = [m for m in self.members if m != current_user]
+        self.combo_members.clear()
+        self.combo_members.addItems(other_members)
+        self.frame_transfer.setVisible(is_host and len(other_members) > 0)
+
+    def _on_transfer_clicked(self):
+        target = self.combo_members.currentText().strip()
+        if not target:
+            return
+        self.sync_service.transfer_host(target)
+        self.lbl_feed.setText(f"Transferring host role to {target}...")
+
+    def _on_host_transferred(self, new_host: str, old_host: str):
+        is_host = self.sync_service.is_host
+        relay_url = self.edit_relay_url.text().strip().lower()
+        is_lan = "127.0.0.1" in relay_url or "localhost" in relay_url
+        if is_host:
+            self.lbl_active_role.setText("Role: Host (LAN Mode)" if is_lan else "Role: Host (Cloud Relay)")
+            self.btn_copy_invite.setVisible(True)
+        else:
+            self.lbl_active_role.setText(f"Role: Listener (Host: {new_host})")
+            self.btn_copy_invite.setVisible(False)
+
+        self._update_transfer_ui()
+        self.lbl_feed.setText(f"Host privileges transferred from {old_host} to {new_host}.")
+        if self.panel and hasattr(self.panel, "update_party_hud"):
+            self.panel.update_party_hud(True, self.sync_service.room_code, is_host)
+
     def _on_peer_joined(self, name: str, count: int):
+        if name not in self.members:
+            self.members.append(name)
         self.lbl_members_count.setText(f"Listeners in party: {count}")
         self.lbl_feed.setText(f"{name} joined the room ({count} listening)")
+        self._update_transfer_ui()
 
     def _on_peer_left(self, name: str, count: int):
+        if name in self.members:
+            self.members.remove(name)
         self.lbl_members_count.setText(f"Listeners in party: {count}")
-        self.lbl_feed.setText(f"{name} left the room.")
+        self._update_transfer_ui()
+        if not self.sync_service.is_host and (count <= 1 or name == self.sync_service.host_name):
+            self.lbl_feed.setText(f"{name} (Host) left the party. Room closed.")
+            self.lbl_status.setText("Host left the session. Room closed.")
+            self.sync_service.disconnect_session()
+        else:
+            self.lbl_feed.setText(f"{name} left the room.")
 
 
     def _set_status(self, text: str):
@@ -309,4 +393,18 @@ class PartySyncDialog(QDialog):
 
     def _set_error(self, text: str):
         self.lbl_status.setText(text)
-        self.lbl_status.setStyleSheet("color: #f87171; font-size: 10px;")
+        self.lbl_status.setStyleSheet("color: #f87171; font-size: 11px; font-weight: bold;")
+        if hasattr(self, "lbl_join_error"):
+            self.lbl_join_error.setText(text)
+            self.lbl_join_error.setVisible(True)
+        lowered = text.lower()
+        if self.stack.currentIndex() != 0 and (
+            "not exist" in lowered
+            or "offline" in lowered
+            or "room closed" in lowered
+            or "host has left" in lowered
+            or "closed" in lowered
+        ):
+            self.stack.setCurrentIndex(0)
+            if self.panel and hasattr(self.panel, "update_party_hud"):
+                self.panel.update_party_hud(False, "", False)

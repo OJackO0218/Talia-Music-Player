@@ -73,6 +73,13 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     peer_name = str(data.get("name", "Listener")).strip() or "Listener"
                     is_host = bool(data.get("is_host", False))
 
+                    if not is_host and (current_room not in rooms or not rooms[current_room]):
+                        await ws.send_json({
+                            "type": "error",
+                            "message": f"Room '{current_room}' does not exist or host is offline."
+                        })
+                        continue
+
                     if current_room not in rooms:
                         rooms[current_room] = {}
                     rooms[current_room][ws] = {"name": peer_name, "is_host": is_host}
@@ -107,6 +114,30 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 elif mtype == "leave":
                     break
 
+                # --- 2b. TRANSFER HOST ---
+                elif mtype == "transfer_host" and current_room and current_room in rooms and is_host:
+                    target_name = str(data.get("target", "")).strip()
+                    target_ws = None
+                    for p_ws, p_info in rooms[current_room].items():
+                        if p_info.get("name") == target_name:
+                            target_ws = p_ws
+                            break
+                    if target_ws:
+                        is_host = False
+                        rooms[current_room][ws]["is_host"] = False
+                        rooms[current_room][target_ws]["is_host"] = True
+                        trans_payload = json.dumps({
+                            "type": "host_transferred",
+                            "new_host": target_name,
+                            "old_host": peer_name,
+                        })
+                        for peer in list(rooms[current_room].keys()):
+                            if not peer.closed:
+                                try:
+                                    await peer.send_str(trans_payload)
+                                except Exception:
+                                    pass
+
                 # --- 3. BROADCAST ROOM MESSAGES ---
                 elif current_room and current_room in rooms:
                     data["sender"] = peer_name
@@ -130,19 +161,36 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
             if ws in rooms[current_room]:
                 rooms[current_room].pop(ws, None)
                 if rooms[current_room]:
-                    members = [p["name"] for p in rooms[current_room].values()]
-                    log.info("[LEAVE] '%s' left room '%s' (%d remaining)", peer_name, current_room, len(members))
-                    peer_left_payload = json.dumps({
-                        "type": "peer_left",
-                        "name": peer_name,
-                        "count": len(members),
-                    })
-                    for peer in list(rooms[current_room].keys()):
-                        if not peer.closed:
-                            try:
-                                await peer.send_str(peer_left_payload)
-                            except Exception:
-                                pass
+                    has_host = any(p.get("is_host") for p in rooms[current_room].values())
+                    if is_host and not has_host:
+                        log.info("[ROOM CLOSED] Host '%s' left room '%s'. Closing room for all members.", peer_name, current_room)
+                        close_payload = json.dumps({
+                            "type": "room_closed",
+                            "reason": "Host has left the party session. Room closed.",
+                        })
+                        for peer in list(rooms[current_room].keys()):
+                            if not peer.closed:
+                                try:
+                                    await peer.send_str(close_payload)
+                                    await peer.close()
+                                except Exception:
+                                    pass
+                        rooms.pop(current_room, None)
+                    else:
+                        members = [p["name"] for p in rooms[current_room].values()]
+                        log.info("[LEAVE] '%s' left room '%s' (%d remaining)", peer_name, current_room, len(members))
+                        peer_left_payload = json.dumps({
+                            "type": "peer_left",
+                            "name": peer_name,
+                            "is_host": is_host,
+                            "count": len(members),
+                        })
+                        for peer in list(rooms[current_room].keys()):
+                            if not peer.closed:
+                                try:
+                                    await peer.send_str(peer_left_payload)
+                                except Exception:
+                                    pass
                 else:
                     rooms.pop(current_room, None)
                     log.info("[ROOM CLOSED] Room '%s' is now empty.", current_room)

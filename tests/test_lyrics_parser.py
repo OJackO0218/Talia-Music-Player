@@ -48,3 +48,27 @@ def test_get_total_offset_is_sum(manager):
     manager.manual_offset = 0.25
     manager.file_offset = 0.5
     assert manager.get_total_offset() == 0.75
+
+
+def test_slow_bar_lyrics_does_not_disappear_early(manager):
+    # Two lines with a 7-second gap (slow bar / held note)
+    manager.lines = [(1.0, "Never fade away"), (8.0, "A thing of beauty")]
+    manager.manual_offset = 0.0
+    manager.file_offset = 0.0
+
+    # At 5.5s (4.5s into line 1), it must NOT disappear
+    idx, text, time_into, singing_dur = manager.get_current_line_info(5.5)
+    assert idx == 0
+    assert text == "Never fade away"
+    assert time_into == 4.5
+    assert singing_dur > 4.0
+
+    # At 7.0s (6.0s into line 1), still singing/visible
+    idx, text, time_into, singing_dur = manager.get_current_line_info(7.0)
+    assert idx == 0
+    assert text == "Never fade away"
+
+    # At 8.1s, transitioned to line 2
+    idx, text, time_into, _ = manager.get_current_line_info(8.1)
+    assert idx == 1
+    assert text == "A thing of beauty"

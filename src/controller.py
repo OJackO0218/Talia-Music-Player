@@ -84,7 +84,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             self.lyrics_overlay.panel = self
         self.lyric_presets = {
             "Pure White": "#ffffff",
-            "Soft Blue": "#60a5fa",
+            "Cyberpunk Blue": "#00ffff",
             "Soft Cyan": "#38bdf8",
             "Soft Pink": "#f472b6",
             "Soft Purple": "#c084fc",
@@ -129,6 +129,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.lbl_lyric_size_val = self.settings_dialog.lbl_lyric_size_val
         self.btn_pick_color = self.settings_dialog.btn_pick_color
         self.chk_word_glow = self.settings_dialog.chk_word_glow
+        self.chk_dialogue_mode = getattr(self.settings_dialog, "chk_dialogue_mode", None)
         self.lbl_sync_offset = self.settings_dialog.lbl_sync_offset
         self.btn_save_settings = self.settings_dialog.btn_save_settings
         self.lbl_folder_path = self.settings_dialog.lbl_folder_path
@@ -151,6 +152,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.party_sync.track_auto_downloaded.connect(self._on_party_track_downloaded)
         self.party_sync.peer_joined.connect(self._on_party_peer_joined)
         self.party_sync.connected.connect(self._on_party_connected)
+        self.party_sync.host_transferred.connect(self._on_party_host_transferred)
         self._is_handling_party_event = False
         self._last_party_heartbeat = 0.0
 
@@ -742,7 +744,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if not self.audio_engine.playlist:
             return
         if self.audio_engine.current_index < 0:
-            start_idx = random.randint(0, len(self.audio_engine.playlist) - 1)
+            if getattr(self.audio_engine, "_shuffle", False) and getattr(self.audio_engine, "_shuffle_order", []):
+                start_idx = self.audio_engine._shuffle_order[0]
+            else:
+                start_idx = random.randint(0, len(self.audio_engine.playlist) - 1)
             self.audio_engine.play_index(start_idx)
         else:
             self.audio_engine.toggle_play_pause()
@@ -1258,6 +1263,19 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def on_word_glow_toggled(self, checked: bool):
         if self.lyrics_overlay:
             self.lyrics_overlay.word_glow = checked
+            self.lyrics_overlay._cached_layout_key = None
+            self.lyrics_overlay.update()
+        if not getattr(self, "is_loading_settings", False):
+            try:
+                cfg = self.get_current_settings_dict()
+                save_settings(cfg)
+            except Exception:
+                pass
+
+    def on_dialogue_mode_toggled(self, checked: bool):
+        if self.lyrics_overlay:
+            self.lyrics_overlay.dialogue_mode = checked
+            self.lyrics_overlay._cached_layout_key = None
             self.lyrics_overlay.update()
         if not getattr(self, "is_loading_settings", False):
             try:
@@ -1347,8 +1365,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         else:
                         subprocess.run(["xdg-open", os.path.normpath(FONTS_DIR)])
 
-    def open_lyric_fetcher(self):
+    def open_lyric_fetcher(self, track_path: Optional[str] = None, select_calibrate_tab: bool = False):
         # Open automated lyric fetcher GUI
+        if not isinstance(track_path, str):
+            track_path = None
         try:
             fetcher_dir = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
             if fetcher_dir not in sys.path:
@@ -1359,12 +1379,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self._lyrics_fetcher_win = LyricsFetcherWindow()
                 self._lyrics_fetcher_win.lyrics_saved.connect(self._on_lyrics_saved_externally)
 
-            # Auto-select the currently playing track in the calibrator tab for instant editing
-            curr_track = None
-            if hasattr(
-                self.audio_engine, "playlist"
-            ) and 0 <= self.audio_engine.current_index < len(self.audio_engine.playlist):
-                curr_track = self.audio_engine.playlist[self.audio_engine.current_index]
+            # Auto-select the target track (or currently playing track) in the calibrator tab for instant editing
+            curr_track = track_path
+            if not curr_track:
+                if hasattr(
+                    self.audio_engine, "playlist"
+                ) and 0 <= self.audio_engine.current_index < len(self.audio_engine.playlist):
+                    curr_track = self.audio_engine.playlist[self.audio_engine.current_index]
             if (
                 curr_track
                 and os.path.exists(curr_track)
@@ -1372,10 +1393,14 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             ):
                 self._lyrics_fetcher_win.edit_cal_file.setText(os.path.normpath(curr_track))
                 self._lyrics_fetcher_win._load_cal_track(os.path.normpath(curr_track))
+
+            if select_calibrate_tab and hasattr(self._lyrics_fetcher_win, "tabs"):
+                self._lyrics_fetcher_win.tabs.setCurrentIndex(2)
+
             self._lyrics_fetcher_win.show()
             self._lyrics_fetcher_win.raise_()
             self._lyrics_fetcher_win.activateWindow()
-            log.info("[ACTION] Opened Lyrics Fetcher Window.")
+            log.info(f"[ACTION] Opened Lyrics Fetcher Window (target track: {curr_track}).")
         except Exception as e:
             log.info(f"[ERROR] In-process lyric fetcher launch failed: {e}")
             try:
@@ -1483,6 +1508,9 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             )
             settings_dict["lyrics_word_glow"] = bool(
                 getattr(self.lyrics_overlay, "word_glow", True)
+            )
+            settings_dict["lyrics_dialogue_mode"] = bool(
+                getattr(self.lyrics_overlay, "dialogue_mode", True)
             )
             font_val = (
                 self.combo_font.currentText()
@@ -1615,6 +1643,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.chk_word_glow.setChecked(word_glow)
                 self.chk_word_glow.blockSignals(False)
 
+            dialogue_mode = bool(cfg.get("lyrics_dialogue_mode", True))
+            self.lyrics_overlay.dialogue_mode = dialogue_mode
+            if getattr(self, "chk_dialogue_mode", None):
+                self.chk_dialogue_mode.blockSignals(True)
+                self.chk_dialogue_mode.setChecked(dialogue_mode)
+                self.chk_dialogue_mode.blockSignals(False)
+
             # Lyrics Font
             lyrics_font = cfg.get("lyrics_font", "Rajdhani")
             if hasattr(self, "settings_dialog"):
@@ -1741,6 +1776,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def _on_party_peer_joined(self, name: str, count: int):
         if hasattr(self, "party_sync") and self.party_sync.is_host:
             self._broadcast_party_track()
+
+    def _on_party_host_transferred(self, new_host: str, old_host: str):
+        if hasattr(self, "party_sync"):
+            self.update_party_hud(self.party_sync.is_connected, self.party_sync.room_code, self.party_sync.is_host)
+            if self.party_sync.is_host:
+                self._broadcast_party_track()
 
     def _broadcast_party_track(self):
         if not hasattr(self, "party_sync") or not self.party_sync.is_connected:

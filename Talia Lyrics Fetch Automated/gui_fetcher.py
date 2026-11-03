@@ -234,11 +234,11 @@ class LyricsFetcherWindow(QWidget):
         main_layout.addLayout(header_layout)
 
         # Tabs: Library Sync, Search, Calibrate
-        tabs = QTabWidget()
-        tabs.addTab(self._create_batch_tab(), "Library Sync")
-        tabs.addTab(self._create_lookup_tab(), "Search")
-        tabs.addTab(self._create_calibrator_tab(), "Calibrate")
-        main_layout.addWidget(tabs)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._create_batch_tab(), "Library Sync")
+        self.tabs.addTab(self._create_lookup_tab(), "Search")
+        self.tabs.addTab(self._create_calibrator_tab(), "Calibrate")
+        main_layout.addWidget(self.tabs)
 
     def _create_batch_tab(self) -> QWidget:
         tab = QWidget()
@@ -492,6 +492,12 @@ class LyricsFetcherWindow(QWidget):
         self.lbl_cal_onset.setText(f"Vocal entry: {entry:.2f}s" if entry > 0 else "Vocal entry: N/A")
 
         lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
+        if not os.path.exists(lrc_path):
+            base_name = os.path.splitext(os.path.basename(audio_path))[0]
+            cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "lyrics_cache")
+            candidate = os.path.join(cache_dir, base_name + ".lrc")
+            if os.path.exists(candidate):
+                lrc_path = candidate
         if os.path.exists(lrc_path):
             with open(lrc_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()

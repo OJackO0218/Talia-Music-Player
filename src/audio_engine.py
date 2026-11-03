@@ -4,6 +4,7 @@ High-performance audio streaming engine with vectorized FFT spectral analysis.
 
 import ctypes
 import heapq
+import math
 import logging
 import os
 import random
@@ -90,6 +91,8 @@ class CyberAudioEngine:
         self._shuffle = False
         self._shuffle_order = []
         self._shuffle_pos = -1
+        self._played_indices: set[int] = set()
+        self._shuffle_history: list[int] = []
         self.track_finished = False
         self.queue = []
 
@@ -118,10 +121,14 @@ class CyberAudioEngine:
         self._shuffle = bool(enabled)
         if self._shuffle:
             self.rebuild_shuffle_order(starting_index=self.current_index)
+            if 0 <= self.current_index < len(self.playlist):
+                self._played_indices.add(self.current_index)
             self._trigger_preload_next()
         else:
             self._shuffle_order.clear()
             self._shuffle_pos = -1
+            self._played_indices.clear()
+            self._shuffle_history.clear()
             self._trigger_preload_next()
 
     def reset_bpm_tracking(self):
@@ -313,26 +320,39 @@ class CyberAudioEngine:
         last_key: str | None = None
         if 0 <= starting_index < n:
             last_key = self._extract_cluster_key(self.playlist[starting_index])
-            clusters[last_key].remove(starting_index)
+            if starting_index in clusters.get(last_key, []):
+                clusters[last_key].remove(starting_index)
+                if not clusters[last_key]:
+                    del clusters[last_key]
             order.append(starting_index)
 
-        # 3. Greedy interleave: always take from the largest remaining cluster,
-        #    unless it matches the previous artist and another cluster is available.
-        heap: list[tuple[int, float, str, list[int]]] = []
-        for key, indices in clusters.items():
-            if indices:
-                heapq.heappush(heap, (-len(indices), random.random(), key, indices))
-        while heap:
-            entry = heapq.heappop(heap)
-            if entry[2] == last_key and heap:
-                other = heapq.heappop(heap)
-                heapq.heappush(heap, entry)
-                entry = other
-            _neg_count, _tie, key, indices = entry
-            order.append(indices.pop(0))
-            last_key = key
-            if indices:
-                heapq.heappush(heap, (-len(indices), random.random(), key, indices))
+        # 3. Dynamic anti-clustering with weighted random reach:
+        #    Prevents starvation of smaller artists by sampling proportionally from all
+        #    eligible clusters, while prioritizing critical clusters to eliminate adjacent repeats.
+        while clusters:
+            rem_total = sum(len(indices) for indices in clusters.values())
+            critical_key = None
+            for k, v in clusters.items():
+                if len(v) >= math.ceil(rem_total / 2.0):
+                    critical_key = k
+                    break
+
+            eligible = [k for k in clusters.keys() if k != last_key]
+            if not eligible:
+                eligible = list(clusters.keys())
+
+            if critical_key and critical_key in eligible:
+                chosen_key = critical_key
+            else:
+                weights = [len(clusters[k]) for k in eligible]
+                chosen_key = random.choices(eligible, weights=weights, k=1)[0]
+
+            chosen_idx = clusters[chosen_key].pop()
+            order.append(chosen_idx)
+            last_key = chosen_key
+            if not clusters[chosen_key]:
+                del clusters[chosen_key]
+
         self._shuffle_order = order
         self._shuffle_pos = 0
 
@@ -376,7 +396,12 @@ class CyberAudioEngine:
             self.current_index = -1
             self._stop_for_playlist_change()
         if self._shuffle and self.playlist:
-            self.rebuild_shuffle_order(starting_index=self.current_index)
+            if current_track and current_track in self.playlist:
+                self.rebuild_shuffle_order(starting_index=self.current_index)
+            else:
+                self.rebuild_shuffle_order()
+                if self._shuffle_order:
+                    self.current_index = self._shuffle_order[0]
         else:
             self._shuffle_order.clear()
             self._shuffle_pos = -1
@@ -385,7 +410,19 @@ class CyberAudioEngine:
         """Loads and plays the track at the specified index."""
         if not self.playlist or idx < 0 or idx >= len(self.playlist):
             return False
+
+        if 0 <= self.current_index < len(self.playlist) and self.current_index != idx:
+            self._shuffle_history.append(self.current_index)
+            if len(self._shuffle_history) > 100:
+                self._shuffle_history.pop(0)
+
         self.current_index = idx
+        self._played_indices.add(idx)
+
+        # Reset cycle if all tracks have now been played once
+        if len(self._played_indices) >= len(self.playlist):
+            self._played_indices = {idx}
+
         if self._shuffle:
             if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
                 self.rebuild_shuffle_order(starting_index=idx)
@@ -501,8 +538,15 @@ class CyberAudioEngine:
             if self._shuffle:
                 if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
                     self.rebuild_shuffle_order(starting_index=self.current_index)
-                next_pos = (self._shuffle_pos + 1) % len(self._shuffle_order)
-                next_track_path = self.playlist[self._shuffle_order[next_pos]]
+                unplayed = [
+                    i for i in self._shuffle_order
+                    if i not in self._played_indices and (len(self.playlist) <= 1 or i != self.current_index)
+                ]
+                if unplayed:
+                    next_track_path = self.playlist[unplayed[0]]
+                else:
+                    candidates = [i for i in self._shuffle_order if (len(self.playlist) <= 1 or i != self.current_index)]
+                    next_track_path = self.playlist[candidates[0]] if candidates else None
             else:
                 next_track_path = self.playlist[(self.current_index + 1) % len(self.playlist)]
         if not next_track_path:
@@ -601,8 +645,13 @@ class CyberAudioEngine:
             return
         if self.stream is None:
             if self.playlist:
-                if self.current_index < 0 or self.current_index >= len(self.playlist):
-                    idx = random.randint(0, len(self.playlist) - 1)
+                if self._shuffle:
+                    if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
+                        self.rebuild_shuffle_order()
+                    pos = self._shuffle_pos if (0 <= self._shuffle_pos < len(self._shuffle_order)) else 0
+                    idx = self._shuffle_order[pos]
+                elif self.current_index < 0 or self.current_index >= len(self.playlist):
+                    idx = 0
                 else:
                     idx = self.current_index
                 self.play_index(idx)
@@ -646,17 +695,29 @@ class CyberAudioEngine:
         if self._shuffle:
             if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
                 self.rebuild_shuffle_order(starting_index=self.current_index)
-            self._shuffle_pos += 1
-            if self._shuffle_pos >= len(self._shuffle_order):
-                last_idx = self._shuffle_order[-1] if self._shuffle_order else -1
+
+            # Strict no-repeat shuffle: always select from remaining unplayed tracks in cycle,
+            # and guarantee we NEVER replay the current track when pressing Next.
+            unplayed = [
+                i for i in self._shuffle_order
+                if i not in self._played_indices and (len(self.playlist) <= 1 or i != self.current_index)
+            ]
+            if not unplayed:
+                last_idx = self.current_index
+                self._played_indices.clear()
                 self.rebuild_shuffle_order()
                 if len(self._shuffle_order) > 1 and self._shuffle_order[0] == last_idx:
                     self._shuffle_order[0], self._shuffle_order[1] = (
                         self._shuffle_order[1],
                         self._shuffle_order[0],
                     )
-                self._shuffle_pos = 0
-            idx = self._shuffle_order[self._shuffle_pos]
+                unplayed = [i for i in self._shuffle_order if i != last_idx]
+                if not unplayed:
+                    unplayed = list(self._shuffle_order)
+
+            idx = unplayed[0]
+            if idx in self._shuffle_order:
+                self._shuffle_pos = self._shuffle_order.index(idx)
         else:
             idx = (self.current_index + 1) % len(self.playlist)
         self.play_index(idx)
@@ -671,6 +732,15 @@ class CyberAudioEngine:
         if self.get_position() > 3.0:
             self.seek(0)
         else:
+            if self._shuffle and self._shuffle_history:
+                prev_idx = self._shuffle_history.pop()
+                self.current_index = prev_idx
+                if prev_idx in self._shuffle_order:
+                    self._shuffle_pos = self._shuffle_order.index(prev_idx)
+                path = self.playlist[prev_idx]
+                self.load_file(path, auto_play=True)
+                return
+
             if self._shuffle:
                 if not self._shuffle_order or len(self._shuffle_order) != len(self.playlist):
                     self.rebuild_shuffle_order(starting_index=self.current_index)

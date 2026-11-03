@@ -125,9 +125,9 @@ def bundle_ffmpeg() -> None:
 
 def write_release_settings() -> None:
     settings = {
-        "pos_x": 1028,
-        "pos_y": 358,
-        "char_size": 300,
+        "pos_x": 1347,
+        "pos_y": 630,
+        "char_size": 200,
         "eye_sensitivity": 1.68,
         "opacity": 1.0,
         "bass_pop": True,
@@ -139,14 +139,17 @@ def write_release_settings() -> None:
         "shuffle": False,
         "eco_mode": False,
         "show_startup_guide": True,
-        "lyrics_x": 218,
-        "lyrics_y": 664,
+        "lyrics_x": 427,
+        "lyrics_y": 727,
         "show_lyrics": True,
-        "lyrics_color": "#f472b6",
+        "lyrics_color": "#00ffff",
+        "lyrics_font_size": 20,
+        "lyrics_dialogue_mode": True,
         "lyrics_word_glow": True,
         "lyrics_font": "Rajdhani",
         "download_folder": "",
         "discord_rpc": True,
+        "head_bop": False,
         "_version": 2,
     }
     with open(os.path.join(APP_STAGE, "settings.json"), "w", encoding="utf-8") as handle:

@@ -254,6 +254,14 @@
 
     function handleMessage(data) {
       if (data.type === "joined") {
+        if (!data.is_host && (!data.members || data.members.length <= 1)) {
+          handleDisconnect(`Room '${data.room}' does not exist or host is offline.`);
+          addLog(`[ERROR] Room '${data.room}' does not exist or host is offline!`, false);
+          if (ws) {
+            try { ws.send(JSON.stringify({ type: "leave" })); ws.close(); } catch(e) {}
+          }
+          return;
+        }
         isConnected = true;
         document.getElementById("statusDot").className = "status-dot online";
         document.getElementById("statusText").textContent = `Room ${data.room} | Members: ${data.members.join(", ")}`;
@@ -267,6 +275,13 @@
         addLog(`${data.name} joined the room! (${data.count} members)`);
       } else if (data.type === "peer_left") {
         addLog(`${data.name} left the room.`);
+        if (data.count <= 1) {
+          handleDisconnect("Host left the session. Room closed.");
+        }
+      } else if (data.type === "room_closed") {
+        handleDisconnect(data.reason || "Host has left the party session. Room closed.");
+      } else if (data.type === "host_transferred") {
+        addLog(`Host privileges transferred from ${data.old_host} to ${data.new_host}.`, true);
       } else if (data.type === "track_change") {
         currentTrack = data;
         duration = data.duration || 0;

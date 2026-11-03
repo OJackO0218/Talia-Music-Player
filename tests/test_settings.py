@@ -61,7 +61,7 @@ def test_lyrics_font_size_default_and_clamping(tmp_path):
     target = tmp_path / "settings.json"
     # Defaults
     loaded = load_settings(str(target))
-    assert loaded["lyrics_font_size"] == 25
+    assert loaded["lyrics_font_size"] == 20
 
     # Valid custom value
     save_settings({"lyrics_font_size": 36}, str(target))

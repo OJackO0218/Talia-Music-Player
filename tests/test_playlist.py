@@ -179,3 +179,183 @@ def test_show_in_explorer_command(tmp_path, monkeypatch):
     assert calls[0].startswith("explorer /select,")
     assert str(test_file) in calls[0]
 
+
+
+def test_track_context_menu_calibrate_and_remove(tmp_path, qapp, monkeypatch):
+    """Verifies that right click on songs exposes 'Calibrate this song lyric' and 'Remove Song and Lyric'."""
+    from audio_engine import CyberAudioEngine
+    from controller import ControlPanel
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from overlay import OverlayWindow
+    from PyQt6.QtWidgets import QMenu
+    from PyQt6.QtCore import QPoint
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"dummy")
+
+    engine = CyberAudioEngine()
+    engine.folder_path = str(tmp_path)
+    engine.refresh_playlist()
+
+    mgr = LyricsManager()
+    lyrics = LyricsOverlayWindow(engine, mgr)
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    captured_actions = []
+    monkeypatch.setattr(
+        QMenu,
+        "exec",
+        lambda menu, pos: (captured_actions.extend([a.text() for a in menu.actions()]), None)[1],
+    )
+
+    panel._exec_track_menu(str(song), 0, QPoint(0, 0))
+
+    assert "Calibrate this song lyric" in captured_actions
+    assert "Remove Song and Lyric" in captured_actions
+    assert "Delete Lyric" in captured_actions
+
+    cal_called = []
+    monkeypatch.setattr(
+        panel,
+        "open_lyric_fetcher",
+        lambda track_path, select_calibrate_tab: cal_called.append((track_path, select_calibrate_tab)),
+    )
+    panel.calibrate_song_lyrics(str(song))
+    assert cal_called == [(str(song), True)]
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+def test_track_menu_has_move_and_duplicate(tmp_path, qapp, monkeypatch):
+    from audio_engine import CyberAudioEngine
+    from controller import ControlPanel
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from overlay import OverlayWindow
+    from PyQt6.QtWidgets import QMenu
+    from PyQt6.QtCore import QPoint
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"dummy")
+
+    engine = CyberAudioEngine()
+    engine.folder_path = str(tmp_path)
+    engine.refresh_playlist()
+
+    mgr = LyricsManager()
+    lyrics = LyricsOverlayWindow(engine, mgr)
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    captured_actions = []
+    monkeypatch.setattr(
+        QMenu,
+        "exec",
+        lambda menu, pos: (captured_actions.extend([a.text() for a in menu.actions()]), None)[1],
+    )
+
+    panel._exec_track_menu(str(song), 0, QPoint(0, 0))
+
+    assert "Move to Folder..." in captured_actions
+    assert "Duplicate to Folder..." in captured_actions
+    assert "Calibrate this song lyric" in captured_actions
+    assert "Remove Song and Lyric" in captured_actions
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+def test_move_track_to_folder_with_lyrics(tmp_path, qapp, monkeypatch):
+    from audio_engine import CyberAudioEngine
+    from controller import ControlPanel
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from overlay import OverlayWindow
+    from PyQt6.QtWidgets import QFileDialog
+
+    src_dir = tmp_path / "source"
+    dest_dir = tmp_path / "dest"
+    src_dir.mkdir()
+    dest_dir.mkdir()
+
+    song = src_dir / "neon_city.mp3"
+    lrc = src_dir / "neon_city.lrc"
+    song.write_bytes(b"audio-data")
+    lrc.write_text("[00:01.00]Cyberpunk song", encoding="utf-8")
+
+    engine = CyberAudioEngine()
+    engine.folder_path = str(tmp_path)
+    engine.refresh_playlist()
+
+    mgr = LyricsManager()
+    lyrics = LyricsOverlayWindow(engine, mgr)
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Mock QFileDialog.getExistingDirectory to select dest_dir
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args, **kwargs: str(dest_dir))
+
+    panel.move_track_to_folder(str(song), orig_idx=0)
+
+    # Source files should no longer exist in src_dir
+    assert not song.exists()
+    assert not lrc.exists()
+
+    # Destination files must exist in dest_dir
+    dest_song = dest_dir / "neon_city.mp3"
+    dest_lrc = dest_dir / "neon_city.lrc"
+    assert dest_song.exists()
+    assert dest_lrc.exists()
+    assert dest_lrc.read_text(encoding="utf-8") == "[00:01.00]Cyberpunk song"
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+def test_duplicate_track_to_folder_same_folder(tmp_path, qapp, monkeypatch):
+    from audio_engine import CyberAudioEngine
+    from controller import ControlPanel
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from overlay import OverlayWindow
+    from PyQt6.QtWidgets import QFileDialog
+
+    song = tmp_path / "synth.mp3"
+    lrc = tmp_path / "synth.lrc"
+    song.write_bytes(b"synth-audio")
+    lrc.write_text("[00:01.00]Synthwave line", encoding="utf-8")
+
+    engine = CyberAudioEngine()
+    engine.folder_path = str(tmp_path)
+    engine.refresh_playlist()
+
+    mgr = LyricsManager()
+    lyrics = LyricsOverlayWindow(engine, mgr)
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Mock QFileDialog to return same folder
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args, **kwargs: str(tmp_path))
+
+    panel.duplicate_track_to_folder(str(song))
+
+    # Original files still exist
+    assert song.exists()
+    assert lrc.exists()
+
+    # Duplicate copy exists with companion lyrics
+    copy_song = tmp_path / "synth (Copy).mp3"
+    copy_lrc = tmp_path / "synth (Copy).lrc"
+    assert copy_song.exists()
+    assert copy_lrc.exists()
+    assert copy_lrc.read_text(encoding="utf-8") == "[00:01.00]Synthwave line"
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()

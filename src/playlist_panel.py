@@ -3,12 +3,14 @@
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from typing import Optional, Tuple
 
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -359,10 +361,13 @@ class PlaylistPanelMixin:
         action_queue = menu.addAction("Add to Queue")
         action_play_next = menu.addAction("Play Next in Queue")
         menu.addSeparator()
+        action_calibrate = menu.addAction("Calibrate this song lyric")
+        action_move = menu.addAction("Move to Folder...")
+        action_duplicate = menu.addAction("Duplicate to Folder...")
         action_open = menu.addAction("Show in Explorer")
         menu.addSeparator()
         action_del_lyric = menu.addAction("Delete Lyric")
-        action_del_song = menu.addAction("Delete Song & Lyric")
+        action_del_song = menu.addAction("Remove Song and Lyric")
 
         selected = menu.exec(global_pos)
         if selected == action_play:
@@ -380,12 +385,185 @@ class PlaylistPanelMixin:
             self.audio_engine.add_to_queue_next(path)
             self.refresh_queue_ui()
             self.queue_container.setVisible(True)
+        elif selected == action_calibrate:
+            self.calibrate_song_lyrics(path)
+        elif selected == action_move:
+            self.move_track_to_folder(path, orig_idx)
+        elif selected == action_duplicate:
+            self.duplicate_track_to_folder(path)
         elif selected == action_open:
             self.show_in_explorer(path)
         elif selected == action_del_lyric:
             self.delete_track_lyrics(path)
         elif selected == action_del_song:
             self.delete_track_and_lyrics(path, orig_idx)
+
+    def move_track_to_folder(self, path: str, orig_idx: Optional[int] = None):
+        """Prompts user for a destination folder, then moves the audio track and companion lyrics."""
+        if not path or not os.path.exists(path):
+            self._show_info_dialog("File Not Found", "The selected audio file does not exist on disk.")
+            return
+
+        dest_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Move Track to Folder",
+            os.path.dirname(path) or "",
+        )
+        if not dest_dir:
+            return
+
+        dest_dir = os.path.normpath(dest_dir)
+        src_dir = os.path.normpath(os.path.dirname(path))
+        if dest_dir.lower() == src_dir.lower():
+            self._show_info_dialog("Same Directory", "Destination folder is identical to the current folder.")
+            return
+
+        file_name = os.path.basename(path)
+        dest_audio_path = os.path.join(dest_dir, file_name)
+
+        if os.path.exists(dest_audio_path):
+            if not self._confirm_action(
+                "Overwrite Existing File?",
+                f"A file named '{file_name}' already exists in the destination folder.\nDo you want to overwrite it?",
+                danger_text="Overwrite",
+            ):
+                return
+
+        # Check if the track being moved is currently playing
+        norm_target = os.path.normpath(path).lower()
+        is_current = False
+        cur_idx = self.audio_engine.current_index
+        if 0 <= cur_idx < len(self.audio_engine.playlist):
+            cur_path = self.audio_engine.playlist[cur_idx]
+            if os.path.normpath(cur_path).lower() == norm_target:
+                is_current = True
+
+        if is_current:
+            self.audio_engine._stop_for_playlist_change()
+            self.sync_play_state()
+            mgr = (
+                getattr(self.audio_engine, "lyrics_manager", None)
+                or getattr(self.lyrics_overlay, "lyrics_manager", None)
+            )
+            if mgr and hasattr(mgr, "clear_lyrics"):
+                mgr.clear_lyrics()
+            if hasattr(self, "lyrics_overlay") and self.lyrics_overlay:
+                if hasattr(self.lyrics_overlay, "reset_lyrics_display"):
+                    self.lyrics_overlay.reset_lyrics_display()
+                else:
+                    self.lyrics_overlay.update()
+
+        if hasattr(self.audio_engine, "_invalidate_preload_cache"):
+            self.audio_engine._invalidate_preload_cache()
+
+        # Find companion lyrics (.lrc) before moving audio file
+        local_lrc, cached_lrc = self.get_track_lyrics_paths(path)
+        base_no_ext = os.path.splitext(file_name)[0]
+        dest_lrc_path = os.path.join(dest_dir, f"{base_no_ext}.lrc")
+
+        try:
+            shutil.move(path, dest_audio_path)
+        except PermissionError:
+            self._show_info_dialog(
+                "File In Use",
+                f"Cannot move '{file_name}' because it is locked by another process.\nPlease stop playback or try again.",
+            )
+            return
+        except Exception as exc:
+            self._show_info_dialog("Move Error", f"Failed to move file: {exc}")
+            return
+
+        # Move or copy companion lyrics to match new track location
+        if local_lrc and os.path.exists(local_lrc):
+            try:
+                shutil.move(local_lrc, dest_lrc_path)
+            except Exception as exc:
+                log.warning("Could not move companion lyric file: %s", exc)
+        elif cached_lrc and os.path.exists(cached_lrc):
+            try:
+                shutil.copy2(cached_lrc, dest_lrc_path)
+            except Exception as exc:
+                log.warning("Could not copy cached lyric file: %s", exc)
+
+        # Update queue references
+        if hasattr(self.audio_engine, "queue"):
+            self.audio_engine.queue = [
+                dest_audio_path if os.path.normpath(q).lower() == norm_target else q
+                for q in self.audio_engine.queue
+            ]
+
+        self.refresh_tracklist()
+        self.refresh_queue_ui()
+        log.info("[PLAYLIST] Moved track %s -> %s", path, dest_audio_path)
+
+    def duplicate_track_to_folder(self, path: str):
+        """Prompts user for a destination folder, then duplicates the audio track and companion lyrics."""
+        if not path or not os.path.exists(path):
+            self._show_info_dialog("File Not Found", "The selected audio file does not exist on disk.")
+            return
+
+        dest_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Duplicate Track to Folder",
+            os.path.dirname(path) or "",
+        )
+        if not dest_dir:
+            return
+
+        dest_dir = os.path.normpath(dest_dir)
+        src_dir = os.path.normpath(os.path.dirname(path))
+        file_name = os.path.basename(path)
+        base_name, ext = os.path.splitext(file_name)
+
+        if dest_dir.lower() == src_dir.lower():
+            # Same folder duplication: generate unique non-conflicting filename
+            counter = 1
+            dest_name = f"{base_name} (Copy){ext}"
+            while os.path.exists(os.path.join(dest_dir, dest_name)):
+                counter += 1
+                dest_name = f"{base_name} (Copy {counter}){ext}"
+            dest_audio_path = os.path.join(dest_dir, dest_name)
+            dest_lrc_name = f"{os.path.splitext(dest_name)[0]}.lrc"
+        else:
+            dest_audio_path = os.path.join(dest_dir, file_name)
+            dest_lrc_name = f"{base_name}.lrc"
+            if os.path.exists(dest_audio_path):
+                if not self._confirm_action(
+                    "Overwrite Existing File?",
+                    f"A file named '{file_name}' already exists in destination folder.\nDo you want to overwrite it?",
+                    danger_text="Overwrite",
+                ):
+                    return
+
+        try:
+            shutil.copy2(path, dest_audio_path)
+        except Exception as exc:
+            self._show_info_dialog("Duplicate Error", f"Failed to duplicate file: {exc}")
+            return
+
+        # Duplicate companion lyrics if present
+        local_lrc, cached_lrc = self.get_track_lyrics_paths(path)
+        dest_lrc_path = os.path.join(dest_dir, dest_lrc_name)
+        if local_lrc and os.path.exists(local_lrc):
+            try:
+                shutil.copy2(local_lrc, dest_lrc_path)
+            except Exception as exc:
+                log.warning("Could not copy companion lyric file: %s", exc)
+        elif cached_lrc and os.path.exists(cached_lrc):
+            try:
+                shutil.copy2(cached_lrc, dest_lrc_path)
+            except Exception as exc:
+                log.warning("Could not copy cached lyric file: %s", exc)
+
+        self.refresh_tracklist()
+        log.info("[PLAYLIST] Duplicated track %s -> %s", path, dest_audio_path)
+
+    def calibrate_song_lyrics(self, path: str):
+        """Opens the lyric calibration tool loaded directly with the selected song."""
+        if hasattr(self, "open_lyric_fetcher"):
+            self.open_lyric_fetcher(track_path=path, select_calibrate_tab=True)
+        elif hasattr(self, "panel") and hasattr(self.panel, "open_lyric_fetcher"):
+            self.panel.open_lyric_fetcher(track_path=path, select_calibrate_tab=True)
 
     def show_in_explorer(self, target_path: str):
         """Highlights the file in Windows Explorer, or opens containing folder on other OS."""
@@ -667,6 +845,9 @@ class PlaylistPanelMixin:
         action_remove = menu.addAction("Remove from Queue")
         action_clear = menu.addAction("Clear Entire Queue")
         menu.addSeparator()
+        action_calibrate = menu.addAction("Calibrate this song lyric")
+        action_move = menu.addAction("Move to Folder...")
+        action_duplicate = menu.addAction("Duplicate to Folder...")
         action_open = menu.addAction("Show in Explorer")
         selected = menu.exec(self.list_queue.mapToGlobal(pos))
         if selected == action_play:
@@ -683,6 +864,15 @@ class PlaylistPanelMixin:
         elif selected == action_clear:
             self.audio_engine.clear_queue()
             self.refresh_queue_ui()
+        elif selected == action_calibrate:
+            if 0 <= row < len(self.audio_engine.queue):
+                self.calibrate_song_lyrics(self.audio_engine.queue[row])
+        elif selected == action_move:
+            if 0 <= row < len(self.audio_engine.queue):
+                self.move_track_to_folder(self.audio_engine.queue[row])
+        elif selected == action_duplicate:
+            if 0 <= row < len(self.audio_engine.queue):
+                self.duplicate_track_to_folder(self.audio_engine.queue[row])
         elif selected == action_open:
             if 0 <= row < len(self.audio_engine.queue):
                 self.show_in_explorer(self.audio_engine.queue[row])

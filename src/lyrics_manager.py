@@ -452,16 +452,27 @@ class LyricsManager:
             time_into_line = effective_time - ts
             word_count = max(1, len(text.split()))
 
-            # Calculate active duration to next line
+            # Calculate active duration to next line adaptively to bar tempo
             if idx + 1 < len(self.lines):
                 next_ts = self.lines[idx + 1][0]
                 gap = max(0.5, next_ts - ts)
-                est_dur = max(2.0, word_count * 0.42)
-                singing_dur = min(gap * 0.85, est_dur)
-                if gap > 5.5 and time_into_line > 4.5:
+                if gap <= 5.0:
+                    singing_dur = max(gap * 0.88, word_count * 0.55)
+                elif gap <= 10.0:
+                    singing_dur = max(gap * 0.78, word_count * 0.70)
+                else:
+                    singing_dur = min(gap - 2.0, max(5.0, word_count * 0.85))
+                singing_dur = min(gap - 0.1, singing_dur)
+
+                # Never cut off lyrics prematurely during slow bars or held notes:
+                # Keep active across the full gap when gap <= 8.5s.
+                # Only clear during long instrumental breaks (> 8.5s) after ample singing/tail time.
+                if gap > 8.5 and time_into_line > min(gap - 1.0, max(7.5, singing_dur + 2.0)):
                     return -1, "", 0.0, 0.0
             else:
-                singing_dur = max(2.5, word_count * 0.45)
+                singing_dur = max(4.0, word_count * 0.75)
+                if time_into_line > max(8.5, singing_dur + 2.5):
+                    return -1, "", 0.0, 0.0
             return idx, text, time_into_line, singing_dur
 
     def get_current_line(self, current_time: float) -> Tuple[int, str, float]:

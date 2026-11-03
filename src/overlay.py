@@ -21,6 +21,7 @@ from PyQt6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QPolygonF,
     QRadialGradient,
 )
 from PyQt6.QtMultimedia import QSoundEffect
@@ -1693,7 +1694,7 @@ class OverlayWindow(QWidget):
         if self.is_shutting_down:
             event.accept()
             return
-        if event.button() == Qt.MouseButton.RightButton:
+        if event.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
             self.right_drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self.is_right_dragging = True
             event.accept()
@@ -1723,7 +1724,7 @@ class OverlayWindow(QWidget):
         if self.is_shutting_down:
             event.accept()
             return
-        if (event.buttons() & Qt.MouseButton.RightButton) and getattr(
+        if (event.buttons() & (Qt.MouseButton.RightButton | Qt.MouseButton.MiddleButton)) and getattr(
             self, "is_right_dragging", False
         ):
             self.move(event.globalPosition().toPoint() - self.right_drag_pos)
@@ -1743,10 +1744,10 @@ class OverlayWindow(QWidget):
         if self.is_shutting_down:
             event.accept()
             return
-        if event.button() == Qt.MouseButton.RightButton:
+        if event.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
             if getattr(self, "is_right_dragging", False):
                 self.is_right_dragging = False
-                # Auto-save new position immediately after right-click drag!
+                # Auto-save new position immediately after right-click or middle-click drag!
                 if self.panel:
                     try:
                         cfg = self.panel.get_current_settings_dict()
@@ -1840,7 +1841,10 @@ class OverlayWindow(QWidget):
         if not self.audio_engine.playlist:
             return
         if self.audio_engine.current_index < 0:
-            start_idx = random.randint(0, len(self.audio_engine.playlist) - 1)
+            if getattr(self.audio_engine, "_shuffle", False) and getattr(self.audio_engine, "_shuffle_order", []):
+                start_idx = self.audio_engine._shuffle_order[0]
+            else:
+                start_idx = random.randint(0, len(self.audio_engine.playlist) - 1)
             self.audio_engine.play_index(start_idx)
         else:
             self.audio_engine.toggle_play_pause()

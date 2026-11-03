@@ -39,6 +39,19 @@ SHADOW_OFFSETS_STD = [
 SHADOW_OFFSET_ECO = QPointF(1.5, 1.5)
 BLOOM_OFFSETS = [QPointF(-1.0, 0.0), QPointF(1.0, 0.0), QPointF(0.0, -1.0), QPointF(0.0, 1.0)]
 
+# Cyberpunk 2077 Signature Red Palette (Dialogue Subtitles)
+CP2077_RED = QColor(255, 0, 60)              # Primary neon red #ff003c
+CP2077_RED_BLOOM = QColor(255, 0, 60, 160)   # Ambient bloom
+CP2077_RED_SHADOW = QColor(20, 0, 6, 230)    # Deep drop shadow
+
+# Tight, clean neon glow offsets for Cyberpunk 2077 speaker artist name
+CP2077_SPEAKER_GLOW_OFFSETS = [
+    QPointF(-1.2, 0.0),
+    QPointF(1.2, 0.0),
+    QPointF(0.0, -1.2),
+    QPointF(0.0, 1.2),
+]
+
 
 class LyricsOverlayWindow(QWidget):
     """Floating transparent desktop lyrics widget with customizable neon colors and click-through passthrough."""
@@ -52,6 +65,7 @@ class LyricsOverlayWindow(QWidget):
         # Visibility and mode flags
         self.is_enabled = True
         self.move_mode = False
+        self.dialogue_mode = True  # Cyberpunk 2077 dialogue subtitle mode
 
         # Color customization (defaults to Cyberpunk Neon Purple)
         self.color_hex = "#e879f9"
@@ -184,6 +198,30 @@ class LyricsOverlayWindow(QWidget):
         except Exception:
             pass
 
+    def get_current_artist(self) -> str:
+        """Extracts the artist name using Discord Rich Presence parsing rules."""
+        raw_title = ""
+        if hasattr(self.audio_engine, "get_current_track_title"):
+            raw_title = self.audio_engine.get_current_track_title()
+        if not raw_title and hasattr(self.audio_engine, "playlist"):
+            idx = getattr(self.audio_engine, "current_index", -1)
+            if 0 <= idx < len(self.audio_engine.playlist):
+                raw_title = os.path.basename(self.audio_engine.playlist[idx])
+        if raw_title:
+            try:
+                from discord_service import parse_track_info
+                _, artist = parse_track_info(raw_title)
+                if artist and artist not in ("Talia Player", "Talia Music Player", "Unknown Artist"):
+                    return artist
+            except Exception:
+                pass
+            clean = os.path.splitext(raw_title)[0].strip()
+            if " - " in clean:
+                artist = clean.split(" - ", 1)[0].strip()
+                if artist:
+                    return artist
+        return ""
+
     def init_position(self):
         """Centers horizontally in the middle-bottom of the screen (180px above taskbar)."""
         screen = QApplication.primaryScreen().geometry()
@@ -235,7 +273,8 @@ class LyricsOverlayWindow(QWidget):
         """Dynamically scales window width and height to comfortably fit the current font size."""
         screen = QApplication.primaryScreen()
         screen_geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
-        target_w = min(screen_geo.width() - 40, max(420, int(self.base_font_size * 23)))
+        # Expanded width by ~56% (+20% then +30%) to fit Cyberpunk dialogue speaker tag comfortably
+        target_w = min(screen_geo.width() - 40, max(655, int(self.base_font_size * 36.4)))
         target_h = max(56, int(self.base_font_size * 3.3))
 
         if keep_center:
@@ -469,10 +508,20 @@ class LyricsOverlayWindow(QWidget):
         font.setPointSize(base_pt)
         font.setWeight(QFont.Weight.Bold)
 
-        # Auto shrink-to-fit if text exceeds window width
+        # Cyberpunk 2077 Dialogue Subtitle Speaker
+        speaker_text = ""
+        if getattr(self, "dialogue_mode", True):
+            artist = self.get_current_artist()
+            if not artist and (self.move_mode or getattr(self.audio_engine, "is_playing", False)):
+                artist = "Talia"
+            if artist:
+                speaker_text = f"{artist}: "
+
+        # Auto shrink-to-fit if full combined line exceeds window width
         metrics = QFontMetrics(font)
         max_w = self.width() - 36
-        text_w = metrics.horizontalAdvance(text_to_draw)
+        full_line = f"{speaker_text}{text_to_draw}" if speaker_text else text_to_draw
+        text_w = metrics.horizontalAdvance(full_line)
         if text_w > max_w and text_w > 0:
             scale_ratio = max_w / float(text_w)
             scaled_pt = max(14, int(base_pt * scale_ratio))
@@ -487,21 +536,25 @@ class LyricsOverlayWindow(QWidget):
         # Render Spotify-style progressive word-by-word lighting OR full-line mode
         if getattr(self, "word_glow", True) and not self.move_mode:
             try:
-                cache_key = (text_to_draw, self.width(), self.height(), font.pointSize())
+                cache_key = (speaker_text, text_to_draw, self.width(), self.height(), font.pointSize())
                 if getattr(self, "_cached_layout_key", None) != cache_key:
+                    speaker_w = metrics.horizontalAdvance(speaker_text) if speaker_text else 0
                     words = [w for w in text_to_draw.split() if w]
                     if not words:
                         words = [text_to_draw]
                     num_words = len(words)
                     space_w = metrics.horizontalAdvance(" ")
                     word_widths = [metrics.horizontalAdvance(w) for w in words]
-                    total_w = sum(word_widths) + space_w * max(0, num_words - 1)
+                    lyrics_w = sum(word_widths) + space_w * max(0, num_words - 1)
+                    total_w = speaker_w + lyrics_w
                     start_x = (self.width() - total_w) / 2.0
                     baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
                     weights = [max(2, len(w.strip(",.!?\"'"))) for w in words]
                     total_weight = max(1.0, float(sum(weights)))
                     self._cached_layout_key = cache_key
                     self._cached_layout_data = (
+                        speaker_text,
+                        speaker_w,
                         words,
                         word_widths,
                         space_w,
@@ -513,6 +566,8 @@ class LyricsOverlayWindow(QWidget):
                     )
                 else:
                     (
+                        speaker_text,
+                        speaker_w,
                         words,
                         word_widths,
                         space_w,
@@ -522,8 +577,14 @@ class LyricsOverlayWindow(QWidget):
                         weights,
                         total_weight,
                     ) = self._cached_layout_data
+
+                # Draw Cyberpunk 2077 Speaker Artist with multi-layer soft holographic neon glow
+                if speaker_text:
+                    pos_speaker = QPointF(float(start_x), float(baseline_y))
+                    self._draw_cyberpunk_speaker(painter, pos_speaker, speaker_text, eff_opacity)
+
                 cum_weight = 0.0
-                current_x = start_x
+                current_x = start_x + speaker_w
                 for i, (word, w_width, weight) in enumerate(zip(words, word_widths, weights)):
                     w_start = cum_weight / total_weight
                     w_end = (cum_weight + weight) / total_weight
@@ -569,7 +630,7 @@ class LyricsOverlayWindow(QWidget):
                             max(
                                 0,
                                 int(
-                                    160
+                                    115
                                     * eff_opacity
                                     * min(1.0, p_word)
                                     * (1.0 + self.glow_flash + active_flash)
@@ -623,11 +684,81 @@ class LyricsOverlayWindow(QWidget):
             self._draw_full_line(painter, text_to_draw, eff_opacity)
         painter.restore()
 
-    def _draw_full_line(self, painter: QPainter, text_to_draw: str, eff_opacity: float):
-        """Renders the entire lyric line with glowing layered drop-shadow and bloom."""
-        draw_rect = QRect(0, 0, self.width(), self.height())
+    def _draw_cyberpunk_speaker(
+        self, painter: QPainter, pos: QPointF, text: str, eff_opacity: float
+    ):
+        """Renders authentic Cyberpunk 2077 dialogue speaker name with razor-sharp readability and clean shadow."""
+        if not text:
+            return
 
-        # Layer 1: High-contrast ambient shadow for 100% legibility on light & dark screens
+        # Layer 1: Ambient Drop Shadow for crisp legibility
+        sh_alpha = min(255, max(0, int(230 * eff_opacity)))
+        painter.setPen(
+            QColor(
+                CP2077_RED_SHADOW.red(),
+                CP2077_RED_SHADOW.green(),
+                CP2077_RED_SHADOW.blue(),
+                sh_alpha,
+            )
+        )
+        if self.eco_mode:
+            painter.drawText(pos + SHADOW_OFFSET_ECO, text)
+        else:
+            for offset in SHADOW_OFFSETS_STD:
+                painter.drawText(pos + offset, text)
+
+        # Layer 2: Tight Neon Red Bloom (noticeably higher glow than lyrics, tight 1.2px halo without letter-blur)
+        if not self.eco_mode:
+            speaker_glow_alpha = min(
+                255,
+                max(0, int(150 * eff_opacity * (1.0 + self.glow_flash * 0.35))),
+            )
+            painter.setPen(
+                QColor(
+                    CP2077_RED.red(),
+                    CP2077_RED.green(),
+                    CP2077_RED.blue(),
+                    speaker_glow_alpha,
+                )
+            )
+            for offset in CP2077_SPEAKER_GLOW_OFFSETS:
+                painter.drawText(pos + offset, text)
+
+        # Layer 3: 100% Crisp, Vibrant Red Text on top (razor-sharp legibility)
+        fg_red = QColor(
+            CP2077_RED.red(),
+            CP2077_RED.green(),
+            CP2077_RED.blue(),
+            min(255, max(0, int(255 * eff_opacity))),
+        )
+        painter.setPen(fg_red)
+        painter.drawText(pos, text)
+
+    def _draw_full_line(self, painter: QPainter, text_to_draw: str, eff_opacity: float):
+        """Renders the entire lyric line with dialogue speaker and layered bloom."""
+        speaker_text = ""
+        if getattr(self, "dialogue_mode", True):
+            artist = self.get_current_artist()
+            if not artist and (self.move_mode or getattr(self.audio_engine, "is_playing", False)):
+                artist = "Talia"
+            if artist:
+                speaker_text = f"{artist}: "
+
+        metrics = painter.fontMetrics()
+        speaker_w = metrics.horizontalAdvance(speaker_text) if speaker_text else 0
+        text_w = metrics.horizontalAdvance(text_to_draw)
+        total_w = speaker_w + text_w
+        start_x = (self.width() - total_w) / 2.0
+        baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
+
+        if speaker_text:
+            pos_speaker = QPointF(float(start_x), float(baseline_y))
+            self._draw_cyberpunk_speaker(painter, pos_speaker, speaker_text, eff_opacity)
+
+        # Draw lyrics in theme color at start_x + speaker_w
+        pos_lyrics = QPointF(float(start_x + speaker_w), float(baseline_y))
+
+        # Layer 1: High-contrast shadow
         sh_color = QColor(
             self.shadow_color.red(),
             self.shadow_color.green(),
@@ -636,45 +767,28 @@ class LyricsOverlayWindow(QWidget):
         )
         painter.setPen(sh_color)
         if self.eco_mode:
-            painter.drawText(
-                draw_rect.translated(int(SHADOW_OFFSET_ECO.x()), int(SHADOW_OFFSET_ECO.y())),
-                Qt.AlignmentFlag.AlignCenter,
-                text_to_draw,
-            )
+            painter.drawText(pos_lyrics + SHADOW_OFFSET_ECO, text_to_draw)
         else:
             for offset in SHADOW_OFFSETS_STD:
-                painter.drawText(
-                    draw_rect.translated(int(offset.x()), int(offset.y())),
-                    Qt.AlignmentFlag.AlignCenter,
-                    text_to_draw,
-                )
+                painter.drawText(pos_lyrics + offset, text_to_draw)
 
-        # Layer 2: Radial Bloom Glow in selected theme color
-        bloom_alpha = min(255, max(0, int(140 * eff_opacity * (1.0 + self.glow_flash))))
+        # Layer 2: Radial Bloom Glow (-10% intensity for crisp visual comfort)
+        bloom_alpha = min(255, max(0, int(100 * eff_opacity * (1.0 + self.glow_flash))))
         bl_color = QColor(
             self.bloom_color.red(), self.bloom_color.green(), self.bloom_color.blue(), bloom_alpha
         )
         painter.setPen(bl_color)
         if not self.eco_mode:
             for offset in BLOOM_OFFSETS:
-                painter.drawText(
-                    draw_rect.translated(int(offset.x()), int(offset.y())),
-                    Qt.AlignmentFlag.AlignCenter,
-                    text_to_draw,
-                )
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            painter.drawText(
-                draw_rect.translated(dx, dy), Qt.AlignmentFlag.AlignCenter, text_to_draw
-            )
+                painter.drawText(pos_lyrics + offset, text_to_draw)
 
-        # Layer 3: Vibrant Luminous Foreground Text
+        # Layer 3: Vibrant Foreground Text
         flash_boost = int(45 * self.glow_flash)
         fg_r = min(255, max(0, self.main_color.red() + flash_boost))
         fg_g = min(255, max(0, self.main_color.green() + flash_boost))
         fg_b = min(255, max(0, self.main_color.blue() + flash_boost))
-        fg_color = QColor(fg_r, fg_g, fg_b, min(255, max(0, int(255 * eff_opacity))))
-        painter.setPen(fg_color)
-        painter.drawText(draw_rect, Qt.AlignmentFlag.AlignCenter, text_to_draw)
+        painter.setPen(QColor(fg_r, fg_g, fg_b, min(255, max(0, int(255 * eff_opacity)))))
+        painter.drawText(pos_lyrics, text_to_draw)
 
     def wheelEvent(self, event):
         """Scroll wheel in Move Mode resizes the floating lyrics (like Talia character scaling)."""
@@ -700,6 +814,7 @@ class LyricsOverlayWindow(QWidget):
         if self.move_mode and event.button() in (
             Qt.MouseButton.LeftButton,
             Qt.MouseButton.RightButton,
+            Qt.MouseButton.MiddleButton,
         ):
             self.is_dragging = True
             self.drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -709,7 +824,7 @@ class LyricsOverlayWindow(QWidget):
         if (
             self.move_mode
             and self.is_dragging
-            and (event.buttons() & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
+            and (event.buttons() & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton | Qt.MouseButton.MiddleButton))
         ):
             self.move(event.globalPosition().toPoint() - self.drag_start_pos)
             event.accept()

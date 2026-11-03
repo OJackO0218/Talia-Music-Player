@@ -204,6 +204,12 @@ class SettingsDialog(QDialog):
         self.chk_word_glow.toggled.connect(self.panel.on_word_glow_toggled)
         layout_lyrics.addWidget(self.chk_word_glow)
 
+        self.chk_dialogue_mode = QCheckBox("Cyberpunk Dialogue Subtitles (Show Artist in Red)")
+        self.chk_dialogue_mode.setChecked(True)
+        self.chk_dialogue_mode.setToolTip("Displays the detected song artist on the left in Cyberpunk 2077 red as the dialogue speaker")
+        self.chk_dialogue_mode.toggled.connect(self.panel.on_dialogue_mode_toggled)
+        layout_lyrics.addWidget(self.chk_dialogue_mode)
+
         # Sync offset controls
         hbox_sync = QHBoxLayout()
         hbox_sync.setSpacing(4)

@@ -80,6 +80,13 @@ async def handler(websocket):
                     continue
 
                 current_room = room_code
+                if not is_host and (current_room not in ROOMS or not ROOMS[current_room]):
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "message": f"Room '{current_room}' does not exist or host is offline."
+                    }))
+                    continue
+
                 if current_room not in ROOMS:
                     ROOMS[current_room] = {}
 

@@ -79,6 +79,7 @@ def test_party_and_spotify_dialogs_construct(qapp):
 def test_party_sync_local_exchange():
     """Starts local party server and verifies message delivery between Host and Guest."""
     host_svc = PartySyncService()
+    _app = QCoreApplication.instance() or QCoreApplication([])
     guest_svc = PartySyncService()
 
     host_connected = []
@@ -250,3 +251,86 @@ def test_spotify_dialog_batch_download_ui_states(qapp):
     panel.hide()
     lyrics.hide()
     overlay.hide()
+
+
+def test_party_sync_host_transfer_and_auto_close():
+    """Tests host transfer and auto-closure on host departure between PartySyncService instances."""
+    host_svc = PartySyncService()
+    _app = QCoreApplication.instance() or QCoreApplication([])
+    guest_svc = PartySyncService()
+
+    host_connected = []
+    guest_connected = []
+    transferred_events = []
+    guest_errors = []
+
+    host_svc.connected.connect(lambda code, is_h, mem: host_connected.append(code))
+    guest_svc.connected.connect(lambda code, is_h, mem: guest_connected.append(code))
+    guest_svc.host_transferred.connect(lambda new_h, old_h: transferred_events.append((new_h, old_h)))
+    guest_svc.error_occurred.connect(lambda err: guest_errors.append(err))
+
+    test_port = 9888
+    host_svc.host_local_server(port=test_port, room_code="TRANS1", user_name="Alice")
+
+    for _ in range(50):
+        QCoreApplication.processEvents()
+        if host_connected:
+            break
+        time.sleep(0.05)
+
+    assert len(host_connected) == 1
+    assert host_svc.is_host is True
+
+    guest_svc.join_session("TRANS1", user_name="Bob", relay_url=f"ws://127.0.0.1:{test_port}")
+
+    for _ in range(50):
+        QCoreApplication.processEvents()
+        if guest_connected:
+            break
+        time.sleep(0.05)
+
+    assert len(guest_connected) == 1
+    assert guest_svc.is_host is False
+
+    # 1. Host transfers role to Bob
+    host_svc.transfer_host("Bob")
+
+    for _ in range(30):
+        QCoreApplication.processEvents()
+        if transferred_events:
+            break
+        time.sleep(0.05)
+
+    assert len(transferred_events) == 1
+    assert transferred_events[0] == ("Bob", "Alice")
+    assert guest_svc.is_host is True
+    assert host_svc.is_host is False
+
+    # Cleanup
+    host_svc.disconnect_session()
+    guest_svc.disconnect_session()
+
+
+def test_party_sync_reject_phantom_room():
+    """Verifies that joining a non-existent room without a host is rejected."""
+    _app = QCoreApplication.instance() or QCoreApplication([])
+    guest_svc = PartySyncService()
+    connected_list = []
+    error_list = []
+
+    guest_svc.connected.connect(lambda code, is_h, mem: connected_list.append(code))
+    guest_svc.error_occurred.connect(lambda err: error_list.append(err))
+
+    # Join random room with no host online
+    guest_svc.join_session("NO_HOST_ROOM_XYZ", user_name="Bob", relay_url="wss://soft-mongoose-6754.ojacko0218.deno.net")
+
+    for _ in range(60):
+        QCoreApplication.processEvents()
+        if error_list:
+            break
+        time.sleep(0.05)
+
+    guest_svc.disconnect_session()
+    assert len(connected_list) == 0
+    assert len(error_list) >= 1
+    assert "does not exist or host is offline" in error_list[0]

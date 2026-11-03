@@ -62,11 +62,13 @@ class PartySyncService(QObject):
     status_message = pyqtSignal(str)         # UI notification
     error_occurred = pyqtSignal(str)         # Error message
     track_auto_downloaded = pyqtSignal(str, float, bool)  # target_dir, target_time, target_playing
+    host_transferred = pyqtSignal(str, str)  # new_host, old_host
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.room_code: str = ""
         self.user_name: str = "Listener"
+        self.host_name: str = ""
         self.is_host: bool = False
         self.is_connected: bool = False
         self.allow_guest_control: bool = False
@@ -111,6 +113,7 @@ class PartySyncService(QObject):
         self.room_code = code
         self.user_name = user_name or "Host"
         self.is_host = True
+        self.host_name = self.user_name
 
         asyncio.run_coroutine_threadsafe(
             self._host_coroutine(relay_url, code, self.user_name),
@@ -144,7 +147,7 @@ class PartySyncService(QObject):
                 await self._connect_and_run(url_raw, room_code, user_name, True)
             except Exception as exc:
                 log.warning("Could not reach remote relay %s: %s. Hosting locally.", url_raw, exc)
-                self.status_message.emit("Remote relay unreachable. Hosting session locally...")
+                self.error_occurred.emit(f"Could not reach remote relay ({exc}). Hosting locally (LAN only)...")
                 await self._start_embedded_and_connect(port, room_code, user_name)
 
     def join_session(self, room_code: str, user_name: str = "Listener", relay_url: str = DEFAULT_RELAY_URL):
@@ -158,6 +161,7 @@ class PartySyncService(QObject):
         self.room_code = code
         self.user_name = user_name or "Listener"
         self.is_host = False
+        self.host_name = ""
 
         asyncio.run_coroutine_threadsafe(
             self._connect_and_run(relay_url, code, self.user_name, False),
@@ -170,6 +174,7 @@ class PartySyncService(QObject):
         self.room_code = room_code.strip().upper() or "LOCAL"
         self.user_name = user_name or "Host"
         self.is_host = True
+        self.host_name = self.user_name
 
         asyncio.run_coroutine_threadsafe(
             self._start_embedded_and_connect(port, self.room_code, self.user_name),
@@ -251,6 +256,15 @@ class PartySyncService(QObject):
 
 
 
+    def transfer_host(self, target_user: str):
+        """Transfers host privileges to a specific listener in the active room."""
+        if not self.is_connected or not self.is_host:
+            return
+        self._queue_message({
+            "type": "transfer_host",
+            "target": target_user,
+        })
+
     # -------------------------------------------------------------------------
     # Internal Async Networking Engine
     # -------------------------------------------------------------------------
@@ -284,6 +298,7 @@ class PartySyncService(QObject):
 
 
         self.is_connected = False
+        self.host_name = ""
         self.disconnected.emit("Disconnected from session.")
 
     async def _start_embedded_and_connect(self, port: int, room_code: str, user_name: str):
@@ -321,6 +336,13 @@ class PartySyncService(QObject):
                             is_h = bool(d.get("is_host", False))
                             current_r = r
 
+                            if not is_h and (r not in rooms or not rooms[r]):
+                                await ws.send(json.dumps({
+                                    "type": "error",
+                                    "message": f"Room '{r}' does not exist or host is offline."
+                                }))
+                                continue
+
                             if r not in rooms:
                                 rooms[r] = {}
                             rooms[r][ws] = {"name": p_name, "is_host": is_h}
@@ -348,6 +370,28 @@ class PartySyncService(QObject):
                                     except Exception:
                                         pass
 
+                        elif mtype == "transfer_host" and current_r and current_r in rooms and is_h:
+                            target_name = str(d.get("target", "")).strip()
+                            target_ws = None
+                            for p_ws, p_info in rooms[current_r].items():
+                                if p_info.get("name") == target_name:
+                                    target_ws = p_ws
+                                    break
+                            if target_ws:
+                                is_h = False
+                                rooms[current_r][ws]["is_host"] = False
+                                rooms[current_r][target_ws]["is_host"] = True
+                                trans_payload = json.dumps({
+                                    "type": "host_transferred",
+                                    "new_host": target_name,
+                                    "old_host": p_name,
+                                })
+                                for peer in list(rooms[current_r].keys()):
+                                    try:
+                                        await peer.send(trans_payload)
+                                    except Exception:
+                                        pass
+
                         elif mtype == "leave":
                             break
 
@@ -367,17 +411,32 @@ class PartySyncService(QObject):
                         if ws in rooms[current_r]:
                             rooms[current_r].pop(ws, None)
                             if rooms[current_r]:
-                                members = [info["name"] for info in rooms[current_r].values()]
-                                peer_left_msg = json.dumps({
-                                    "type": "peer_left",
-                                    "name": p_name,
-                                    "count": len(members),
-                                })
-                                for peer in list(rooms[current_r].keys()):
-                                    try:
-                                        await peer.send(peer_left_msg)
-                                    except Exception:
-                                        pass
+                                has_remaining_host = any(info.get("is_host") for info in rooms[current_r].values())
+                                if is_h and not has_remaining_host:
+                                    close_msg = json.dumps({
+                                        "type": "room_closed",
+                                        "reason": "Host has left the party session. Room closed.",
+                                    })
+                                    for peer in list(rooms[current_r].keys()):
+                                        try:
+                                            await peer.send(close_msg)
+                                            await peer.close()
+                                        except Exception:
+                                            pass
+                                    rooms.pop(current_r, None)
+                                else:
+                                    members = [info["name"] for info in rooms[current_r].values()]
+                                    peer_left_msg = json.dumps({
+                                        "type": "peer_left",
+                                        "name": p_name,
+                                        "is_host": is_h,
+                                        "count": len(members),
+                                    })
+                                    for peer in list(rooms[current_r].keys()):
+                                        try:
+                                            await peer.send(peer_left_msg)
+                                        except Exception:
+                                            pass
                             else:
                                 rooms.pop(current_r, None)
 
@@ -436,6 +495,25 @@ class PartySyncService(QObject):
 
                 self.is_connected = True
                 members = ack.get("members", [user_name])
+
+                # Reject joining if we are a listener but no host is in the room
+                if not is_host and len(members) <= 1:
+                    log.warning("Join rejected: Room '%s' has no host online (members=%s)", room_code, members)
+                    try:
+                        await ws.send(json.dumps({"type": "leave"}))
+                        await ws.close()
+                    except Exception:
+                        pass
+                    self._ws = None
+                    self.is_connected = False
+                    self.error_occurred.emit(f"Room '{room_code}' does not exist or host is offline.")
+                    return
+
+                if is_host:
+                    self.host_name = user_name
+                elif members:
+                    self.host_name = members[0]
+
                 self.connected.emit(room_code, is_host, members)
                 self.status_message.emit(f"Connected to Room '{room_code}'! ({len(members)} listening)")
 
@@ -502,10 +580,35 @@ class PartySyncService(QObject):
                     pname = str(data.get("name", "Listener"))
                     count = int(data.get("count", 1))
                     self.peer_joined.emit(pname, count)
+                elif mtype == "room_closed":
+                    reason = str(data.get("reason", "Host has left the party session. Room closed."))
+                    log.info("Room closed event: %s", reason)
+                    self.error_occurred.emit(reason)
+                    self.status_message.emit(reason)
+                    asyncio.create_task(self._async_disconnect())
+                elif mtype == "host_transferred":
+                    new_host = str(data.get("new_host", "")).strip()
+                    old_host = str(data.get("old_host", "")).strip()
+                    self.host_name = new_host
+                    if self.user_name == new_host:
+                        self.is_host = True
+                        self.status_message.emit("You are now the party Host!")
+                    elif self.user_name == old_host:
+                        self.is_host = False
+                        self.status_message.emit(f"Host transferred to {new_host}.")
+                    else:
+                        self.status_message.emit(f"{new_host} is now the party Host.")
+                    self.host_transferred.emit(new_host, old_host)
                 elif mtype == "peer_left":
                     pname = str(data.get("name", "Listener"))
                     count = int(data.get("count", 1))
+                    left_is_host = bool(data.get("is_host", False))
                     self.peer_left.emit(pname, count)
+                    if not self.is_host:
+                        if left_is_host or pname == self.host_name or count <= 1:
+                            log.info("Host '%s' left. Auto-closing room '%s'.", pname, self.room_code)
+                            self.error_occurred.emit("Host has left the party session. Room closed.")
+                            asyncio.create_task(self._async_disconnect())
                 elif mtype == "error":
                     self.error_occurred.emit(str(data.get("message", "Room error")))
 
