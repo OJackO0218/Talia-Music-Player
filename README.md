@@ -6,6 +6,14 @@ A lightweight transparent desktop character and audio visualizer with eye tracki
 
 ---
 
+# Is it Safe?
+
+
+Yes it's safe, I even submitted it to Microsoft for further analysis.
+
+<img width="1792" height="813" alt="image" src="https://github.com/user-attachments/assets/9940d2ce-1b4c-445e-bc7f-eec610005757" />
+
+
 ## Download & Installation
 
 ### Option A: Portable Application (Recommended - No Python Needed)
