@@ -5,6 +5,7 @@ with customizable neon colors, smooth pop-up animations, and click-through backg
 
 import math
 import os
+import re
 import time
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, Qt, QTimer
@@ -198,6 +199,20 @@ class LyricsOverlayWindow(QWidget):
         except Exception:
             pass
 
+    @staticmethod
+    def clean_dialogue_speaker(artist: str) -> str:
+        """Cleans and isolates the primary artist so dialogue speaker tags stay compact and legible."""
+        if not artist:
+            return ""
+        # Split on commas, featuring tags, or slashes (multi-artist ensemble lists)
+        split_pattern = r"(?:,|\s+feat\.?|\s+ft\.?|\s+featuring|\s*/\s*|\s+x\s+)"
+        parts = re.split(split_pattern, artist, flags=re.IGNORECASE)
+        primary = parts[0].strip() if parts else artist.strip()
+        # Cap single excessively long names to 28 characters
+        if len(primary) > 28:
+            primary = primary[:26].rstrip() + "..."
+        return primary
+
     def get_current_artist(self) -> str:
         """Extracts the artist name using Discord Rich Presence parsing rules."""
         raw_title = ""
@@ -212,14 +227,14 @@ class LyricsOverlayWindow(QWidget):
                 from discord_service import parse_track_info
                 _, artist = parse_track_info(raw_title)
                 if artist and artist not in ("Talia Player", "Talia Music Player", "Unknown Artist"):
-                    return artist
+                    return self.clean_dialogue_speaker(artist)
             except Exception:
                 pass
             clean = os.path.splitext(raw_title)[0].strip()
             if " - " in clean:
                 artist = clean.split(" - ", 1)[0].strip()
                 if artist:
-                    return artist
+                    return self.clean_dialogue_speaker(artist)
         return ""
 
     def init_position(self):
@@ -547,7 +562,7 @@ class LyricsOverlayWindow(QWidget):
                     word_widths = [metrics.horizontalAdvance(w) for w in words]
                     lyrics_w = sum(word_widths) + space_w * max(0, num_words - 1)
                     total_w = speaker_w + lyrics_w
-                    start_x = (self.width() - total_w) / 2.0
+                    start_x = max(16.0, (self.width() - total_w) / 2.0)
                     baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
                     weights = [max(2, len(w.strip(",.!?\"'"))) for w in words]
                     total_weight = max(1.0, float(sum(weights)))
@@ -748,7 +763,7 @@ class LyricsOverlayWindow(QWidget):
         speaker_w = metrics.horizontalAdvance(speaker_text) if speaker_text else 0
         text_w = metrics.horizontalAdvance(text_to_draw)
         total_w = speaker_w + text_w
-        start_x = (self.width() - total_w) / 2.0
+        start_x = max(16.0, (self.width() - total_w) / 2.0)
         baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
 
         if speaker_text:
