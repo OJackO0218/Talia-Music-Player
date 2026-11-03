@@ -142,7 +142,7 @@ def write_release_settings() -> None:
         "lyrics_x": 427,
         "lyrics_y": 727,
         "show_lyrics": True,
-        "lyrics_color": "#00ffff",
+        "lyrics_color": "#64f0f8",
         "lyrics_font_size": 20,
         "lyrics_dialogue_mode": True,
         "lyrics_word_glow": True,

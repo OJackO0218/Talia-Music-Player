@@ -83,8 +83,9 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if self.lyrics_overlay:
             self.lyrics_overlay.panel = self
         self.lyric_presets = {
+            "Cyberpunk Blue": "#64f0f8",
+            "Electric Cyan": "#00ffff",
             "Pure White": "#ffffff",
-            "Cyberpunk Blue": "#00ffff",
             "Soft Cyan": "#38bdf8",
             "Soft Pink": "#f472b6",
             "Soft Purple": "#c084fc",
@@ -937,12 +938,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
                 self.discord_service.update_playback(raw_title, is_playing, pos, dur)
 
-        # Auto-advance / 4-second DJ crossfade when song approaches end or finishes
+        # Auto-advance / 2-second DJ crossfade when song approaches end or finishes
         if self.audio_engine.audio_mode != "desktop":
             is_finished = self.audio_engine.track_finished or (
                 dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)
             )
-            crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 4.0)
+            crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 2.0)
             if (
                 dur > (crossfade_dur * 2.0)
                 and pos >= (dur - crossfade_dur)

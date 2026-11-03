@@ -1074,11 +1074,11 @@ class OverlayWindow(QWidget):
                 self.osd_timer = 0.0
                 self.osd_symbol = None
 
-        # Instant auto-advance / 4-second DJ crossfade when song finishes
+        # Instant auto-advance / 2-second DJ crossfade when song finishes
         if self.audio_engine.audio_mode != "desktop":
             dur = self.audio_engine.get_duration()
             pos = self.audio_engine.get_position()
-            crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 4.0)
+            crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 2.0)
             if (
                 dur > (crossfade_dur * 2.0)
                 and pos >= (dur - crossfade_dur)

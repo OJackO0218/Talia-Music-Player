@@ -28,29 +28,28 @@ from config import (
 from lyrics_manager import LyricsManager
 
 # Pre-allocated QPointF offset arrays for zero-allocation shadow and bloom rendering
+# Directional natural drop shadow offsets (replaces harsh 360-degree border outline)
 SHADOW_OFFSETS_STD = [
-    QPointF(-2.0, 0.0),
-    QPointF(2.0, 0.0),
-    QPointF(0.0, -2.0),
-    QPointF(0.0, 2.0),
-    QPointF(-1.0, -1.0),
-    QPointF(1.0, 1.0),
-    QPointF(0.0, 3.0),
+    QPointF(0.8, 1.2),
+    QPointF(-0.4, 0.8),
 ]
-SHADOW_OFFSET_ECO = QPointF(1.5, 1.5)
+SHADOW_OFFSET_ECO = QPointF(0.8, 1.2)
 BLOOM_OFFSETS = [QPointF(-1.0, 0.0), QPointF(1.0, 0.0), QPointF(0.0, -1.0), QPointF(0.0, 1.0)]
 
-# Cyberpunk 2077 Signature Red Palette (Dialogue Subtitles)
-CP2077_RED = QColor(255, 0, 60)              # Primary neon red #ff003c
-CP2077_RED_BLOOM = QColor(255, 0, 60, 160)   # Ambient bloom
-CP2077_RED_SHADOW = QColor(20, 0, 6, 230)    # Deep drop shadow
+# Cyberpunk 2077 Signature Palette (Dialogue Subtitles)
+# Sampled directly from in-game dialogue subtitles:
+# Speaker coral red: [245, 101, 94] -> QColor(255, 110, 102) #ff6e66
+# Dialogue text cyan: [94, 228, 235] -> QColor(100, 240, 248) #64f0f8
+CP2077_RED = QColor(255, 110, 102)             # Authentic dialogue speaker coral red #ff6e66
+CP2077_RED_BLOOM = QColor(255, 110, 102, 90)   # Soft ambient speaker bloom
+CP2077_RED_SHADOW = QColor(15, 20, 25, 140)    # Soft directional shadow
 
 # Tight, clean neon glow offsets for Cyberpunk 2077 speaker artist name
 CP2077_SPEAKER_GLOW_OFFSETS = [
-    QPointF(-1.2, 0.0),
-    QPointF(1.2, 0.0),
-    QPointF(0.0, -1.2),
-    QPointF(0.0, 1.2),
+    QPointF(-1.0, 0.0),
+    QPointF(1.0, 0.0),
+    QPointF(0.0, -1.0),
+    QPointF(0.0, 1.0),
 ]
 
 
@@ -623,7 +622,7 @@ class LyricsOverlayWindow(QWidget):
                     pos_pt = QPointF(float(current_x), float(baseline_y + y_bounce))
 
                     # Layer 1: Ambient Drop Shadow
-                    sh_alpha = min(255, max(0, int(230 * eff_opacity * (0.60 + 0.40 * p_word))))
+                    sh_alpha = min(255, max(0, int(150 * eff_opacity * (0.60 + 0.40 * p_word))))
                     painter.setPen(
                         QColor(
                             self.shadow_color.red(),
@@ -647,7 +646,7 @@ class LyricsOverlayWindow(QWidget):
                             max(
                                 0,
                                 int(
-                                    115
+                                    80
                                     * eff_opacity
                                     * min(1.0, p_word)
                                     * (1.0 + self.glow_flash + active_flash)
@@ -704,12 +703,12 @@ class LyricsOverlayWindow(QWidget):
     def _draw_cyberpunk_speaker(
         self, painter: QPainter, pos: QPointF, text: str, eff_opacity: float
     ):
-        """Renders authentic Cyberpunk 2077 dialogue speaker name with razor-sharp readability and clean shadow."""
+        """Renders authentic Cyberpunk 2077 dialogue speaker name with razor-sharp readability and soft ambient glow."""
         if not text:
             return
 
         # Layer 1: Ambient Drop Shadow for crisp legibility
-        sh_alpha = min(255, max(0, int(230 * eff_opacity)))
+        sh_alpha = min(255, max(0, int(150 * eff_opacity)))
         painter.setPen(
             QColor(
                 CP2077_RED_SHADOW.red(),
@@ -724,11 +723,11 @@ class LyricsOverlayWindow(QWidget):
             for offset in SHADOW_OFFSETS_STD:
                 painter.drawText(pos + offset, text)
 
-        # Layer 2: Tight Neon Red Bloom (noticeably higher glow than lyrics, tight 1.2px halo without letter-blur)
+        # Layer 2: Tight Neon Red Bloom
         if not self.eco_mode:
             speaker_glow_alpha = min(
                 255,
-                max(0, int(150 * eff_opacity * (1.0 + self.glow_flash * 0.35))),
+                max(0, int(90 * eff_opacity * (1.0 + self.glow_flash * 0.35))),
             )
             painter.setPen(
                 QColor(
@@ -741,7 +740,7 @@ class LyricsOverlayWindow(QWidget):
             for offset in CP2077_SPEAKER_GLOW_OFFSETS:
                 painter.drawText(pos + offset, text)
 
-        # Layer 3: 100% Crisp, Vibrant Red Text on top (razor-sharp legibility)
+        # Layer 3: Authentic Cyberpunk Coral-Red Text
         fg_red = QColor(
             CP2077_RED.red(),
             CP2077_RED.green(),
@@ -780,7 +779,7 @@ class LyricsOverlayWindow(QWidget):
             self.shadow_color.red(),
             self.shadow_color.green(),
             self.shadow_color.blue(),
-            min(255, max(0, int(230 * eff_opacity))),
+            min(255, max(0, int(150 * eff_opacity))),
         )
         painter.setPen(sh_color)
         if self.eco_mode:
@@ -789,8 +788,8 @@ class LyricsOverlayWindow(QWidget):
             for offset in SHADOW_OFFSETS_STD:
                 painter.drawText(pos_lyrics + offset, text_to_draw)
 
-        # Layer 2: Radial Bloom Glow (-10% intensity for crisp visual comfort)
-        bloom_alpha = min(255, max(0, int(100 * eff_opacity * (1.0 + self.glow_flash))))
+        # Layer 2: Radial Bloom Glow
+        bloom_alpha = min(255, max(0, int(80 * eff_opacity * (1.0 + self.glow_flash))))
         bl_color = QColor(
             self.bloom_color.red(), self.bloom_color.green(), self.bloom_color.blue(), bloom_alpha
         )

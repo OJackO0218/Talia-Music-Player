@@ -184,16 +184,17 @@ def test_cyberpunk_blue_preset_and_box_width(qapp):
 
     # 1. Preset verification
     assert "Cyberpunk Blue" in panel.lyric_presets
-    assert panel.lyric_presets["Cyberpunk Blue"] == "#00ffff"
+    assert panel.lyric_presets["Cyberpunk Blue"] == "#64f0f8"
+    assert "Electric Cyan" in panel.lyric_presets
     assert "Soft Blue" not in panel.lyric_presets
 
-    # 2. Lyric box dimensions (+30% further expansion verification)
+    # 2. Lyric box dimensions (+40% expansion verification)
     lyrics.base_font_size = 25
     lyrics._update_window_dimensions(keep_center=False)
-    # 25 * 36.4 = 910 px width (bounded by screen width - 40)
+    # 25 * 51.0 = 1275 px width (bounded by screen width - 40, minimum 917)
     screen = lyrics.screen()
-    expected_w = min((screen.geometry().width() - 40) if screen else 1880, max(655, int(25 * 36.4)))
-    assert lyrics.width() >= 655
+    expected_w = min((screen.geometry().width() - 40) if screen else 1880, max(917, int(25 * 51.0)))
+    assert lyrics.width() >= 760  # bounded by offscreen screen width (800 - 40)
     assert lyrics.width() == expected_w
 
     panel.hide()

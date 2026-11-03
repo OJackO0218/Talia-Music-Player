@@ -105,8 +105,8 @@ class CyberAudioEngine:
         self._prev_bass_diff = 0.0
         self.is_beat_kick = False
 
-        # True 4-second DJ Overlap Crossfade
-        self._crossfade_duration = 4.0
+        # True 2-second DJ Overlap Crossfade
+        self._crossfade_duration = 2.0
         self._in_crossfade = False
         self._fading_out_feeder = None
         self._fading_out_sf = None
