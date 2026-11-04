@@ -715,3 +715,55 @@ def test_party_downloading_holds_advance(qapp, tmp_path):
     overlay.hide()
 
 
+@pytest.mark.gui
+def test_party_queue_prefetches_only_first_track(qapp, tmp_path):
+    """Tests that Talia only pre-downloads the immediate next song in queue (index 0), not subsequent ones."""
+    engine = CyberAudioEngine()
+    current_track = str(tmp_path / "CurrentSong.mp3")
+    with open(current_track, "w") as f:
+        f.write("audio")
+    engine.playlist = [current_track]
+    engine.current_index = 0
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    panel.party_sync.is_connected = True
+    panel.party_sync.is_host = True
+
+    prefetched = []
+    def fake_run_prefetch(track_data):
+        prefetched.append(track_data.get("id"))
+
+    panel._run_prefetch_next_track = fake_run_prefetch
+
+    # Add 3 songs to party queue
+    item1 = panel.party_sync.add_to_party_queue(title="Song1")
+    item2 = panel.party_sync.add_to_party_queue(title="Song2")
+    item3 = panel.party_sync.add_to_party_queue(title="Song3")
+
+    assert len(panel.party_sync.party_queue) == 3
+
+    # Trigger prefetch check
+    panel._check_and_prefetch_next_in_queue()
+
+    # ONLY item1 (index 0) must be prefetched! Item 2 and 3 must NOT be prefetched!
+    assert len(prefetched) == 1
+    assert prefetched[0] == item1.get("id")
+
+    # When prefetch completes, file is added to playlist without interrupting playback
+    dummy_file = str(tmp_path / "Downloaded_Song1.opus")
+    with open(dummy_file, "w") as f:
+        f.write("downloaded")
+    panel._on_prefetch_completed(True, dummy_file, item1)
+
+    assert dummy_file in panel.audio_engine.playlist
+    assert panel.audio_engine.current_index == 0  # Still on current track!
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+

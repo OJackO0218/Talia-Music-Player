@@ -61,9 +61,10 @@ class PartySyncService(QObject):
     heartbeat_received = pyqtSignal(float, bool)  # timestamp, is_playing
     status_message = pyqtSignal(str)         # UI notification
     error_occurred = pyqtSignal(str)         # Error message
-    track_auto_downloaded = pyqtSignal([str, float, bool], [str, float, bool, str])  # target_dir, target_time, target_playing, [file_path]
+    track_auto_downloaded = pyqtSignal(str, float, bool, str)  # target_dir, target_time, target_playing, file_path
     host_transferred = pyqtSignal(str, str)  # new_host, old_host
     queue_updated = pyqtSignal(list)         # list of queued track dicts
+    prefetch_completed = pyqtSignal(bool, str, dict)  # ok, file_path, track_data
 
     def __init__(self, parent=None):
         super().__init__(parent)

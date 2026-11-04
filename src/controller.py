@@ -3,6 +3,7 @@ from party_sync import PartySyncService
 from spotify_dialog import SpotifySyncDialog
 from spotify_sync import SpotifySyncService
 from discord_service import DiscordRpcService, parse_track_info
+from typing import Optional
 """Main controller panel for Talia playback, appearance, and configuration."""
 
 import logging
@@ -158,8 +159,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.party_sync.peer_joined.connect(self._on_party_peer_joined)
         self.party_sync.connected.connect(self._on_party_connected)
         self.party_sync.host_transferred.connect(self._on_party_host_transferred)
+        self.party_sync.queue_updated.connect(self._on_party_queue_updated)
+        self.party_sync.prefetch_completed.connect(self._on_prefetch_completed)
         self._is_handling_party_event = False
         self._last_party_heartbeat = 0.0
+        self._prefetching_track_id: Optional[str] = None
+        self._waiting_for_download_to_play: bool = False
         self.audio_engine.play_next_hook = self.play_next_track
 
         # Spotify Playlist Sync & Import Service
@@ -826,6 +831,127 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.list_tracks.setCurrentRow(r)
                 break
 
+    def refresh_queue_ui(self):
+        """Refreshes the room queue display in PartySyncDialog if open."""
+        if hasattr(self, "party_dialog") and self.party_dialog and hasattr(self.party_dialog, "_on_queue_updated"):
+            if hasattr(self, "party_sync") and self.party_sync:
+                self.party_dialog._on_queue_updated(self.party_sync.party_queue)
+
+    def _on_party_queue_updated(self, queue: list):
+        """Called whenever the room queue updates. Automatically checks and prefetches the next song."""
+        self.refresh_queue_ui()
+        self._check_and_prefetch_next_in_queue()
+
+    def _check_and_prefetch_next_in_queue(self):
+        """
+        Inspects the immediate next track in the Party Queue (index 0).
+        If not yet present in the local playlist/library, pre-downloads it
+        in the background ahead of time so transitions are seamless and instant.
+        Only prefetches the immediate next song (party_queue[0]), never later items.
+        """
+        if not hasattr(self, "party_sync") or not self.party_sync.is_connected:
+            return
+        if not self.party_sync.party_queue:
+            return
+
+        next_item = self.party_sync.party_queue[0]
+        item_id = next_item.get("id")
+
+        if getattr(self, "_prefetching_track_id", None) == item_id:
+            return
+
+        matched_idx = self.find_matching_party_track(next_item)
+        if matched_idx >= 0:
+            return
+
+        self._prefetching_track_id = item_id
+        log.info("[PARTY QUEUE] Pre-downloading next queued track ahead of time: %s", next_item.get("title"))
+
+        threading.Thread(
+            target=self._run_prefetch_next_track,
+            args=(next_item,),
+            daemon=True,
+            name="PartyQueuePrefetcher",
+        ).start()
+
+    def _run_prefetch_next_track(self, track_data: dict):
+        cur_folder = getattr(self.audio_engine, 'folder_path', None)
+        if cur_folder and os.path.isdir(cur_folder):
+            target_dir = os.path.join(cur_folder, "Downloaded Songs")
+        else:
+            target_dir = os.path.join(DEFAULT_MUSIC_DIR, "Downloaded Songs")
+        os.makedirs(target_dir, exist_ok=True)
+
+        query = track_data.get("yt_query")
+        if not query:
+            a = track_data.get("artist", "").strip()
+            t = track_data.get("title", "").strip()
+            if a.lower() in ("talia music player", "talia player", "unknown artist", "unknown"):
+                a = ""
+            query = f"{a} - {t}" if a else t
+        query = re.sub(r"(?i)\btalia\s+(?:music\s+)?player\s*[-:]?\s*", "", query).strip()
+
+        target_dur = float(track_data.get("duration", 0.0))
+        ok = False
+        final_path = ""
+        if hasattr(self, "downloader") and self.downloader:
+            ok, final_path = self.downloader.download_sync_query(
+                query,
+                target_dir,
+                track_info=track_data,
+                target_duration=target_dur,
+                return_path=True,
+            )
+        self.party_sync.prefetch_completed.emit(bool(ok), final_path or "", track_data)
+
+    def _on_prefetch_completed(self, ok: bool, file_path: str, track_data: dict):
+        item_id = track_data.get("id")
+        if getattr(self, "_prefetching_track_id", None) == item_id:
+            self._prefetching_track_id = None
+
+        if ok and file_path and os.path.exists(file_path):
+            norm_target = os.path.normcase(os.path.abspath(file_path))
+            if not any(os.path.normcase(os.path.abspath(p)) == norm_target for p in self.audio_engine.playlist):
+                self.audio_engine.playlist.append(file_path)
+                self.populate_playlist_ui()
+            log.info("[PARTY QUEUE] Pre-download ready for '%s'", track_data.get("title"))
+
+            if getattr(self, "_waiting_for_download_to_play", False) and getattr(self, "_party_downloading_track", None) == track_data:
+                self._waiting_for_download_to_play = False
+                self._party_downloading_track = None
+                matched_idx = self.find_matching_party_track(track_data)
+                if matched_idx >= 0:
+                    is_host = hasattr(self, "party_sync") and self.party_sync.is_host
+                    self._is_handling_party_event = True
+                    try:
+                        self.audio_engine.play_index(matched_idx)
+                        if is_host:
+                            self.audio_engine.play()
+                        else:
+                            seek_pos = getattr(self, "_last_known_host_pos", 0.0)
+                            if seek_pos > 0:
+                                self.audio_engine.seek(seek_pos)
+                            if getattr(self, "_last_known_host_playing", True):
+                                self.audio_engine.play()
+                            else:
+                                self.audio_engine.pause()
+                        self.sync_play_state()
+                    finally:
+                        self._is_handling_party_event = False
+
+                    if is_host:
+                        self._broadcast_party_track()
+                        self._check_and_prefetch_next_in_queue()
+        else:
+            log.warning("[PARTY QUEUE] Pre-download failed for '%s'", track_data.get("title"))
+            if getattr(self, "_waiting_for_download_to_play", False) and getattr(self, "_party_downloading_track", None) == track_data:
+                self._waiting_for_download_to_play = False
+                self._party_downloading_track = None
+                if hasattr(self, "lbl_track_title") and self.lbl_track_title:
+                    self.lbl_track_title.setText(f"[PARTY] Could not fetch '{track_data.get('title')}'")
+                if hasattr(self, "party_sync") and self.party_sync.is_host:
+                    QTimer.singleShot(1500, lambda: self.play_next_track(crossfade=False))
+
     def play_next_track(self, crossfade: bool = False) -> bool:
         """
         Advances to the next track.
@@ -840,7 +966,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 return False
 
             # If host is already waiting on a queued download, ignore duplicate trigger calls
-            if getattr(self, "_party_downloading_track", None):
+            if getattr(self, "_waiting_for_download_to_play", False) or getattr(self, "_party_downloading_track", None):
                 log.info("[PARTY SYNC] Party track download already in progress; holding advance.")
                 return False
 
@@ -853,13 +979,15 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                         self.sync_play_state()
                         self.refresh_queue_ui()
                         self._broadcast_party_track()
+                        # Inspect and prefetch the NEW next song in line!
+                        self._check_and_prefetch_next_in_queue()
                         return True
                     else:
-                        # Auto-download queued song for Host
-                        log.info("[PARTY QUEUE] Host auto-downloading queued track: %s", next_item.get("title"))
-                        # PAUSE playback immediately so audio doesn't run into next playlist track!
+                        is_mid_prefetch = (getattr(self, "_prefetching_track_id", None) == next_item.get("id"))
+                        log.info("[PARTY QUEUE] Host waiting on queued track: %s (prefetching=%s)", next_item.get("title"), is_mid_prefetch)
                         self.audio_engine.pause()
                         self._party_downloading_track = next_item
+                        self._waiting_for_download_to_play = True
 
                         title = next_item.get("title", "Unknown Track")
                         if hasattr(self, "lbl_track_title") and self.lbl_track_title:
@@ -879,11 +1007,14 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                             is_playing=False,
                         )
 
-                        threading.Thread(
-                            target=self._auto_download_party_track,
-                            args=(next_item, 0.0, True),
-                            daemon=True,
-                        ).start()
+                        if not is_mid_prefetch:
+                            self._prefetching_track_id = next_item.get("id")
+                            threading.Thread(
+                                target=self._run_prefetch_next_track,
+                                args=(next_item,),
+                                daemon=True,
+                                name="PartyQueuePrefetcher",
+                            ).start()
                         return True
 
         self.audio_engine.next_track(crossfade=crossfade)
