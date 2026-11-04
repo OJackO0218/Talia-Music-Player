@@ -576,21 +576,33 @@ class PartySyncDialog(DraggableClampedDialogMixin, QDialog):
             return
         title, artist = parse_track_info(text)
 
-        # Match against local playlist to attach exact filename & artist if already in library
+        # Match against local playlist / library to attach exact filename & artist if already on disk
         matched_fn = ""
-        playlist = getattr(self.panel.audio_engine, "playlist", []) if self.panel else []
-        norm_text = re.sub(r"[^a-z0-9]", "", text.lower())
-        norm_title = re.sub(r"[^a-z0-9]", "", title.lower())
-        for track_path in playlist:
-            fn = os.path.basename(track_path)
-            c_title, c_artist = parse_track_info(fn)
-            norm_fn = re.sub(r"[^a-z0-9]", "", fn.lower())
-            norm_ct = re.sub(r"[^a-z0-9]", "", c_title.lower())
-            if norm_text == norm_fn or norm_text == norm_ct or (norm_title and norm_title == norm_ct):
-                matched_fn = fn
+        if self.panel and hasattr(self.panel, "find_matching_party_track"):
+            matched_idx = self.panel.find_matching_party_track({"title": title, "artist": artist, "yt_query": text})
+            if matched_idx >= 0 and matched_idx < len(self.panel.audio_engine.playlist):
+                matched_path = self.panel.audio_engine.playlist[matched_idx]
+                matched_fn = os.path.basename(matched_path)
+                c_title, c_artist = parse_track_info(matched_fn)
                 if not artist and c_artist:
                     artist = c_artist
-                break
+                if c_title:
+                    title = c_title
+
+        if not matched_fn:
+            playlist = getattr(self.panel.audio_engine, "playlist", []) if self.panel else []
+            norm_text = re.sub(r"[^a-z0-9]", "", text.lower())
+            norm_title = re.sub(r"[^a-z0-9]", "", title.lower())
+            for track_path in playlist:
+                fn = os.path.basename(track_path)
+                c_title, c_artist = parse_track_info(fn)
+                norm_fn = re.sub(r"[^a-z0-9]", "", fn.lower())
+                norm_ct = re.sub(r"[^a-z0-9]", "", c_title.lower())
+                if norm_text == norm_fn or norm_text == norm_ct or (norm_title and norm_title == norm_ct):
+                    matched_fn = fn
+                    if not artist and c_artist:
+                        artist = c_artist
+                    break
 
         query = text
         if artist and " - " not in text:

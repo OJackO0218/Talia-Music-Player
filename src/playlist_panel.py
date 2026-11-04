@@ -403,10 +403,12 @@ class PlaylistPanelMixin:
             from discord_service import parse_track_info
             raw_fn = os.path.basename(path)
             title, artist = parse_track_info(raw_fn)
+            query = f"{artist} - {title}" if artist else title
             self.party_sync.add_to_party_queue(
                 title=title,
                 artist=artist,
                 filename=raw_fn,
+                yt_query=query,
             )
         elif selected == action_calibrate:
             self.calibrate_song_lyrics(path)

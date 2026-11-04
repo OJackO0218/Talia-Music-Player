@@ -220,6 +220,8 @@ class PartySyncService(QObject):
         }
         self._queue_message(payload)
 
+    broadcast_track_change = broadcast_track
+
     def broadcast_play(self, timestamp: float):
         """Broadcasts a Play command with the exact millisecond audio timestamp."""
         if not self.is_connected or (not self.is_host and not self.allow_guest_control):

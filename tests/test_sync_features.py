@@ -766,4 +766,190 @@ def test_party_queue_prefetches_only_first_track(qapp, tmp_path):
     overlay.hide()
 
 
+@pytest.mark.gui
+def test_find_matching_party_track_word_order_and_subfolder(qapp, tmp_path):
+    """Tests that arbitrary word order queries match local files and recursive disk scanning finds subfolder tracks."""
+    engine = CyberAudioEngine()
+    music_dir = tmp_path / "Music"
+    music_dir.mkdir()
+    engine.folder_path = str(music_dir)
+
+    # Track 1 in playlist with artist first
+    track1 = str(music_dir / "Petite Meller - High Forever.mp3")
+    with open(track1, "w") as f:
+        f.write("audio1")
+    engine.playlist = [track1]
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # 1. Reversed word order query (title first, no hyphens) matches track1
+    query_data = {
+        "title": "high forever petite meller",
+        "artist": "",
+        "yt_query": "high forever petite meller",
+    }
+    matched = panel.find_matching_party_track(query_data)
+    assert matched == 0
+
+    # 2. Subfolder track not yet in playlist
+    sub_dir = music_dir / "Pop" / "Hits"
+    sub_dir.mkdir(parents=True)
+    track2 = str(sub_dir / "Queen - Bohemian Rhapsody.mp3")
+    with open(track2, "w") as f:
+        f.write("audio2")
+
+    assert track2 not in panel.audio_engine.playlist
+    subfolder_query = {
+        "title": "bohemian rhapsody queen",
+        "artist": "",
+        "yt_query": "bohemian rhapsody queen",
+    }
+    matched2 = panel.find_matching_party_track(subfolder_query)
+    assert matched2 == 1
+    assert track2 in panel.audio_engine.playlist
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+@pytest.mark.gui
+def test_download_completion_unstucks_and_auto_plays(qapp, tmp_path):
+    """Tests that when a queued song finishes downloading while waiting, playback starts automatically and flags clear."""
+    import wave
+
+    engine = CyberAudioEngine()
+    track1 = str(tmp_path / "CurrentPlaying.wav")
+    with wave.open(track1, "w") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(44100)
+        wf.writeframes(b"\x00" * 4410 * 4)
+    engine.playlist = [track1]
+    engine.current_index = 0
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    panel.party_sync.is_connected = True
+    panel.party_sync.is_host = True
+    panel._run_prefetch_next_track = lambda item: None
+
+    # Host queue has a track not yet downloaded anywhere
+    queued_item = panel.party_sync.add_to_party_queue(
+        title="Synthetic Uncached Song 12345",
+        artist="Future Synthetic Artist",
+        yt_query="Synthetic Uncached Song 12345",
+    )
+
+    # Advance track (simulating current track finished)
+    panel.play_next_track(crossfade=False)
+
+    assert panel._waiting_for_download_to_play is True
+    assert panel._party_downloading_track is not None
+    assert "[PARTY] Downloading" in panel.lbl_track_title.text()
+
+    # Now the download finishes
+    downloaded_file = str(tmp_path / "Synthetic Uncached Song 12345.wav")
+    with wave.open(downloaded_file, "w") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(44100)
+        wf.writeframes(b"\x00" * 4410 * 4)
+
+    broadcasts = []
+    panel._broadcast_party_track = lambda: broadcasts.append(True)
+
+    panel._on_prefetch_completed(True, downloaded_file, queued_item)
+
+    # Waiting flags must be completely cleared
+    assert panel._waiting_for_download_to_play is False
+    assert panel._party_downloading_track is None
+    # Current index must now point to the downloaded song in playlist
+    assert panel.audio_engine.current_index == 1
+    assert panel.audio_engine.playlist[1] == downloaded_file
+    assert panel.audio_engine.is_playing is True
+    assert len(broadcasts) >= 1
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+@pytest.mark.gui
+def test_force_skip_unstucks_waiting_download(qapp, tmp_path):
+    """Tests that Next button force-skips out of a waiting download state without getting stuck."""
+    engine = CyberAudioEngine()
+    track1 = str(tmp_path / "Track1.mp3")
+    track2 = str(tmp_path / "Track2.mp3")
+    with open(track1, "w") as f:
+        f.write("1")
+    with open(track2, "w") as f:
+        f.write("2")
+    engine.playlist = [track1, track2]
+    engine.current_index = 0
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    panel.party_sync.is_connected = True
+    panel.party_sync.is_host = True
+
+    # Lock into waiting download state
+    panel._waiting_for_download_to_play = True
+    panel._party_downloading_track = {"title": "Stuck Track"}
+
+    # Next click triggers force skip
+    panel.on_next_clicked()
+
+    # Must be completely cleared and advanced to next playlist track!
+    assert panel._waiting_for_download_to_play is False
+    assert panel._party_downloading_track is None
+    assert panel.audio_engine.current_index == 1
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+@pytest.mark.gui
+def test_double_click_and_disconnect_clear_download_locks(qapp, tmp_path):
+    """Tests that double-clicking a track or disconnecting clears download waiting locks."""
+    engine = CyberAudioEngine()
+    track1 = str(tmp_path / "Track1.mp3")
+    track2 = str(tmp_path / "Track2.mp3")
+    with open(track1, "w") as f:
+        f.write("1")
+    with open(track2, "w") as f:
+        f.write("2")
+    engine.playlist = [track1, track2]
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    panel._waiting_for_download_to_play = True
+    panel._party_downloading_track = {"title": "Download"}
+
+    # Prev click clears lock
+    panel.on_prev_clicked()
+    assert panel._waiting_for_download_to_play is False
+    assert panel._party_downloading_track is None
+
+    # Re-lock and test disconnect
+    panel._waiting_for_download_to_play = True
+    panel._party_downloading_track = {"title": "Download"}
+    panel.party_sync.disconnected.emit("Left room")
+    assert panel._waiting_for_download_to_play is False
+    assert panel._party_downloading_track is None
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
 

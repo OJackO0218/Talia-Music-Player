@@ -158,6 +158,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.party_sync.track_auto_downloaded.connect(self._on_party_track_downloaded)
         self.party_sync.peer_joined.connect(self._on_party_peer_joined)
         self.party_sync.connected.connect(self._on_party_connected)
+        self.party_sync.disconnected.connect(self._on_party_disconnected)
         self.party_sync.host_transferred.connect(self._on_party_host_transferred)
         self.party_sync.queue_updated.connect(self._on_party_queue_updated)
         self.party_sync.prefetch_completed.connect(self._on_prefetch_completed)
@@ -911,15 +912,36 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         if ok and file_path and os.path.exists(file_path):
             norm_target = os.path.normcase(os.path.abspath(file_path))
-            if not any(os.path.normcase(os.path.abspath(p)) == norm_target for p in self.audio_engine.playlist):
+            target_idx = -1
+            for idx, p in enumerate(self.audio_engine.playlist):
+                if os.path.normcase(os.path.abspath(p)) == norm_target:
+                    target_idx = idx
+                    break
+            if target_idx == -1:
                 self.audio_engine.playlist.append(file_path)
+                target_idx = len(self.audio_engine.playlist) - 1
                 self.populate_playlist_ui()
-            log.info("[PARTY QUEUE] Pre-download ready for '%s'", track_data.get("title"))
+            log.info("[PARTY QUEUE] Pre-download ready for '%s' at index %d", track_data.get("title"), target_idx)
 
-            if getattr(self, "_waiting_for_download_to_play", False) and getattr(self, "_party_downloading_track", None) == track_data:
+            if hasattr(self, "party_sync") and self.party_sync.party_queue:
+                for q_item in self.party_sync.party_queue:
+                    if q_item.get("id") == item_id or q_item == track_data:
+                        q_item["local_path"] = file_path
+                        q_item["filename"] = os.path.basename(file_path)
+
+            waiting = getattr(self, "_waiting_for_download_to_play", False)
+            downloading_track = getattr(self, "_party_downloading_track", None)
+            is_matching_waiting = waiting and (
+                downloading_track is None
+                or downloading_track == track_data
+                or (item_id and downloading_track.get("id") == item_id)
+                or (downloading_track.get("title") and downloading_track.get("title") == track_data.get("title"))
+            )
+
+            if is_matching_waiting:
                 self._waiting_for_download_to_play = False
                 self._party_downloading_track = None
-                matched_idx = self.find_matching_party_track(track_data)
+                matched_idx = target_idx if 0 <= target_idx < len(self.audio_engine.playlist) else self.find_matching_party_track(track_data)
                 if matched_idx >= 0:
                     is_host = hasattr(self, "party_sync") and self.party_sync.is_host
                     self._is_handling_party_event = True
@@ -942,17 +964,26 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                     if is_host:
                         self._broadcast_party_track()
                         self._check_and_prefetch_next_in_queue()
+                else:
+                    log.warning("[PARTY QUEUE] Downloaded track ready but could not determine index in playlist.")
         else:
             log.warning("[PARTY QUEUE] Pre-download failed for '%s'", track_data.get("title"))
-            if getattr(self, "_waiting_for_download_to_play", False) and getattr(self, "_party_downloading_track", None) == track_data:
+            waiting = getattr(self, "_waiting_for_download_to_play", False)
+            downloading_track = getattr(self, "_party_downloading_track", None)
+            is_matching_waiting = waiting and (
+                downloading_track is None
+                or downloading_track == track_data
+                or (item_id and downloading_track.get("id") == item_id)
+            )
+            if is_matching_waiting:
                 self._waiting_for_download_to_play = False
                 self._party_downloading_track = None
                 if hasattr(self, "lbl_track_title") and self.lbl_track_title:
                     self.lbl_track_title.setText(f"[PARTY] Could not fetch '{track_data.get('title')}'")
                 if hasattr(self, "party_sync") and self.party_sync.is_host:
-                    QTimer.singleShot(1500, lambda: self.play_next_track(crossfade=False))
+                    QTimer.singleShot(1500, lambda: self.play_next_track(crossfade=False, force_skip=True))
 
-    def play_next_track(self, crossfade: bool = False) -> bool:
+    def play_next_track(self, crossfade: bool = False, force_skip: bool = False) -> bool:
         """
         Advances to the next track.
         If in an active Party Sync room as Host and tracks are queued in the party queue,
@@ -965,8 +996,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 log.info("[PARTY SYNC] Guest ignoring local play_next_track; following host.")
                 return False
 
-            # If host is already waiting on a queued download, ignore duplicate trigger calls
-            if getattr(self, "_waiting_for_download_to_play", False) or getattr(self, "_party_downloading_track", None):
+            if force_skip:
+                self._waiting_for_download_to_play = False
+                self._party_downloading_track = None
+                self._prefetching_track_id = None
+
+            # If host is already waiting on a queued download, ignore duplicate trigger calls (unless force_skip)
+            if not force_skip and (getattr(self, "_waiting_for_download_to_play", False) or getattr(self, "_party_downloading_track", None)):
                 log.info("[PARTY SYNC] Party track download already in progress; holding advance.")
                 return False
 
@@ -975,6 +1011,8 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 if next_item:
                     matched_idx = self.find_matching_party_track(next_item)
                     if matched_idx >= 0:
+                        self._waiting_for_download_to_play = False
+                        self._party_downloading_track = None
                         self.audio_engine.play_index(matched_idx, crossfade=crossfade)
                         self.sync_play_state()
                         self.refresh_queue_ui()
@@ -997,7 +1035,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                             self.overlay.update()
 
                         # Inform room of the track being prepared
-                        self.party_sync.broadcast_track_change(
+                        self.party_sync.broadcast_track(
                             title=next_item.get("title", ""),
                             artist=next_item.get("artist", ""),
                             filename=next_item.get("filename", ""),
@@ -1019,19 +1057,25 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         self.audio_engine.next_track(crossfade=crossfade)
         self.sync_play_state()
+        if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+            self._broadcast_party_track()
         self.refresh_queue_ui()
         return True
 
     def on_next_clicked(self):
-        self.play_next_track(crossfade=False)
+        self.play_next_track(crossfade=False, force_skip=True)
         if hasattr(self, "lbl_track_title"):
             self.lbl_track_title.trigger_symbol("forward")
         if self.overlay:
             self.overlay.trigger_skip_feedback("forward")
 
     def on_prev_clicked(self):
+        self._waiting_for_download_to_play = False
+        self._party_downloading_track = None
         self.audio_engine.prev_track()
         self.sync_play_state()
+        if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+            self._broadcast_party_track()
         self.refresh_queue_ui()
         if hasattr(self, "lbl_track_title"):
             self.lbl_track_title.trigger_symbol("backward")
@@ -1060,6 +1104,8 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             )
 
     def on_track_double_clicked(self, item):
+        self._waiting_for_download_to_play = False
+        self._party_downloading_track = None
         orig_idx = item.data(Qt.ItemDataRole.UserRole)
         if orig_idx is not None and 0 <= orig_idx < len(self.audio_engine.playlist):
             self.audio_engine.play_index(orig_idx)
@@ -1067,6 +1113,8 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             row = self.list_tracks.row(item)
             self.audio_engine.play_index(row)
         self.sync_play_state()
+        if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+            self._broadcast_party_track()
         self.refresh_queue_ui()
 
     def sync_volume(self, vol: float):
@@ -2058,6 +2106,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if is_host:
             self._broadcast_party_track()
 
+    def _on_party_disconnected(self, reason: str = ""):
+        self._waiting_for_download_to_play = False
+        self._party_downloading_track = None
+        self._prefetching_track_id = None
+        self.update_party_hud(False, "", False)
+        self.refresh_queue_ui()
+
     def _on_party_peer_joined(self, name: str, count: int):
         if hasattr(self, "party_sync") and self.party_sync.is_host:
             self._broadcast_party_track()
@@ -2114,8 +2169,19 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def find_matching_party_track(self, data: dict) -> int:
         """
         Locates the best matching track in the local playlist or music folders.
-        Prevents false-positive substring collisions and supports normalized title/artist matching.
+        Prevents false-positive substring collisions and supports normalized title/artist matching,
+        token set overlap (bag-of-words agnostic to word order), and recursive subfolder scanning.
         """
+        local_path = (data.get("local_path") or "").strip()
+        if local_path and os.path.exists(local_path):
+            norm_target = os.path.normcase(os.path.abspath(local_path))
+            for i, p in enumerate(self.audio_engine.playlist):
+                if os.path.normcase(os.path.abspath(p)) == norm_target:
+                    return i
+            self.audio_engine.playlist.append(local_path)
+            self.populate_playlist_ui()
+            return len(self.audio_engine.playlist) - 1
+
         target_fn = (data.get("filename") or "").strip().lower()
         target_title = (data.get("title") or "").strip().lower()
         target_artist = (data.get("artist") or "").strip().lower()
@@ -2123,6 +2189,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             target_artist = ""
         yt_query = (data.get("yt_query") or "").strip().lower()
         yt_query = re.sub(r"(?i)\btalia\s+(?:music\s+)?player\s*[-:]?\s*", "", yt_query).strip()
+
+        noise_words = {
+            "official", "video", "audio", "lyrics", "remix", "feat", "ft",
+            "music", "talia", "player", "hd", "4k", "hq", "mv", "original",
+            "mix", "version", "full"
+        }
+
+        def tokenize(s: str) -> set[str]:
+            return {
+                w for w in re.findall(r"[a-z0-9]+", s.lower())
+                if (len(w) >= 2 or w.isdigit()) and w not in noise_words
+            }
 
         def clean_stem(fn: str) -> str:
             stem = os.path.splitext(fn)[0].lower()
@@ -2133,54 +2211,104 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         norm_target_artist = re.sub(r"[^a-z0-9]", "", target_artist)
         norm_yt_query = re.sub(r"[^a-z0-9]", "", yt_query)
 
+        query_tokens = tokenize(f"{target_title} {target_artist} {yt_query}")
+        title_tokens = tokenize(target_title)
+        artist_tokens = tokenize(target_artist)
+        core_query_tokens = title_tokens | artist_tokens
+
+        def score_candidate(fn: str, full_path: str = "") -> int:
+            fn_lower = fn.lower()
+            c_stem = clean_stem(fn)
+            norm_c_stem = re.sub(r"[^a-z0-9]", "", c_stem)
+            cand_tokens = tokenize(c_stem)
+
+            # Exact filename or stem match
+            if target_fn and (fn_lower == target_fn or c_stem == target_stem):
+                return 1200
+
+            # Exact query matches filename or stem without punctuation
+            if norm_yt_query and (norm_yt_query == norm_c_stem or norm_yt_query == re.sub(r"[^a-z0-9]", "", fn_lower)):
+                return 1000
+
+            c_title, c_artist = parse_track_info(fn)
+            c_title_clean = c_title.lower().strip()
+            c_artist_clean = c_artist.lower().strip()
+            if c_artist_clean in ("talia music player", "talia player", "unknown artist", "unknown"):
+                c_artist_clean = ""
+            norm_c_title = re.sub(r"[^a-z0-9]", "", c_title_clean)
+            norm_c_artist = re.sub(r"[^a-z0-9]", "", c_artist_clean)
+            cand_t_tokens = tokenize(c_title_clean)
+            cand_a_tokens = tokenize(c_artist_clean)
+            cand_core_tokens = cand_t_tokens | cand_a_tokens
+
+            score = 0
+
+            # Normalized query matches candidate title exactly
+            if norm_yt_query and norm_c_title and norm_yt_query == norm_c_title:
+                score = max(score, 950)
+
+            # Bag-of-words / token overlap matching (order agnostic)
+            if query_tokens and cand_tokens:
+                if query_tokens == cand_tokens:
+                    score = max(score, 900)
+                elif core_query_tokens and core_query_tokens.issubset(cand_tokens) and len(core_query_tokens) >= 2:
+                    score = max(score, 850 + len(core_query_tokens) * 10)
+                elif cand_core_tokens and cand_core_tokens.issubset(query_tokens) and len(cand_core_tokens) >= 2:
+                    score = max(score, 820 + len(cand_core_tokens) * 10)
+                elif query_tokens.issubset(cand_tokens) and len(query_tokens) >= 2:
+                    score = max(score, 800 + len(query_tokens) * 10)
+                elif cand_tokens.issubset(query_tokens) and len(cand_tokens) >= 2:
+                    score = max(score, 780 + len(cand_tokens) * 10)
+                else:
+                    common = query_tokens & cand_tokens
+                    if len(common) >= 2:
+                        ratio = len(common) / max(len(query_tokens), len(cand_tokens))
+                        if ratio >= 0.5:
+                            score = max(score, 300 + int(ratio * 500))
+
+            # Title + Artist matching
+            if norm_target_title and norm_c_title:
+                if norm_target_title == norm_c_title:
+                    title_score = 650
+                    if norm_target_artist and norm_c_artist:
+                        if norm_target_artist == norm_c_artist:
+                            title_score += 350
+                        elif norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist:
+                            title_score += 250
+                    elif not norm_target_artist:
+                        title_score += 150
+                    score = max(score, title_score)
+                elif len(norm_target_title) >= 5 and len(norm_c_title) >= 5 and (norm_target_title in norm_c_title or norm_c_title in norm_target_title):
+                    if norm_target_artist and norm_c_artist and (norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist):
+                        score = max(score, 450)
+                    elif not norm_target_artist and (norm_target_title in norm_c_title):
+                        score = max(score, 350)
+
+            # Substring match on stem
+            if norm_yt_query and len(norm_yt_query) >= 4 and norm_yt_query in norm_c_stem:
+                score = max(score, 400)
+            elif norm_target_title and len(norm_target_title) >= 4 and norm_target_title in norm_c_stem:
+                score = max(score, 350)
+
+            return score
+
         # 1. Search active playlist in audio_engine
         best_idx = -1
         best_score = 0
 
         for i, track_path in enumerate(self.audio_engine.playlist):
-            fn = os.path.basename(track_path).lower()
-            stem = clean_stem(fn)
-            norm_c_stem = re.sub(r"[^a-z0-9]", "", stem)
-
-            # Exact filename or stem match
-            if target_fn and (fn == target_fn or stem == target_stem):
-                return i
-
-            # Exact query match against filename/stem
-            if norm_yt_query and (norm_yt_query == norm_c_stem or norm_yt_query == re.sub(r"[^a-z0-9]", "", fn)):
-                return i
-
-            cand_title, cand_artist = parse_track_info(fn)
-            norm_c_title = re.sub(r"[^a-z0-9]", "", cand_title.lower())
-            norm_c_artist = re.sub(r"[^a-z0-9]", "", cand_artist.lower())
-
-            # Query matches candidate title directly
-            if norm_yt_query and norm_c_title and (norm_yt_query == norm_c_title or norm_yt_query in norm_c_title):
-                return i
-
-            score = 0
-            if norm_target_title and norm_c_title and norm_target_title == norm_c_title:
-                score += 80
-                if norm_target_artist and norm_c_artist:
-                    if norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist:
-                        score += 20
-                elif not norm_target_artist:
-                    score += 15
-            elif norm_target_title and len(norm_target_title) >= 4 and (norm_target_title in norm_c_title or norm_target_title in norm_c_stem):
-                score += 50
-                if norm_target_artist and norm_c_artist and (norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist):
-                    score += 30
-                elif not norm_target_artist:
-                    score += 25
-
-            if score > best_score:
-                best_score = score
+            fn = os.path.basename(track_path)
+            s = score_candidate(fn, track_path)
+            if s > best_score:
+                best_score = s
                 best_idx = i
+                if s >= 1000:
+                    break
 
-        if best_idx >= 0 and best_score >= 70:
+        if best_idx >= 0 and best_score >= 250:
             return best_idx
 
-        # 2. Check if the song already exists on disk in music directory
+        # 2. Check if the song already exists on disk in music directories (recursive os.walk)
         candidate_dirs = [
             os.path.join(DEFAULT_MUSIC_DIR, "Downloaded Songs"),
             DEFAULT_MUSIC_DIR,
@@ -2189,39 +2317,36 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if cur_folder and cur_folder not in candidate_dirs and os.path.exists(cur_folder):
             candidate_dirs.append(cur_folder)
 
+        best_disk_file = None
+        best_disk_score = 0
+
         for c_dir in candidate_dirs:
             if not os.path.exists(c_dir):
                 continue
-            for fname in os.listdir(c_dir):
-                f_lower = fname.lower()
-                if not f_lower.endswith(SUPPORTED_AUDIO_EXTS):
-                    continue
-                f_stem = clean_stem(fname)
-                norm_c_stem = re.sub(r"[^a-z0-9]", "", f_stem)
-                if (target_stem and f_stem == target_stem) or (target_fn and f_lower == target_fn):
-                    full_p = os.path.join(c_dir, fname)
-                    if full_p not in self.audio_engine.playlist:
-                        self.audio_engine.playlist.append(full_p)
-                        self.populate_playlist_ui()
-                    return self.audio_engine.playlist.index(full_p)
+            for root, dirs, files in os.walk(c_dir):
+                for fname in files:
+                    if not fname.lower().endswith(SUPPORTED_AUDIO_EXTS):
+                        continue
+                    full_p = os.path.join(root, fname)
+                    s = score_candidate(fname, full_p)
+                    if s > best_disk_score:
+                        best_disk_score = s
+                        best_disk_file = full_p
+                        if s >= 1000:
+                            break
+                if best_disk_score >= 1000:
+                    break
+            if best_disk_score >= 1000:
+                break
 
-                if norm_yt_query and (norm_yt_query == norm_c_stem or norm_yt_query == re.sub(r"[^a-z0-9]", "", f_lower)):
-                    full_p = os.path.join(c_dir, fname)
-                    if full_p not in self.audio_engine.playlist:
-                        self.audio_engine.playlist.append(full_p)
-                        self.populate_playlist_ui()
-                    return self.audio_engine.playlist.index(full_p)
-
-                c_title, c_artist = parse_track_info(fname)
-                norm_c_title = re.sub(r"[^a-z0-9]", "", c_title.lower())
-                norm_c_artist = re.sub(r"[^a-z0-9]", "", c_artist.lower())
-                if norm_target_title and (norm_c_title == norm_target_title or norm_target_title in norm_c_stem):
-                    if not norm_target_artist or (norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist):
-                        full_p = os.path.join(c_dir, fname)
-                        if full_p not in self.audio_engine.playlist:
-                            self.audio_engine.playlist.append(full_p)
-                            self.populate_playlist_ui()
-                        return self.audio_engine.playlist.index(full_p)
+        if best_disk_file and best_disk_score >= 250:
+            norm_cand = os.path.normcase(os.path.abspath(best_disk_file))
+            for i, p in enumerate(self.audio_engine.playlist):
+                if os.path.normcase(os.path.abspath(p)) == norm_cand:
+                    return i
+            self.audio_engine.playlist.append(best_disk_file)
+            self.populate_playlist_ui()
+            return len(self.audio_engine.playlist) - 1
 
         return -1
 
@@ -2238,6 +2363,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         matched_idx = self.find_matching_party_track(data)
         if matched_idx >= 0:
             self._party_downloading_track = None
+            self._waiting_for_download_to_play = False
             self._is_handling_party_event = True
             try:
                 self.audio_engine.play_index(matched_idx)
@@ -2254,6 +2380,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             # Pause playback immediately so guest doesn't fall through to next local playlist track!
             self.audio_engine.pause()
             self._party_downloading_track = data
+            self._waiting_for_download_to_play = True
             self._last_known_host_pos = target_time
             self._last_known_host_playing = target_playing
 
@@ -2310,14 +2437,16 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         else:
             log.warning("[PARTY QUEUE] Download failed for: %s", query)
             self._party_downloading_track = None
+            self._waiting_for_download_to_play = False
             title = track_data.get("title") or query
             if hasattr(self, "lbl_track_title") and self.lbl_track_title:
                 self.lbl_track_title.setText(f"[PARTY] Could not fetch '{title}'")
             if hasattr(self, "party_sync") and self.party_sync.is_host:
-                QTimer.singleShot(1500, lambda: self.play_next_track(crossfade=False))
+                QTimer.singleShot(1500, lambda: self.play_next_track(crossfade=False, force_skip=True))
 
     def _on_party_track_downloaded(self, target_dir: str, target_time: float, target_playing: bool, file_path: str = ""):
         self._party_downloading_track = None
+        self._waiting_for_download_to_play = False
         cur_folder = getattr(self.audio_engine, 'folder_path', None)
         if not cur_folder or not os.path.exists(cur_folder):
             self.audio_engine.set_folder(target_dir)
@@ -2361,6 +2490,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
             if is_host:
                 self._broadcast_party_track()
+                self._check_and_prefetch_next_in_queue()
 
     def _on_party_play_received(self, ts: float):
         if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
