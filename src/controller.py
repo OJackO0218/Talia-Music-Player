@@ -21,6 +21,7 @@ from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QIcon
 from PyQt6.QtMultimedia import QMediaDevices
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QColorDialog,
     QFileDialog,
@@ -526,9 +527,25 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         queue_layout.addWidget(lbl_queue_hdr)
         self.list_queue = QListWidget()
         self.list_queue.setFixedHeight(85)
+        self.list_queue.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list_queue.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.list_queue.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_queue.customContextMenuRequested.connect(self.show_queue_context_menu)
         self.list_queue.itemDoubleClicked.connect(self.on_queue_item_double_clicked)
+        if hasattr(self.list_queue.model(), "rowsMoved"):
+            self.list_queue.model().rowsMoved.connect(self.on_queue_rows_moved)
+        orig_queue_key_press = self.list_queue.keyPressEvent
+        def _queue_key_press(event):
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                row = self.list_queue.currentRow()
+                if 0 <= row < len(self.audio_engine.queue):
+                    self.audio_engine.remove_from_queue(row)
+                    self.refresh_queue_ui()
+                    if hasattr(self, "save_settings"):
+                        self.save_settings()
+                    return
+            orig_queue_key_press(event)
+        self.list_queue.keyPressEvent = _queue_key_press
         queue_layout.addWidget(self.list_queue)
         self.queue_container.setVisible(False)
         content_layout.addWidget(self.queue_container)
@@ -826,14 +843,21 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                         else:
                             self.party_sync.broadcast_pause(cur_pos)
 
+        cur_idx = self.audio_engine.current_index
         for r in range(self.list_tracks.count()):
             it = self.list_tracks.item(r)
-            if it.data(Qt.ItemDataRole.UserRole) == self.audio_engine.current_index:
+            if not it:
+                continue
+            is_cur = (it.data(Qt.ItemDataRole.UserRole) == cur_idx)
+            w = self.list_tracks.itemWidget(it)
+            if w and hasattr(w, "set_current"):
+                w.set_current(is_cur)
+            if is_cur:
                 self.list_tracks.setCurrentRow(r)
-                break
 
     def refresh_queue_ui(self):
-        """Refreshes the room queue display in PartySyncDialog if open."""
+        """Refreshes both local player queue UI and Party Sync room queue UI."""
+        PlaylistPanelMixin.refresh_queue_ui(self)
         if hasattr(self, "party_dialog") and self.party_dialog and hasattr(self.party_dialog, "_on_queue_updated"):
             if hasattr(self, "party_sync") and self.party_sync:
                 self.party_dialog._on_queue_updated(self.party_sync.party_queue)
@@ -1060,6 +1084,8 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
             self._broadcast_party_track()
         self.refresh_queue_ui()
+        if hasattr(self, "save_settings"):
+            self.save_settings()
         return True
 
     def on_next_clicked(self):
@@ -1222,7 +1248,11 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 and pos >= (dur - crossfade_dur)
                 and not getattr(self.audio_engine, "_in_crossfade", False)
                 and self.audio_engine.is_playing
-                and (len(self.audio_engine.playlist) > 1 or (hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.party_queue))
+                and (
+                    len(self.audio_engine.playlist) > 1
+                    or bool(getattr(self.audio_engine, "queue", None))
+                    or (hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.party_queue)
+                )
             ):
                 self.play_next_track(crossfade=True)
             elif is_finished:

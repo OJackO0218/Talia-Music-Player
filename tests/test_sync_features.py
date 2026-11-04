@@ -953,3 +953,90 @@ def test_double_click_and_disconnect_clear_download_locks(qapp, tmp_path):
 
 
 
+
+
+@pytest.mark.gui
+def test_normal_queue_ui_interactions(qapp, tmp_path):
+    """Tests the local player queue UI: adding, list display, double-click play, and clear."""
+    engine = CyberAudioEngine()
+    track1 = str(tmp_path / "Track1.mp3")
+    track2 = str(tmp_path / "Track2.mp3")
+    track3 = str(tmp_path / "Track3.mp3")
+    for t in (track1, track2, track3):
+        with open(t, "w") as f:
+            f.write("audio")
+
+    engine.playlist = [track1, track2]
+    engine.current_index = 0
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Initial state
+    assert panel.btn_toggle_queue.text() == "Queue (0)"
+    assert panel.list_queue.count() == 0
+
+    # Add track3 to queue
+    engine.add_to_queue(track3)
+    panel.refresh_queue_ui()
+    assert panel.btn_toggle_queue.text() == "Queue (1)"
+    assert panel.list_queue.count() == 1
+    assert "Track3.mp3" in panel.list_queue.item(0).text()
+    assert "#01" in panel.list_queue.item(0).text()
+
+    # Add track2 to queue next
+    engine.add_to_queue_next(track2)
+    panel.refresh_queue_ui()
+    assert panel.btn_toggle_queue.text() == "Queue (2)"
+    assert panel.list_queue.count() == 2
+    assert "Track2.mp3" in panel.list_queue.item(0).text()
+    assert "Track3.mp3" in panel.list_queue.item(1).text()
+
+    # Mock load_file for double-click play
+    played_files = []
+    panel.audio_engine.load_file = lambda p, auto_play=True: played_files.append(p) or True
+
+    # Double click first queued item (Track2)
+    item0 = panel.list_queue.item(0)
+    panel.on_queue_item_double_clicked(item0)
+    assert played_files == [track2]
+    assert panel.btn_toggle_queue.text() == "Queue (1)"
+    assert panel.list_queue.count() == 1
+    assert "Track3.mp3" in panel.list_queue.item(0).text()
+
+    # Clear queue
+    panel.on_clear_queue_clicked()
+    assert panel.btn_toggle_queue.text() == "Queue (0)"
+    assert panel.list_queue.count() == 0
+    assert len(engine.queue) == 0
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+def test_updater_batch_script_generation(tmp_path):
+    """Verifies that the updater batch script properly configures PID timeout and safety fallbacks."""
+    import os
+    from updater import create_updater_batch_script
+
+    zip_file = str(tmp_path / "update.zip")
+    with open(zip_file, "w") as f:
+        f.write("zip")
+    target_dir = str(tmp_path / "app")
+    os.makedirs(target_dir, exist_ok=True)
+
+    bat_path = create_updater_batch_script(zip_file, target_dir, pid=12345)
+    assert os.path.exists(bat_path)
+
+    with open(bat_path, "r") as f:
+        content = f.read()
+
+    assert "PID=12345" in content
+    assert "taskkill /f /pid %PID%" in content
+    assert "Expand-Archive" in content
+    assert "robocopy" in content
+    assert "lyrics_cache" in content
+    assert "settings.json" in content
+    assert 'del "%~f0"' in content

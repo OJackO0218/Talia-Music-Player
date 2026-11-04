@@ -111,7 +111,7 @@ DEFAULT_SETTINGS = {
 
 
 SETTINGS_VERSION = 2
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.4.2"
 
 
 def portable_path(path: str) -> str:

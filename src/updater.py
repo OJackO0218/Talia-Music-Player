@@ -157,7 +157,14 @@ def create_updater_batch_script(zip_path: str, target_dir: str, pid: int) -> str
 
     bat_content = f"""@echo off
 setlocal enabledelayedexpansion
-title Talia Quick Updater
+title Talia Music Player Auto-Updater
+color 0b
+
+echo.
+echo =======================================================
+echo          TALIA MUSIC PLAYER AUTO-UPDATER
+echo =======================================================
+echo.
 
 set "PID={pid}"
 set "ZIP_PATH={zip_path}"
@@ -165,37 +172,54 @@ set "TARGET_DIR={target_dir}"
 set "EXE_NAME={exe_name}"
 set "EXTRACT_DIR=%TEMP%\\talia_update_extracted"
 
-:: 1. Wait for running Talia PID to terminate so Windows file locks release
+echo [*] Waiting for previous Talia instance (PID %PID%) to close...
+set /a WAIT_COUNT=0
 :wait_loop
 timeout /t 1 /nobreak >nul
 tasklist /fi "PID eq %PID%" 2>nul | findstr /i "%PID%" >nul
 if not errorlevel 1 (
+    set /a WAIT_COUNT+=1
+    if !WAIT_COUNT! geq 4 (
+        echo [*] Releasing lingering process locks...
+        taskkill /f /pid %PID% >nul 2>&1
+        goto proceed
+    )
     goto wait_loop
 )
+:proceed
 
+echo [*] File locks released.
 timeout /t 1 /nobreak >nul
 
 :: 2. Clean previous temp extraction directory if any
+echo [*] Preparing extraction workspace...
 if exist "!EXTRACT_DIR!" rmdir /s /q "!EXTRACT_DIR!" 2>nul
 mkdir "!EXTRACT_DIR!" 2>nul
 
 :: 3. Extract the update zip archive via PowerShell built-in Expand-Archive
+echo [*] Extracting update files...
 powershell -NoProfile -Command "Expand-Archive -LiteralPath '!ZIP_PATH!' -DestinationPath '!EXTRACT_DIR!' -Force"
 
 :: Check if archive extracted into a nested 'Talia' folder
 set "SRC_DIR=!EXTRACT_DIR!"
 if exist "!EXTRACT_DIR!\\Talia\\%EXE_NAME%" set "SRC_DIR=!EXTRACT_DIR!\\Talia"
+if exist "!EXTRACT_DIR!\\Talia\\Talia.exe" set "SRC_DIR=!EXTRACT_DIR!\\Talia"
 
 :: 4. Copy updated binary and asset files in place, safely preserving user music and settings
+echo [*] Applying update to !TARGET_DIR!...
 robocopy "!SRC_DIR!" "!TARGET_DIR!" /E /XD "!TARGET_DIR!\\music" "!TARGET_DIR!\\assets\\lyrics_cache" /XF "!TARGET_DIR!\\settings.json" /R:2 /W:1 >nul
 
 :: 5. Cleanup temporary extraction folder
+echo [*] Cleaning up temporary files...
 rmdir /s /q "!EXTRACT_DIR!" 2>nul
 del /f /q "!ZIP_PATH!" 2>nul
 
 :: 6. Relaunch updated Talia executable
+echo [*] Update complete! Relaunching Talia...
 if exist "!TARGET_DIR!\\%EXE_NAME%" (
     start "" "!TARGET_DIR!\\%EXE_NAME%"
+) else if exist "!TARGET_DIR!\\Talia.exe" (
+    start "" "!TARGET_DIR!\\Talia.exe"
 )
 
 :: 7. Self-delete the batch runner
@@ -213,12 +237,11 @@ def launch_updater_and_exit(zip_path: str, target_dir: str):
     log.info("[UPDATER] Spawning detached update runner: %s", bat_script)
 
     DETACHED_PROCESS = 0x00000008
-    CREATE_NO_WINDOW = 0x08000000
-    flags = CREATE_NO_WINDOW | DETACHED_PROCESS
+    CREATE_NEW_CONSOLE = 0x00000010
 
     subprocess.Popen(
         ["cmd.exe", "/c", bat_script],
-        creationflags=flags,
+        creationflags=CREATE_NEW_CONSOLE | DETACHED_PROCESS,
         close_fds=True,
     )
     # Clean exit
@@ -227,7 +250,8 @@ def launch_updater_and_exit(zip_path: str, target_dir: str):
     app = QApplication.instance()
     if app:
         app.quit()
-    sys.exit(0)
+    # Force immediate OS-level termination so background threads release file locks
+    os._exit(0)
 
 
 class UpdateCheckWorker(QThread):

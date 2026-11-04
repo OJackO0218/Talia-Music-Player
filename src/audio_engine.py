@@ -409,14 +409,14 @@ class CyberAudioEngine:
     def add_to_queue(self, track_path: str) -> bool:
         """Appends a track to the upcoming playback queue."""
         if os.path.exists(track_path):
-            self.queue.append(os.path.normpath(track_path))
+            self.queue.append(os.path.abspath(os.path.normpath(track_path)))
             return True
         return False
 
     def add_to_queue_next(self, track_path: str) -> bool:
         """Inserts a track at the front of the queue to play next."""
         if os.path.exists(track_path):
-            self.queue.insert(0, os.path.normpath(track_path))
+            self.queue.insert(0, os.path.abspath(os.path.normpath(track_path)))
             return True
         return False
 
@@ -754,7 +754,7 @@ class CyberAudioEngine:
 
     def _trigger_preload_next(self):
         """Asynchronously pre-decodes the first 15s of the upcoming track in a background thread."""
-        if not self.playlist:
+        if not self.playlist and not self.queue:
             return
         next_track_path = None
         if self.queue:
@@ -932,7 +932,7 @@ class CyberAudioEngine:
                 # Queued files downloaded after the last scan still need a valid index.
                 self.playlist.append(next_path)
                 self.current_index = len(self.playlist) - 1
-            self.load_file(next_path, auto_play=True)
+            self.play_index(self.current_index, auto_play=True, crossfade=crossfade)
             return
 
         # 2. Normal sequential / shuffle playback

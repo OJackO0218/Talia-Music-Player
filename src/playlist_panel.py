@@ -125,6 +125,8 @@ class TrackRowWidget(QWidget):
             self.panel.refresh_queue_ui()
             if hasattr(self.panel, "save_settings"):
                 self.panel.save_settings()
+            if hasattr(self.panel, "queue_container"):
+                self.panel.queue_container.setVisible(True)
             # Tactile visual feedback
             self.btn_q.setText("✓")
             self.btn_q.setStyleSheet("""
@@ -273,7 +275,38 @@ class PlaylistPanelMixin:
             self.queue_container.setVisible(True)
 
     def toggle_queue_panel(self):
-        self.queue_container.setVisible(not self.queue_container.isVisible())
+        vis = not self.queue_container.isVisible()
+        self.queue_container.setVisible(vis)
+        if vis:
+            self.refresh_queue_ui()
+
+    def on_queue_rows_moved(self, parent=None, start=0, end=0, destination=None, row=0):
+        """Called when user drags and drops to reorder items inside the queue list widget."""
+        new_queue = []
+        base_dir = self.audio_engine.folder_path
+        for r in range(self.list_queue.count()):
+            it = self.list_queue.item(r)
+            if it:
+                p = it.toolTip()
+                if p and os.path.exists(p):
+                    clean_p = os.path.abspath(os.path.normpath(p))
+                    new_queue.append(clean_p)
+                    filename = os.path.basename(clean_p)
+                    try:
+                        rel = os.path.relpath(clean_p, base_dir)
+                        rel_dir = os.path.dirname(rel)
+                        if rel_dir and rel_dir != ".":
+                            clean_dir = rel_dir.replace("\\", " / ")
+                            sub_txt = f"  ({clean_dir})"
+                        else:
+                            sub_txt = ""
+                    except Exception:
+                        sub_txt = ""
+                    it.setText(f"#{r+1:02d}  {filename}{sub_txt}")
+        if new_queue:
+            self.audio_engine.queue = new_queue
+            if hasattr(self, "save_settings"):
+                self.save_settings()
 
     def on_clear_queue_clicked(self):
         self.audio_engine.clear_queue()
@@ -317,10 +350,16 @@ class PlaylistPanelMixin:
         path = self.audio_engine.remove_from_queue(row)
         if path:
             if path in self.audio_engine.playlist:
-                self.audio_engine.current_index = self.audio_engine.playlist.index(path)
-            self.audio_engine.load_file(path, auto_play=True)
+                self.audio_engine.play_index(self.audio_engine.playlist.index(path))
+            else:
+                self.audio_engine.playlist.append(path)
+                self.audio_engine.play_index(len(self.audio_engine.playlist) - 1)
+                if hasattr(self, "populate_playlist_ui"):
+                    self.populate_playlist_ui()
             self.sync_play_state()
             self.refresh_queue_ui()
+            if hasattr(self, "save_settings"):
+                self.save_settings()
 
     def show_track_context_menu_for_item(self, item, global_pos):
         if not item:
@@ -879,8 +918,12 @@ class PlaylistPanelMixin:
             path = self.audio_engine.remove_from_queue(row)
             if path:
                 if path in self.audio_engine.playlist:
-                    self.audio_engine.current_index = self.audio_engine.playlist.index(path)
-                self.audio_engine.load_file(path, auto_play=True)
+                    self.audio_engine.play_index(self.audio_engine.playlist.index(path))
+                else:
+                    self.audio_engine.playlist.append(path)
+                    self.audio_engine.play_index(len(self.audio_engine.playlist) - 1)
+                    if hasattr(self, "populate_playlist_ui"):
+                        self.populate_playlist_ui()
                 self.sync_play_state()
                 self.refresh_queue_ui()
                 if hasattr(self, "save_settings"):
