@@ -33,10 +33,10 @@ from PyQt6.QtWidgets import (
 from discord_service import parse_track_info
 from party_sync import DEFAULT_RELAY_URL, generate_room_code, get_local_lan_ip
 from ui_theme import SHARED_PANEL_STYLE
-from ui_widgets import create_section_header
+from ui_widgets import DraggableClampedDialogMixin, create_section_header
 
 
-class TrackPickerDialog(QDialog):
+class TrackPickerDialog(DraggableClampedDialogMixin, QDialog):
     """Searchable dialog for picking a track from the local library to queue."""
 
     def __init__(self, playlist: list[str], parent=None):
@@ -117,7 +117,7 @@ class TrackPickerDialog(QDialog):
             self.accept()
 
 
-class PartySyncDialog(QDialog):
+class PartySyncDialog(DraggableClampedDialogMixin, QDialog):
     """Sleek cyberpunk dialog to host or join real-time listening parties with queue & host transfer."""
 
     def __init__(self, panel, parent=None):
@@ -280,9 +280,9 @@ class PartySyncDialog(QDialog):
         self.lbl_members_count.setStyleSheet("color: #e4e4e7; font-size: 12px; font-weight: 600;")
         card_layout.addWidget(self.lbl_members_count)
 
-        # Host Transfer row (visible to Host when listeners are present)
+        # Host Transfer row (prominently visible to Host)
         self.frame_transfer = QFrame()
-        self.frame_transfer.setFixedHeight(42)
+        self.frame_transfer.setFixedHeight(44)
         self.frame_transfer.setStyleSheet(
             "background-color: #121215; border: 1px solid #27272a; border-radius: 6px; padding: 3px 8px;"
         )
@@ -291,24 +291,27 @@ class PartySyncDialog(QDialog):
         transfer_layout.setSpacing(8)
 
         lbl_transfer = QLabel("Transfer Host:")
-        lbl_transfer.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 600;")
+        lbl_transfer.setStyleSheet("color: #c084fc; font-size: 11px; font-weight: 700;")
         transfer_layout.addWidget(lbl_transfer)
 
         self.combo_members = QComboBox()
         self.combo_members.setFixedHeight(26)
         self.combo_members.setStyleSheet(
-            "background-color: #18181b; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            "background-color: #18181b; color: #71717a; border: 1px dashed #3f3f46; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
+        self.combo_members.addItem("Waiting for friends to join...")
+        self.combo_members.setEnabled(False)
         transfer_layout.addWidget(self.combo_members, 1)
 
         self.btn_transfer = QPushButton("Make Host")
         self.btn_transfer.setFixedHeight(26)
+        self.btn_transfer.setEnabled(False)
         self.btn_transfer.setStyleSheet(
-            "background-color: #7c3aed; color: #ffffff; font-weight: bold; padding: 3px 10px; border-radius: 4px; font-size: 11px;"
+            "background-color: #27272a; color: #71717a; border: 1px solid #3f3f46; padding: 3px 10px; border-radius: 4px; font-size: 11px;"
         )
         self.btn_transfer.clicked.connect(self._on_transfer_clicked)
         transfer_layout.addWidget(self.btn_transfer)
-        self.frame_transfer.setVisible(False)
+        self.frame_transfer.setVisible(True)
         card_layout.addWidget(self.frame_transfer)
 
         active_layout.addWidget(card)
@@ -490,9 +493,34 @@ class PartySyncDialog(QDialog):
         is_host = self.sync_service.is_host
         current_user = self.sync_service.user_name
         other_members = [m for m in self.members if m != current_user]
+        self.combo_members.blockSignals(True)
         self.combo_members.clear()
-        self.combo_members.addItems(other_members)
-        self.frame_transfer.setVisible(is_host and len(other_members) > 0)
+        if other_members:
+            self.combo_members.addItems(other_members)
+            self.combo_members.setEnabled(True)
+            self.combo_members.setStyleSheet(
+                "background-color: #18181b; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+            self.btn_transfer.setEnabled(True)
+            self.btn_transfer.setStyleSheet(
+                "background-color: #7c3aed; color: #ffffff; font-weight: bold; padding: 3px 10px; border-radius: 4px; font-size: 11px;"
+            )
+            self.btn_transfer.setToolTip("Transfer host control to selected member")
+        else:
+            self.combo_members.addItem("Waiting for friends to join...")
+            self.combo_members.setEnabled(False)
+            self.combo_members.setStyleSheet(
+                "background-color: #18181b; color: #71717a; border: 1px dashed #3f3f46; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+            self.btn_transfer.setEnabled(False)
+            self.btn_transfer.setStyleSheet(
+                "background-color: #27272a; color: #71717a; border: 1px solid #3f3f46; padding: 3px 10px; border-radius: 4px; font-size: 11px;"
+            )
+            self.btn_transfer.setToolTip("Wait for friends to join your party before transferring host privileges")
+        self.combo_members.blockSignals(False)
+
+        # Always visible to Host so the control is prominent and immediately discoverable!
+        self.frame_transfer.setVisible(is_host)
         self.btn_clear_queue.setVisible(is_host)
 
     def _on_transfer_clicked(self):

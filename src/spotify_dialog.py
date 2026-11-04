@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
 
 from config import DEFAULT_MUSIC_DIR, PROJECT_ROOT
 from ui_theme import SHARED_PANEL_STYLE
-from ui_widgets import create_section_header
+from ui_widgets import DraggableClampedDialogMixin, create_section_header
 
 log = logging.getLogger("SpotifyDialog")
 
@@ -48,7 +48,7 @@ class DownloadBridge(QObject):
     batch_finished = pyqtSignal(int, int, str, bool)  # success, failed, target_dir, was_stopped
 
 
-class SpotifySyncDialog(QDialog):
+class SpotifySyncDialog(DraggableClampedDialogMixin, QDialog):
     """Cyberpunk modal dialog for importing playlists from Spotify with zero developer keys."""
 
     def __init__(self, panel, parent=None):

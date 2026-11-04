@@ -2,8 +2,8 @@
 # Version info definition for Talia Windows Executable
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 3, 0, 0),
-    prodvers=(2, 3, 0, 0),
+    filevers=(2, 4, 0, 0),
+    prodvers=(2, 4, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Talia Open Source'),
             StringStruct('FileDescription', 'Talia Desktop Music Player and Reactive Visualizer'),
-            StringStruct('FileVersion', '2.3.0.0'),
+            StringStruct('FileVersion', '2.4.0.0'),
             StringStruct('InternalName', 'Talia'),
             StringStruct('LegalCopyright', 'Copyright 2026 Dreamoon-Q / JackO. All rights reserved.'),
             StringStruct('OriginalFilename', 'Talia.exe'),
             StringStruct('ProductName', 'Talia Music Player'),
-            StringStruct('ProductVersion', '2.3.0.0'),
+            StringStruct('ProductVersion', '2.4.0.0'),
           ]
         )
       ]

@@ -35,6 +35,7 @@ hiddenimports = [
     "spotify_sync",
     "ui_theme",
     "ui_widgets",
+    "updater",
     "visualizer",
     "gui_fetcher",
     "fetch_lyrics",

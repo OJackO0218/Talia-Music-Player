@@ -21,11 +21,12 @@ from PyQt6.QtWidgets import (
 )
 
 from config import ICON_PATH, load_settings, save_settings
+from ui_widgets import DraggableClampedDialogMixin
 
 log = logging.getLogger(__name__)
 
 
-class GuideDialog(QDialog):
+class GuideDialog(DraggableClampedDialogMixin, QDialog):
     """Clean, modern dialog explaining Talia's controls and shortcuts."""
 
     def __init__(self, parent=None, config: dict = None):

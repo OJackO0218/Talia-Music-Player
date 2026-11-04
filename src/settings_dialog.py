@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QFrame,
@@ -34,7 +35,11 @@ from updater import (
     launch_updater_and_exit,
 )
 from ui_theme import SHARED_PANEL_STYLE
-from ui_widgets import NoScrollComboBox, create_section_header
+from ui_widgets import (
+    DraggableClampedDialogMixin,
+    NoScrollComboBox,
+    create_section_header,
+)
 
 if TYPE_CHECKING:
     from controller import ControlPanel
@@ -57,7 +62,7 @@ def create_card_frame(title: str):
     return frame, layout
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(DraggableClampedDialogMixin, QDialog):
     """Clean, dedicated settings dialog for advanced lyrics, visualizer, and character configuration."""
 
     def __init__(self, panel: "ControlPanel"):
@@ -295,6 +300,67 @@ class SettingsDialog(QDialog):
         # -------------------------------------------------------------
         card_char, layout_char = create_card_frame("Character & Display")
 
+        # Center Talia on screen button
+        self.btn_center_talia = QPushButton("Center Talia on Screen")
+        self.btn_center_talia.setToolTip("Reposition Talia to the exact center of your primary screen")
+        self.btn_center_talia.setStyleSheet("""
+            QPushButton {
+                background-color: #1e1b4b;
+                color: #a5b4fc;
+                border: 1px solid #4338ca;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3730a3;
+                color: #ffffff;
+            }
+        """)
+        self.btn_center_talia.clicked.connect(self.center_talia_on_screen)
+        layout_char.addWidget(self.btn_center_talia)
+
+        # Talia X coordinate slider
+        hbox_pos_x = QHBoxLayout()
+        hbox_pos_x.setSpacing(6)
+        lbl_x = QLabel("Talia X:")
+        lbl_x.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 75px;")
+        hbox_pos_x.addWidget(lbl_x)
+
+        self.slider_pos_x = QSlider(Qt.Orientation.Horizontal)
+        self.slider_pos_x.valueChanged.connect(self._on_pos_x_changed)
+        self.slider_pos_x.sliderReleased.connect(self._on_pos_slider_released)
+        hbox_pos_x.addWidget(self.slider_pos_x)
+
+        self.lbl_pos_x_val = QLabel("0 px")
+        self.lbl_pos_x_val.setFixedWidth(55)
+        self.lbl_pos_x_val.setStyleSheet(
+            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
+        )
+        hbox_pos_x.addWidget(self.lbl_pos_x_val)
+        layout_char.addLayout(hbox_pos_x)
+
+        # Talia Y coordinate slider
+        hbox_pos_y = QHBoxLayout()
+        hbox_pos_y.setSpacing(6)
+        lbl_y = QLabel("Talia Y:")
+        lbl_y.setStyleSheet("color: #a1a1aa; font-weight: 600; min-width: 75px;")
+        hbox_pos_y.addWidget(lbl_y)
+
+        self.slider_pos_y = QSlider(Qt.Orientation.Horizontal)
+        self.slider_pos_y.valueChanged.connect(self._on_pos_y_changed)
+        self.slider_pos_y.sliderReleased.connect(self._on_pos_slider_released)
+        hbox_pos_y.addWidget(self.slider_pos_y)
+
+        self.lbl_pos_y_val = QLabel("0 px")
+        self.lbl_pos_y_val.setFixedWidth(55)
+        self.lbl_pos_y_val.setStyleSheet(
+            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
+        )
+        hbox_pos_y.addWidget(self.lbl_pos_y_val)
+        layout_char.addLayout(hbox_pos_y)
+
         # Eye sensitivity
         hbox_sens = QHBoxLayout()
         hbox_sens.setSpacing(6)
@@ -472,6 +538,70 @@ class SettingsDialog(QDialog):
         scroll_area.setWidget(content_widget)
         root_layout.addWidget(scroll_area)
         self.populate_fonts()
+        self.sync_position_sliders()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.sync_position_sliders()
+
+    def sync_position_sliders(self):
+        if not hasattr(self, "slider_pos_x") or not hasattr(self, "slider_pos_y"):
+            return
+        primary_screen = QApplication.primaryScreen()
+        if not primary_screen:
+            return
+        geom = primary_screen.availableGeometry()
+        curr_x = self.panel.overlay.x() if self.panel and self.panel.overlay else 0
+        curr_y = self.panel.overlay.y() if self.panel and self.panel.overlay else 0
+
+        max_x = max(curr_x + 100, geom.right() - 50)
+        max_y = max(curr_y + 100, geom.bottom() - 50)
+        min_x = min(curr_x, geom.left())
+        min_y = min(curr_y, geom.top())
+
+        self.slider_pos_x.blockSignals(True)
+        self.slider_pos_y.blockSignals(True)
+        self.slider_pos_x.setRange(min_x, max_x)
+        self.slider_pos_y.setRange(min_y, max_y)
+        self.slider_pos_x.setValue(curr_x)
+        self.slider_pos_y.setValue(curr_y)
+        self.lbl_pos_x_val.setText(f"{curr_x} px")
+        self.lbl_pos_y_val.setText(f"{curr_y} px")
+        self.slider_pos_x.blockSignals(False)
+        self.slider_pos_y.blockSignals(False)
+
+    def _on_pos_x_changed(self, val: int):
+        self.lbl_pos_x_val.setText(f"{val} px")
+        if self.panel and self.panel.overlay:
+            self.panel.overlay.move(val, self.panel.overlay.y())
+
+    def _on_pos_y_changed(self, val: int):
+        self.lbl_pos_y_val.setText(f"{val} px")
+        if self.panel and self.panel.overlay:
+            self.panel.overlay.move(self.panel.overlay.x(), val)
+
+    def _on_pos_slider_released(self):
+        if self.panel:
+            try:
+                self.panel.save_settings()
+            except Exception:
+                pass
+
+    def center_talia_on_screen(self):
+        primary_screen = QApplication.primaryScreen()
+        if not primary_screen or not self.panel or not self.panel.overlay:
+            return
+        geom = primary_screen.availableGeometry()
+        ow = self.panel.overlay.width()
+        oh = self.panel.overlay.height()
+        cx = geom.left() + max(0, (geom.width() - ow) // 2)
+        cy = geom.top() + max(0, (geom.height() - oh) // 2)
+        self.panel.overlay.move(cx, cy)
+        self.sync_position_sliders()
+        try:
+            self.panel.save_settings()
+        except Exception:
+            pass
 
     def populate_fonts(self):
         self.combo_font.blockSignals(True)

@@ -160,6 +160,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.party_sync.host_transferred.connect(self._on_party_host_transferred)
         self._is_handling_party_event = False
         self._last_party_heartbeat = 0.0
+        self.audio_engine.play_next_hook = self.play_next_track
 
         # Spotify Playlist Sync & Import Service
         self.spotify_service = SpotifySyncService(self)
@@ -224,7 +225,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.btn_move_talia = QPushButton("Lock Window")
         self.btn_move_talia.setObjectName("btnMoveTalia")
         self.btn_move_talia.clicked.connect(self.toggle_move_talia)
-        hbox_top_toggles.addWidget(self.btn_move_talia)
+        # Note: Move mode is now controlled exclusively via X/Y sliders & Center Talia in Settings
         self.btn_audio_mode = QPushButton("Player Mode")
         self.btn_audio_mode.setObjectName("btnAudioMode")
         self.btn_audio_mode.clicked.connect(self.toggle_audio_mode)
@@ -1787,6 +1788,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # Ensure window header is never stuck off-screen
+        screen = QApplication.primaryScreen().availableGeometry()
+        if self.y() < screen.top() + 30:
+            self.move(self.x(), screen.top() + 40)
+        if self.x() < screen.left():
+            self.move(screen.left() + 20, self.y())
         if hasattr(self, "timeline_timer"):
             interval = 500 if getattr(self, "eco_mode", False) else 200
             self.timeline_timer.setInterval(interval)
@@ -1797,6 +1804,28 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             and self.overlay.sound_menu_open.isLoaded()
         ):
             self.overlay.sound_menu_open.play()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, "_drag_pos", None) is not None and (event.buttons() & Qt.MouseButton.LeftButton):
+            new_pos = event.globalPosition().toPoint() - self._drag_pos
+            screen = QApplication.primaryScreen().availableGeometry()
+            clamped_y = max(screen.top() + 10, min(new_pos.y(), screen.bottom() - 60))
+            clamped_x = max(screen.left() - self.width() + 60, min(new_pos.x(), screen.right() - 60))
+            self.move(clamped_x, clamped_y)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
 
     def hideEvent(self, event):
         super().hideEvent(event)

@@ -548,3 +548,80 @@ def test_controller_queue_persistence(qapp, tmp_path):
     panel.hide()
     lyrics.hide()
     overlay.hide()
+
+
+@pytest.mark.gui
+def test_settings_talia_center_and_sliders(qapp):
+    """Tests Center Talia button and X/Y position sliders in Settings."""
+    engine = CyberAudioEngine()
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+    settings = panel.settings_dialog
+
+    assert hasattr(settings, "btn_center_talia")
+    assert hasattr(settings, "slider_pos_x")
+    assert hasattr(settings, "slider_pos_y")
+
+    # Center Talia
+    settings.center_talia_on_screen()
+    screen = qapp.primaryScreen().availableGeometry()
+    expected_cx = screen.left() + (screen.width() - overlay.width()) // 2
+    expected_cy = screen.top() + (screen.height() - overlay.height()) // 2
+    assert overlay.x() == expected_cx
+    assert overlay.y() == expected_cy
+
+    # Move sliders
+    settings.slider_pos_x.setValue(screen.left() + 150)
+    assert overlay.x() == screen.left() + 150
+    settings.slider_pos_y.setValue(screen.top() + 200)
+    assert overlay.y() == screen.top() + 200
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+    settings.hide()
+
+
+@pytest.mark.gui
+def test_dialog_screen_clamping_and_transfer_host(qapp):
+    """Tests screen clamping mixin and Transfer Host visibility in PartySyncDialog."""
+    engine = CyberAudioEngine()
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    party_dlg = PartySyncDialog(panel)
+    party_dlg.sync_service.is_host = True
+    party_dlg.sync_service.room_code = "TEST01"
+    party_dlg._update_transfer_ui()
+
+    # Transfer host UI frame must remain visible for host even when alone
+    assert not party_dlg.frame_transfer.isHidden()
+
+    # Center and clamp on screen
+    party_dlg.center_and_clamp_on_screen()
+    screen = qapp.primaryScreen().availableGeometry()
+    assert party_dlg.y() >= screen.top() + 30
+    assert party_dlg.x() >= screen.left()
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+    party_dlg.hide()
+
+
+def test_audio_engine_play_next_hook():
+    """Tests that play_next_hook intercepts next_track calls."""
+    engine = CyberAudioEngine()
+    hook_called = False
+
+    def custom_hook(*args, **kwargs):
+        nonlocal hook_called
+        hook_called = True
+        return True
+
+    engine.play_next_hook = custom_hook
+    engine.next_track()
+    assert hook_called is True
+

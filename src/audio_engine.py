@@ -911,6 +911,15 @@ class CyberAudioEngine:
             user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 2, 0)
             log.info("[DESKTOP AUDIO] Sent Next Track command to system.")
             return
+
+        if getattr(self, "play_next_hook", None) and not getattr(self, "_in_custom_advance", False):
+            self._in_custom_advance = True
+            try:
+                if self.play_next_hook(crossfade=crossfade):
+                    return
+            finally:
+                self._in_custom_advance = False
+
         if not self.playlist and not self.queue:
             return
 

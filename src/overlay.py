@@ -1079,14 +1079,26 @@ class OverlayWindow(QWidget):
             dur = self.audio_engine.get_duration()
             pos = self.audio_engine.get_position()
             crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 2.0)
+            party_queue_has_items = bool(
+                self.panel
+                and hasattr(self.panel, "party_sync")
+                and self.panel.party_sync
+                and self.panel.party_sync.is_connected
+                and self.panel.party_sync.is_host
+                and self.panel.party_sync.party_queue
+            )
+            has_more_tracks = len(self.audio_engine.playlist) > 1 or party_queue_has_items
             if (
                 dur > (crossfade_dur * 2.0)
                 and pos >= (dur - crossfade_dur)
                 and not getattr(self.audio_engine, "_in_crossfade", False)
                 and self.audio_engine.is_playing
-                and len(self.audio_engine.playlist) > 1
+                and has_more_tracks
             ):
-                self.audio_engine.next_track(crossfade=True)
+                if self.panel and hasattr(self.panel, "play_next_track"):
+                    self.panel.play_next_track(crossfade=True)
+                else:
+                    self.audio_engine.next_track(crossfade=True)
                 if self.panel:
                     self.panel.sync_play_state()
                     self.panel.update_timeline()
@@ -1094,7 +1106,10 @@ class OverlayWindow(QWidget):
                 dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)
             ):
                 self.audio_engine.track_finished = False
-                self.audio_engine.next_track(crossfade=False)
+                if self.panel and hasattr(self.panel, "play_next_track"):
+                    self.panel.play_next_track(crossfade=False)
+                else:
+                    self.audio_engine.next_track(crossfade=False)
                 if self.panel:
                     self.panel.sync_play_state()
                     self.panel.update_timeline()
@@ -1890,7 +1905,10 @@ class OverlayWindow(QWidget):
                 return
             if not self.audio_engine.playlist:
                 return
-            self.audio_engine.next_track()
+            if self.panel and hasattr(self.panel, "play_next_track"):
+                self.panel.play_next_track(crossfade=False)
+            else:
+                self.audio_engine.next_track()
             self.trigger_skip_feedback("forward")
             if self.panel:
                 self.panel.sync_play_state()

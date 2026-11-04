@@ -2,9 +2,10 @@
 
 import os
 
-from PyQt6.QtCore import QPointF, QTimer
+from PyQt6.QtCore import QPointF, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFrame,
     QLabel,
@@ -148,3 +149,42 @@ class CyberScrollingTrackLabel(QWidget):
             painter.drawText(QPointF(curr_x + span, baseline), self.full_text)
         else:
             painter.drawText(QPointF(x_start, baseline), self.full_text)
+
+
+class DraggableClampedDialogMixin:
+    """Provides screen-safe centering, height-clamping, and background drag support."""
+
+    def center_and_clamp_on_screen(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        max_h = max(350, screen.height() - 70)
+        if self.height() > max_h:
+            self.resize(self.width(), max_h)
+        cx = screen.left() + max(10, (screen.width() - self.width()) // 2)
+        cy = screen.top() + max(35, (screen.height() - self.height()) // 2)
+        self.move(cx, cy)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.center_and_clamp_on_screen()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, "_drag_pos", None) is not None and (event.buttons() & Qt.MouseButton.LeftButton):
+            new_pos = event.globalPosition().toPoint() - self._drag_pos
+            screen = QApplication.primaryScreen().availableGeometry()
+            clamped_y = max(screen.top() + 10, min(new_pos.y(), screen.bottom() - 60))
+            clamped_x = max(screen.left() - self.width() + 60, min(new_pos.x(), screen.right() - 60))
+            self.move(clamped_x, clamped_y)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
