@@ -1079,6 +1079,16 @@ class OverlayWindow(QWidget):
             dur = self.audio_engine.get_duration()
             pos = self.audio_engine.get_position()
             crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 2.0)
+            is_downloading_party = bool(
+                self.panel and getattr(self.panel, "_party_downloading_track", None)
+            )
+            is_party_guest = bool(
+                self.panel
+                and hasattr(self.panel, "party_sync")
+                and self.panel.party_sync
+                and self.panel.party_sync.is_connected
+                and not self.panel.party_sync.is_host
+            )
             party_queue_has_items = bool(
                 self.panel
                 and hasattr(self.panel, "party_sync")
@@ -1088,7 +1098,19 @@ class OverlayWindow(QWidget):
                 and self.panel.party_sync.party_queue
             )
             has_more_tracks = len(self.audio_engine.playlist) > 1 or party_queue_has_items
-            if (
+
+            if is_party_guest:
+                # Guests must never auto-advance their personal playlist; hold and wait for host
+                if self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.05):
+                    self.audio_engine.track_finished = False
+                    if self.audio_engine.is_playing:
+                        self.audio_engine.pause()
+                    if self.panel:
+                        self.panel.sync_play_state()
+            elif is_downloading_party:
+                # Holding playback while downloading the next party track
+                pass
+            elif (
                 dur > (crossfade_dur * 2.0)
                 and pos >= (dur - crossfade_dur)
                 and not getattr(self.audio_engine, "_in_crossfade", False)

@@ -437,6 +437,8 @@ class SongDownloaderService(QObject):
 
             t_artist = str(track_info.get("artist") or "").strip() if track_info else ""
             t_title = str(track_info.get("title") or "").strip() if track_info else ""
+            if t_artist.lower() in ("talia player", "talia music player", "unknown artist", "unknown"):
+                t_artist = ""
             if not target_duration and track_info and track_info.get("duration"):
                 try:
                     target_duration = float(track_info["duration"])
@@ -481,15 +483,25 @@ class SongDownloaderService(QObject):
                         if fetch_lyrics_for_file:
                             fetch_lyrics_for_file(exist_opus, force_overwrite=True)
                         return (True, exist_opus) if return_path else True
+            elif t_title:
+                # Check for existing download matching title
+                t_stem = sanitize_filename(t_title)
+                exist_opus = os.path.join(target_dir, f"{t_stem}.opus")
+                if os.path.exists(exist_opus):
+                    self.last_downloaded_file = exist_opus
+                    return (True, exist_opus) if return_path else True
 
+            clean_q = re.sub(r"(?i)\btalia\s+(?:music\s+)?player\s*[-:]?\s*", "", query).strip()
             is_url = "youtube.com/" in query or "youtu.be/" in query
             if is_url:
                 search_query = query
             elif t_artist and t_title:
                 # Prioritize official audio / topic tracks for accurate duration and sync
                 search_query = f"{t_artist} - {t_title} audio"
+            elif t_title:
+                search_query = f"{t_title} audio"
             else:
-                search_query = f"{query} audio"
+                search_query = f"{clean_q} audio"
 
             if progress_cb:
                 progress_cb(f"Searching YouTube: {search_query if not is_url else query}")
@@ -497,7 +509,7 @@ class SongDownloaderService(QObject):
             results = search_youtube(search_query, limit=8 if not is_url else 1)
             # Fallback to lyrics query if audio search returned nothing
             if not results and not is_url:
-                fallback_query = f"{t_artist} - {t_title} lyrics" if (t_artist and t_title) else f"{query} lyrics"
+                fallback_query = f"{t_artist} - {t_title} lyrics" if (t_artist and t_title) else f"{t_title or clean_q} lyrics"
                 results = search_youtube(fallback_query, limit=6)
             # Final fallback to raw query
             if not results and not is_url and search_query != query:

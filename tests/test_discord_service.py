@@ -9,8 +9,8 @@ from discord_service import DiscordRpcService, parse_track_info
 def test_parse_track_info():
     assert parse_track_info("Colicchie - Worth It.opus") == ("Worth It", "Colicchie")
     assert parse_track_info("Juice WRLD - Lucid Dreams.mp3") == ("Lucid Dreams", "Juice WRLD")
-    assert parse_track_info("SoloTrack.flac") == ("SoloTrack", "Talia Music Player")
-    assert parse_track_info("") == ("Unknown Track", "Talia Music Player")
+    assert parse_track_info("SoloTrack.flac") == ("SoloTrack", "")
+    assert parse_track_info("") == ("Unknown Track", "")
     # Sequential Spotify playlist numbering formats
     assert parse_track_info("01. Lin-Manuel Miranda - Alexander Hamilton.opus") == ("Alexander Hamilton", "Lin-Manuel Miranda")
     assert parse_track_info("02 - Lin-Manuel Miranda - Aaron Burr, Sir.opus") == ("Aaron Burr, Sir", "Lin-Manuel Miranda")

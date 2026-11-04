@@ -36,8 +36,8 @@ def parse_track_info(raw_title: str) -> tuple[str, str]:
         parts = clean.split(" - ", 1)
         artist = parts[0].strip()
         title = parts[1].strip()
-        return (title or "Unknown Track", artist or "Talia Player")
-    return (clean or "Unknown Track", "Talia Music Player")
+        return (title or clean or "Unknown Track", artist)
+    return (clean or "Unknown Track", "")
 
 
 class DiscordRpcService:
@@ -147,8 +147,9 @@ class DiscordRpcService:
             }
 
         track_title, artist = parse_track_info(title)
+        display_artist = artist if artist else "Talia"
         details_str = track_title[:127]
-        state_str = (artist if is_playing else f"{artist} (Paused)")[:127]
+        state_str = (display_artist if is_playing else f"{display_artist} (Paused)")[:127]
 
         payload = {
             "activity_type": LISTENING_TYPE,

@@ -625,3 +625,93 @@ def test_audio_engine_play_next_hook():
     engine.next_track()
     assert hook_called is True
 
+
+@pytest.mark.gui
+def test_party_queue_song_title_matching_and_no_talia_prefix(qapp, tmp_path):
+    """Tests that queuing just a song name matches a local file and never injects Talia Music Player."""
+    engine = CyberAudioEngine()
+    track_file = str(tmp_path / "Queen - Bohemian Rhapsody.mp3")
+    with open(track_file, "w") as f:
+        f.write("dummy audio")
+    engine.playlist = [track_file]
+    engine.current_index = 0
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Simulate room connection
+    panel.party_sync.is_connected = True
+    panel.party_sync.is_host = True
+
+    # Queue just the song title
+    item = panel.party_sync.add_to_party_queue(title="Bohemian Rhapsody")
+    assert "talia music player" not in item.get("artist", "").lower()
+    assert "talia music player" not in item.get("yt_query", "").lower()
+    assert item.get("title") == "Bohemian Rhapsody"
+
+    # Must match local "Queen - Bohemian Rhapsody.mp3"
+    idx = panel.find_matching_party_track(item)
+    assert idx == 0
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+@pytest.mark.gui
+def test_party_guest_does_not_advance_local_playlist(qapp, tmp_path):
+    """Tests that a party guest never auto-advances their local playlist."""
+    engine = CyberAudioEngine()
+    track1 = str(tmp_path / "Song1.mp3")
+    track2 = str(tmp_path / "Song2.mp3")
+    with open(track1, "w") as f:
+        f.write("1")
+    with open(track2, "w") as f:
+        f.write("2")
+    engine.playlist = [track1, track2]
+    engine.current_index = 0
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Connected as GUEST
+    panel.party_sync.is_connected = True
+    panel.party_sync.is_host = False
+
+    result = panel.play_next_track()
+    assert result is False
+    assert engine.current_index == 0  # Did not advance
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+@pytest.mark.gui
+def test_party_downloading_holds_advance(qapp, tmp_path):
+    """Tests that play_next_track holds when a party track is being downloaded."""
+    engine = CyberAudioEngine()
+    track1 = str(tmp_path / "Song1.mp3")
+    with open(track1, "w") as f:
+        f.write("1")
+    engine.playlist = [track1]
+    engine.current_index = 0
+
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    panel.party_sync.is_connected = True
+    panel.party_sync.is_host = True
+    panel._party_downloading_track = {"title": "Pending Song"}
+
+    result = panel.play_next_track()
+    assert result is False
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+

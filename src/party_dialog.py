@@ -575,16 +575,38 @@ class PartySyncDialog(DraggableClampedDialogMixin, QDialog):
         if not text:
             return
         title, artist = parse_track_info(text)
+
+        # Match against local playlist to attach exact filename & artist if already in library
+        matched_fn = ""
+        playlist = getattr(self.panel.audio_engine, "playlist", []) if self.panel else []
+        norm_text = re.sub(r"[^a-z0-9]", "", text.lower())
+        norm_title = re.sub(r"[^a-z0-9]", "", title.lower())
+        for track_path in playlist:
+            fn = os.path.basename(track_path)
+            c_title, c_artist = parse_track_info(fn)
+            norm_fn = re.sub(r"[^a-z0-9]", "", fn.lower())
+            norm_ct = re.sub(r"[^a-z0-9]", "", c_title.lower())
+            if norm_text == norm_fn or norm_text == norm_ct or (norm_title and norm_title == norm_ct):
+                matched_fn = fn
+                if not artist and c_artist:
+                    artist = c_artist
+                break
+
+        query = text
+        if artist and " - " not in text:
+            query = f"{artist} - {title}"
+
         self.sync_service.add_to_party_queue(
             title=title,
             artist=artist,
-            yt_query=text,
+            filename=matched_fn,
+            yt_query=query,
         )
         self.edit_queue_input.clear()
         self.lbl_feed.setText(f"Added '{title}' to Party Queue.")
 
     def _on_add_from_library_clicked(self):
-        playlist = getattr(self.panel.audio_engine, "playlist", [])
+        playlist = getattr(self.panel.audio_engine, "playlist", []) if self.panel else []
         if not playlist:
             self.lbl_feed.setText("Your local playlist is empty.")
             return
@@ -592,10 +614,12 @@ class PartySyncDialog(DraggableClampedDialogMixin, QDialog):
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_path:
             fn = os.path.basename(dlg.selected_path)
             title, artist = parse_track_info(fn)
+            query = f"{artist} - {title}" if artist else title
             self.sync_service.add_to_party_queue(
                 title=title,
                 artist=artist,
                 filename=fn,
+                yt_query=query,
             )
             self.lbl_feed.setText(f"Added '{title}' to Party Queue.")
 

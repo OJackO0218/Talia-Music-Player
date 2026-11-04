@@ -280,8 +280,16 @@ class PartySyncService(QObject):
             return {}
         item_id = f"q_{int(time.time() * 1000)}_{random.randint(100, 999)}"
         clean_title = title.strip() or "Unknown Title"
-        clean_artist = artist.strip() or "Unknown Artist"
-        query = yt_query or f"{clean_artist} - {clean_title}".strip(" -")
+        clean_artist = artist.strip()
+        if clean_artist.lower() in ("talia player", "talia music player", "unknown artist", "unknown"):
+            clean_artist = ""
+        if yt_query:
+            query = yt_query
+        elif clean_artist:
+            query = f"{clean_artist} - {clean_title}"
+        else:
+            query = clean_title
+        query = re.sub(r"(?i)\btalia\s+(?:music\s+)?player\s*[-:]?\s*", "", query).strip()
         item = {
             "id": item_id,
             "title": clean_title,

@@ -833,7 +833,17 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         pops and plays the next party track for all room members!
         Otherwise, plays the next track from the local playlist.
         """
-        if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+        if hasattr(self, "party_sync") and self.party_sync.is_connected:
+            # Guests must NEVER advance local playlists; they follow host broadcasts
+            if not self.party_sync.is_host:
+                log.info("[PARTY SYNC] Guest ignoring local play_next_track; following host.")
+                return False
+
+            # If host is already waiting on a queued download, ignore duplicate trigger calls
+            if getattr(self, "_party_downloading_track", None):
+                log.info("[PARTY SYNC] Party track download already in progress; holding advance.")
+                return False
+
             if self.party_sync.party_queue:
                 next_item = self.party_sync.pop_next_party_track()
                 if next_item:
@@ -842,11 +852,33 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                         self.audio_engine.play_index(matched_idx, crossfade=crossfade)
                         self.sync_play_state()
                         self.refresh_queue_ui()
+                        self._broadcast_party_track()
                         return True
                     else:
                         # Auto-download queued song for Host
                         log.info("[PARTY QUEUE] Host auto-downloading queued track: %s", next_item.get("title"))
-                        self.lbl_track_title.setText(f"[PARTY] Auto-fetching queued '{next_item.get('title')}'...")
+                        # PAUSE playback immediately so audio doesn't run into next playlist track!
+                        self.audio_engine.pause()
+                        self._party_downloading_track = next_item
+
+                        title = next_item.get("title", "Unknown Track")
+                        if hasattr(self, "lbl_track_title") and self.lbl_track_title:
+                            self.lbl_track_title.setText(f"[PARTY] Downloading '{title}'...")
+                            self.lbl_track_title.full_text = f"[PARTY] Downloading '{title}'..."
+                        if self.overlay:
+                            self.overlay.update()
+
+                        # Inform room of the track being prepared
+                        self.party_sync.broadcast_track_change(
+                            title=next_item.get("title", ""),
+                            artist=next_item.get("artist", ""),
+                            filename=next_item.get("filename", ""),
+                            yt_query=next_item.get("yt_query", ""),
+                            duration=float(next_item.get("duration", 0.0)),
+                            timestamp=0.0,
+                            is_playing=False,
+                        )
+
                         threading.Thread(
                             target=self._auto_download_party_track,
                             args=(next_item, 0.0, True),
@@ -1956,6 +1988,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         target_fn = (data.get("filename") or "").strip().lower()
         target_title = (data.get("title") or "").strip().lower()
         target_artist = (data.get("artist") or "").strip().lower()
+        if target_artist in ("talia music player", "talia player", "unknown artist", "unknown"):
+            target_artist = ""
+        yt_query = (data.get("yt_query") or "").strip().lower()
+        yt_query = re.sub(r"(?i)\btalia\s+(?:music\s+)?player\s*[-:]?\s*", "", yt_query).strip()
 
         def clean_stem(fn: str) -> str:
             stem = os.path.splitext(fn)[0].lower()
@@ -1964,6 +2000,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         target_stem = clean_stem(target_fn) if target_fn else ""
         norm_target_title = re.sub(r"[^a-z0-9]", "", target_title)
         norm_target_artist = re.sub(r"[^a-z0-9]", "", target_artist)
+        norm_yt_query = re.sub(r"[^a-z0-9]", "", yt_query)
 
         # 1. Search active playlist in audio_engine
         best_idx = -1
@@ -1972,14 +2009,23 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         for i, track_path in enumerate(self.audio_engine.playlist):
             fn = os.path.basename(track_path).lower()
             stem = clean_stem(fn)
+            norm_c_stem = re.sub(r"[^a-z0-9]", "", stem)
 
             # Exact filename or stem match
             if target_fn and (fn == target_fn or stem == target_stem):
                 return i
 
+            # Exact query match against filename/stem
+            if norm_yt_query and (norm_yt_query == norm_c_stem or norm_yt_query == re.sub(r"[^a-z0-9]", "", fn)):
+                return i
+
             cand_title, cand_artist = parse_track_info(fn)
             norm_c_title = re.sub(r"[^a-z0-9]", "", cand_title.lower())
             norm_c_artist = re.sub(r"[^a-z0-9]", "", cand_artist.lower())
+
+            # Query matches candidate title directly
+            if norm_yt_query and norm_c_title and (norm_yt_query == norm_c_title or norm_yt_query in norm_c_title):
+                return i
 
             score = 0
             if norm_target_title and norm_c_title and norm_target_title == norm_c_title:
@@ -1989,10 +2035,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                         score += 20
                 elif not norm_target_artist:
                     score += 15
-            elif norm_target_title and len(norm_target_title) >= 5 and norm_target_title in norm_c_title:
-                score += 45
+            elif norm_target_title and len(norm_target_title) >= 4 and (norm_target_title in norm_c_title or norm_target_title in norm_c_stem):
+                score += 50
                 if norm_target_artist and norm_c_artist and (norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist):
                     score += 30
+                elif not norm_target_artist:
+                    score += 25
 
             if score > best_score:
                 best_score = score
@@ -2018,7 +2066,15 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 if not f_lower.endswith(SUPPORTED_AUDIO_EXTS):
                     continue
                 f_stem = clean_stem(fname)
+                norm_c_stem = re.sub(r"[^a-z0-9]", "", f_stem)
                 if (target_stem and f_stem == target_stem) or (target_fn and f_lower == target_fn):
+                    full_p = os.path.join(c_dir, fname)
+                    if full_p not in self.audio_engine.playlist:
+                        self.audio_engine.playlist.append(full_p)
+                        self.populate_playlist_ui()
+                    return self.audio_engine.playlist.index(full_p)
+
+                if norm_yt_query and (norm_yt_query == norm_c_stem or norm_yt_query == re.sub(r"[^a-z0-9]", "", f_lower)):
                     full_p = os.path.join(c_dir, fname)
                     if full_p not in self.audio_engine.playlist:
                         self.audio_engine.playlist.append(full_p)
@@ -2028,7 +2084,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 c_title, c_artist = parse_track_info(fname)
                 norm_c_title = re.sub(r"[^a-z0-9]", "", c_title.lower())
                 norm_c_artist = re.sub(r"[^a-z0-9]", "", c_artist.lower())
-                if norm_target_title and norm_c_title == norm_target_title:
+                if norm_target_title and (norm_c_title == norm_target_title or norm_target_title in norm_c_stem):
                     if not norm_target_artist or (norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist):
                         full_p = os.path.join(c_dir, fname)
                         if full_p not in self.audio_engine.playlist:
@@ -2041,13 +2097,16 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def _on_party_track_received(self, data: dict):
         if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
             return
-        target_title = (data.get("title") or "").lower()
-        target_artist = (data.get("artist") or "").lower()
+        target_title = (data.get("title") or "").strip()
+        target_artist = (data.get("artist") or "").strip()
+        if target_artist.lower() in ("talia music player", "talia player", "unknown artist", "unknown"):
+            target_artist = ""
         target_time = float(data.get("timestamp", 0.0))
         target_playing = bool(data.get("is_playing", True))
 
         matched_idx = self.find_matching_party_track(data)
         if matched_idx >= 0:
+            self._party_downloading_track = None
             self._is_handling_party_event = True
             try:
                 self.audio_engine.play_index(matched_idx)
@@ -2055,14 +2114,32 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                     self.audio_engine.seek(target_time)
                 if not target_playing:
                     self.audio_engine.pause()
+                else:
+                    self.audio_engine.play()
                 self.sync_play_state()
             finally:
                 self._is_handling_party_event = False
         else:
-            query = data.get("yt_query") or f"{target_artist} - {target_title}".strip(" -")
+            # Pause playback immediately so guest doesn't fall through to next local playlist track!
+            self.audio_engine.pause()
+            self._party_downloading_track = data
+            self._last_known_host_pos = target_time
+            self._last_known_host_playing = target_playing
+
+            query = data.get("yt_query")
+            if not query:
+                query = f"{target_artist} - {target_title}" if target_artist else target_title
+            query = re.sub(r"(?i)\btalia\s+(?:music\s+)?player\s*[-:]?\s*", "", query).strip()
+
             dur = float(data.get("duration", 0.0))
             log.info("[PARTY SYNC] Track not in local library. Auto-downloading: %s (duration=%.1f)", query, dur)
-            self.lbl_track_title.setText(f"[PARTY] Auto-fetching '{data.get('title')}'...")
+            display_title = data.get("title") or query
+            if hasattr(self, "lbl_track_title") and self.lbl_track_title:
+                self.lbl_track_title.setText(f"[PARTY] Downloading '{display_title}'...")
+                self.lbl_track_title.full_text = f"[PARTY] Downloading '{display_title}'..."
+            if self.overlay:
+                self.overlay.update()
+
             threading.Thread(
                 target=self._auto_download_party_track,
                 args=(data, target_time, target_playing),
@@ -2070,10 +2147,25 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             ).start()
 
     def _auto_download_party_track(self, track_data: dict, target_time: float, target_playing: bool):
-        target_dir = os.path.join(DEFAULT_MUSIC_DIR, "Downloaded Songs")
+        cur_folder = getattr(self.audio_engine, 'folder_path', None)
+        if cur_folder and os.path.isdir(cur_folder):
+            target_dir = os.path.join(cur_folder, "Downloaded Songs")
+        else:
+            target_dir = os.path.join(DEFAULT_MUSIC_DIR, "Downloaded Songs")
         os.makedirs(target_dir, exist_ok=True)
-        query = track_data.get("yt_query") or f"{track_data.get('artist', '')} - {track_data.get('title', '')}".strip(" -")
+
+        query = track_data.get("yt_query")
+        if not query:
+            a = track_data.get("artist", "").strip()
+            t = track_data.get("title", "").strip()
+            if a.lower() in ("talia music player", "talia player", "unknown artist", "unknown"):
+                a = ""
+            query = f"{a} - {t}" if a else t
+        query = re.sub(r"(?i)\btalia\s+(?:music\s+)?player\s*[-:]?\s*", "", query).strip()
+
         target_dur = float(track_data.get("duration", 0.0))
+        ok = False
+        final_path = ""
         if hasattr(self, "downloader") and self.downloader:
             ok, final_path = self.downloader.download_sync_query(
                 query,
@@ -2082,14 +2174,21 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 target_duration=target_dur,
                 return_path=True,
             )
-            if ok and final_path and os.path.exists(final_path):
-                self.party_sync.track_auto_downloaded.emit(target_dir, target_time, target_playing, final_path)
+        if ok and final_path and os.path.exists(final_path):
+            self.party_sync.track_auto_downloaded.emit(target_dir, target_time, target_playing, final_path)
+        else:
+            log.warning("[PARTY QUEUE] Download failed for: %s", query)
+            self._party_downloading_track = None
+            title = track_data.get("title") or query
+            if hasattr(self, "lbl_track_title") and self.lbl_track_title:
+                self.lbl_track_title.setText(f"[PARTY] Could not fetch '{title}'")
+            if hasattr(self, "party_sync") and self.party_sync.is_host:
+                QTimer.singleShot(1500, lambda: self.play_next_track(crossfade=False))
 
     def _on_party_track_downloaded(self, target_dir: str, target_time: float, target_playing: bool, file_path: str = ""):
+        self._party_downloading_track = None
         cur_folder = getattr(self.audio_engine, 'folder_path', None)
         if not cur_folder or not os.path.exists(cur_folder):
-            self.audio_engine.set_folder(target_dir)
-        elif file_path and not os.path.abspath(file_path).startswith(os.path.abspath(cur_folder)):
             self.audio_engine.set_folder(target_dir)
 
         self.refresh_tracklist()
@@ -2110,16 +2209,27 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             target_idx = len(self.audio_engine.playlist) - 1
 
         if 0 <= target_idx < len(self.audio_engine.playlist):
+            is_host = hasattr(self, "party_sync") and self.party_sync.is_host
             self._is_handling_party_event = True
             try:
                 self.audio_engine.play_index(target_idx)
-                if target_time > 0:
-                    self.audio_engine.seek(target_time)
-                if not target_playing:
-                    self.audio_engine.pause()
+                if not is_host:
+                    seek_pos = getattr(self, "_last_known_host_pos", target_time)
+                    if seek_pos > 0:
+                        self.audio_engine.seek(seek_pos)
+                    should_play = getattr(self, "_last_known_host_playing", target_playing)
+                    if should_play:
+                        self.audio_engine.play()
+                    else:
+                        self.audio_engine.pause()
+                else:
+                    self.audio_engine.play()
                 self.sync_play_state()
             finally:
                 self._is_handling_party_event = False
+
+            if is_host:
+                self._broadcast_party_track()
 
     def _on_party_play_received(self, ts: float):
         if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
@@ -2161,6 +2271,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def _on_party_heartbeat_received(self, ts: float, is_playing: bool):
         if hasattr(self, "party_sync") and self.party_sync.is_host:
+            return
+        self._last_known_host_pos = ts
+        self._last_known_host_playing = is_playing
+        if getattr(self, "_party_downloading_track", None):
             return
         curr_pos = self.audio_engine.get_position()
         drift = abs(curr_pos - ts)
