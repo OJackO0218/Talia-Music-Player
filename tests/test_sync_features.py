@@ -334,3 +334,114 @@ def test_party_sync_reject_phantom_room():
     assert len(connected_list) == 0
     assert len(error_list) >= 1
     assert "does not exist or host is offline" in error_list[0]
+
+
+def test_pick_best_youtube_result():
+    from song_downloader import pick_best_youtube_result
+    candidates = [
+        {
+            "id": "vid_bad_cov",
+            "title": "Alexander Hamilton (Cover by John)",
+            "channel": "John Music",
+            "duration": 220,
+            "url": "https://youtube.com/watch?v=cov",
+        },
+        {
+            "id": "vid_mv",
+            "title": "Alexander Hamilton (Official Music Video)",
+            "channel": "Atlantic Records",
+            "duration": 315,  # Has 80s dialogue skit
+            "url": "https://youtube.com/watch?v=mv",
+        },
+        {
+            "id": "vid_topic",
+            "title": "Alexander Hamilton",
+            "channel": "Lin-Manuel Miranda - Topic",
+            "duration": 236,  # Exact album duration!
+            "url": "https://youtube.com/watch?v=exact",
+        },
+    ]
+
+    best = pick_best_youtube_result(
+        candidates,
+        target_title="Alexander Hamilton",
+        target_artist="Lin-Manuel Miranda",
+        target_duration=236.0,
+    )
+    assert best is not None
+    assert best["id"] == "vid_topic"
+    assert best["url"] == "https://youtube.com/watch?v=exact"
+
+
+@pytest.mark.gui
+def test_find_matching_party_track(qapp, tmp_path):
+    engine = CyberAudioEngine()
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Setup playlist with various tracks
+    t1 = str(tmp_path / "01. Zara Larsson - Symphony.mp3")
+    t2 = str(tmp_path / "05. Lin-Manuel Miranda - Alexander Hamilton.mp3")
+    t3 = str(tmp_path / "99. YOASOBI - Idol.mp3")
+    for t in (t1, t2, t3):
+        with open(t, "w") as f:
+            f.write("audio")
+
+    engine.playlist = [t1, t2, t3]
+
+    # Host sends opus filename with track numbering from spotify
+    host_data = {
+        "title": "Alexander Hamilton",
+        "artist": "Lin-Manuel Miranda",
+        "filename": "01. Lin-Manuel Miranda - Alexander Hamilton.opus",
+        "duration": 236.4,
+    }
+    idx = panel.find_matching_party_track(host_data)
+    assert idx == 1  # Matches t2 despite prefix differences and extension differences
+
+    # Test that substring false positives are rejected
+    false_data = {
+        "title": "Sym",  # Substring of Symphony
+        "artist": "Another Artist",
+        "filename": "Another Artist - Sym.opus",
+    }
+    idx_false = panel.find_matching_party_track(false_data)
+    assert idx_false == -1
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+@pytest.mark.gui
+def test_party_track_downloaded_exact_playback(qapp, tmp_path):
+    engine = CyberAudioEngine()
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Guest has existing tracks: Track A, Track Z
+    track_a = str(tmp_path / "A_Track.mp3")
+    track_z = str(tmp_path / "Z_Track.mp3")
+    track_hamilton = str(tmp_path / "Hamilton.mp3")
+    for t in (track_a, track_z, track_hamilton):
+        with open(t, "w") as f:
+            f.write("dummy")
+
+    engine.playlist = [track_a, track_hamilton, track_z]
+    engine.folder_path = str(tmp_path)
+
+    played_indices = []
+    engine.play_index = lambda idx, *args, **kwargs: played_indices.append(idx)
+
+    # When track_hamilton is downloaded, it must play index 1 (Hamilton), NOT index 2 (Z_Track / len - 1)!
+    panel._on_party_track_downloaded(str(tmp_path), target_time=15.0, target_playing=True, file_path=track_hamilton)
+
+    assert len(played_indices) == 1
+    assert played_indices[0] == 1  # Played Hamilton, NOT Z_Track!
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+

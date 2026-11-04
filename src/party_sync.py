@@ -61,7 +61,7 @@ class PartySyncService(QObject):
     heartbeat_received = pyqtSignal(float, bool)  # timestamp, is_playing
     status_message = pyqtSignal(str)         # UI notification
     error_occurred = pyqtSignal(str)         # Error message
-    track_auto_downloaded = pyqtSignal(str, float, bool)  # target_dir, target_time, target_playing
+    track_auto_downloaded = pyqtSignal([str, float, bool], [str, float, bool, str])  # target_dir, target_time, target_playing, [file_path]
     host_transferred = pyqtSignal(str, str)  # new_host, old_host
 
     def __init__(self, parent=None):

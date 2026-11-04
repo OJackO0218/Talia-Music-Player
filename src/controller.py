@@ -8,6 +8,7 @@ from discord_service import DiscordRpcService, parse_track_info
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -43,6 +44,7 @@ from config import (
     MIN_CHAR_SIZE,
     PNGS_DIR,
     PROJECT_ROOT,
+    SUPPORTED_AUDIO_EXTS,
     VK_CONTROL,
     VK_F7,
     VK_F8,
@@ -1812,7 +1814,21 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 dur = self.audio_engine.get_duration()
                 pos = self.audio_engine.get_position()
                 is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
-                log.info("[PARTY SYNC] Broadcasting track: '%s' by '%s' (pos=%.2f, dur=%.2f, playing=%s)", title, artist, pos, dur, is_playing)
+
+                # Check if this track contains an embedded YouTube URL or ID
+                yt_query = ""
+                try:
+                    if path.lower().endswith(".opus"):
+                        from mutagen.oggopus import OggOpus
+                        audio = OggOpus(path)
+                        for c in audio.get("comment", []):
+                            if c.startswith("yt_url="):
+                                yt_query = c.split("yt_url=", 1)[1].strip()
+                                break
+                except Exception:
+                    pass
+
+                log.info("[PARTY SYNC] Broadcasting track: '%s' by '%s' (pos=%.2f, dur=%.2f, playing=%s, yt=%s)", title, artist, pos, dur, is_playing, yt_query)
                 self.party_sync.broadcast_track(
                     title=title,
                     artist=artist,
@@ -1820,29 +1836,110 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                     duration=dur,
                     timestamp=pos,
                     is_playing=is_playing,
+                    yt_query=yt_query,
                 )
         except Exception as exc:
             log.exception("[PARTY SYNC] Failed to broadcast track: %s", exc)
 
+    def find_matching_party_track(self, data: dict) -> int:
+        """
+        Locates the best matching track in the local playlist or music folders.
+        Prevents false-positive substring collisions and supports normalized title/artist matching.
+        """
+        target_fn = (data.get("filename") or "").strip().lower()
+        target_title = (data.get("title") or "").strip().lower()
+        target_artist = (data.get("artist") or "").strip().lower()
+
+        def clean_stem(fn: str) -> str:
+            stem = os.path.splitext(fn)[0].lower()
+            return re.sub(r"^\d{1,3}(?:[\.\-_]|\s+-)\s*", "", stem).strip()
+
+        target_stem = clean_stem(target_fn) if target_fn else ""
+        norm_target_title = re.sub(r"[^a-z0-9]", "", target_title)
+        norm_target_artist = re.sub(r"[^a-z0-9]", "", target_artist)
+
+        # 1. Search active playlist in audio_engine
+        best_idx = -1
+        best_score = 0
+
+        for i, track_path in enumerate(self.audio_engine.playlist):
+            fn = os.path.basename(track_path).lower()
+            stem = clean_stem(fn)
+
+            # Exact filename or stem match
+            if target_fn and (fn == target_fn or stem == target_stem):
+                return i
+
+            cand_title, cand_artist = parse_track_info(fn)
+            norm_c_title = re.sub(r"[^a-z0-9]", "", cand_title.lower())
+            norm_c_artist = re.sub(r"[^a-z0-9]", "", cand_artist.lower())
+
+            score = 0
+            if norm_target_title and norm_c_title and norm_target_title == norm_c_title:
+                score += 80
+                if norm_target_artist and norm_c_artist:
+                    if norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist:
+                        score += 20
+                elif not norm_target_artist:
+                    score += 15
+            elif norm_target_title and len(norm_target_title) >= 5 and norm_target_title in norm_c_title:
+                score += 45
+                if norm_target_artist and norm_c_artist and (norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist):
+                    score += 30
+
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        if best_idx >= 0 and best_score >= 70:
+            return best_idx
+
+        # 2. Check if the song already exists on disk in music directory
+        candidate_dirs = [
+            os.path.join(DEFAULT_MUSIC_DIR, "Downloaded Songs"),
+            DEFAULT_MUSIC_DIR,
+        ]
+        cur_folder = getattr(self.audio_engine, "folder_path", None)
+        if cur_folder and cur_folder not in candidate_dirs and os.path.exists(cur_folder):
+            candidate_dirs.append(cur_folder)
+
+        for c_dir in candidate_dirs:
+            if not os.path.exists(c_dir):
+                continue
+            for fname in os.listdir(c_dir):
+                f_lower = fname.lower()
+                if not f_lower.endswith(SUPPORTED_AUDIO_EXTS):
+                    continue
+                f_stem = clean_stem(fname)
+                if (target_stem and f_stem == target_stem) or (target_fn and f_lower == target_fn):
+                    full_p = os.path.join(c_dir, fname)
+                    if full_p not in self.audio_engine.playlist:
+                        self.audio_engine.playlist.append(full_p)
+                        self.populate_playlist_ui()
+                    return self.audio_engine.playlist.index(full_p)
+
+                c_title, c_artist = parse_track_info(fname)
+                norm_c_title = re.sub(r"[^a-z0-9]", "", c_title.lower())
+                norm_c_artist = re.sub(r"[^a-z0-9]", "", c_artist.lower())
+                if norm_target_title and norm_c_title == norm_target_title:
+                    if not norm_target_artist or (norm_target_artist in norm_c_artist or norm_c_artist in norm_target_artist):
+                        full_p = os.path.join(c_dir, fname)
+                        if full_p not in self.audio_engine.playlist:
+                            self.audio_engine.playlist.append(full_p)
+                            self.populate_playlist_ui()
+                        return self.audio_engine.playlist.index(full_p)
+
+        return -1
+
     def _on_party_track_received(self, data: dict):
         if hasattr(self, "party_sync") and self.party_sync.is_host and not self.party_sync.allow_guest_control:
             return
-        target_fn = (data.get("filename") or "").lower()
         target_title = (data.get("title") or "").lower()
         target_artist = (data.get("artist") or "").lower()
         target_time = float(data.get("timestamp", 0.0))
         target_playing = bool(data.get("is_playing", True))
 
-        matched_idx = -1
-        for i, track_path in enumerate(self.audio_engine.playlist):
-            fn = os.path.basename(track_path).lower()
-            if target_fn and (target_fn == fn or target_fn in fn):
-                matched_idx = i
-                break
-            if target_title and target_title in fn:
-                matched_idx = i
-                break
-
+        matched_idx = self.find_matching_party_track(data)
         if matched_idx >= 0:
             self._is_handling_party_event = True
             try:
@@ -1856,34 +1953,59 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self._is_handling_party_event = False
         else:
             query = data.get("yt_query") or f"{target_artist} - {target_title}".strip(" -")
-            log.info("[PARTY SYNC] Track not in local library. Auto-downloading: %s", query)
+            dur = float(data.get("duration", 0.0))
+            log.info("[PARTY SYNC] Track not in local library. Auto-downloading: %s (duration=%.1f)", query, dur)
             self.lbl_track_title.setText(f"[PARTY] Auto-fetching '{data.get('title')}'...")
             threading.Thread(
                 target=self._auto_download_party_track,
-                args=(query, target_time, target_playing),
+                args=(data, target_time, target_playing),
                 daemon=True,
             ).start()
 
-    def _auto_download_party_track(self, query: str, target_time: float, target_playing: bool):
+    def _auto_download_party_track(self, track_data: dict, target_time: float, target_playing: bool):
         target_dir = os.path.join(DEFAULT_MUSIC_DIR, "Downloaded Songs")
         os.makedirs(target_dir, exist_ok=True)
+        query = track_data.get("yt_query") or f"{track_data.get('artist', '')} - {track_data.get('title', '')}".strip(" -")
+        target_dur = float(track_data.get("duration", 0.0))
         if hasattr(self, "downloader") and self.downloader:
-            ok = self.downloader.download_sync_query(query, target_dir)
-            if ok:
-                self.party_sync.track_auto_downloaded.emit(target_dir, target_time, target_playing)
+            ok, final_path = self.downloader.download_sync_query(
+                query,
+                target_dir,
+                track_info=track_data,
+                target_duration=target_dur,
+                return_path=True,
+            )
+            if ok and final_path and os.path.exists(final_path):
+                self.party_sync.track_auto_downloaded.emit(target_dir, target_time, target_playing, final_path)
 
-    def _on_party_track_downloaded(self, target_dir: str, target_time: float, target_playing: bool):
+    def _on_party_track_downloaded(self, target_dir: str, target_time: float, target_playing: bool, file_path: str = ""):
         cur_folder = getattr(self.audio_engine, 'folder_path', None)
         if not cur_folder or not os.path.exists(cur_folder):
             self.audio_engine.set_folder(target_dir)
-        elif not os.path.abspath(target_dir).startswith(os.path.abspath(cur_folder)) and not os.path.abspath(cur_folder).startswith(os.path.abspath(target_dir)):
+        elif file_path and not os.path.abspath(file_path).startswith(os.path.abspath(cur_folder)):
             self.audio_engine.set_folder(target_dir)
+
         self.refresh_tracklist()
-        if self.audio_engine.playlist:
-            newest_idx = len(self.audio_engine.playlist) - 1
+
+        target_idx = -1
+        if file_path and os.path.exists(file_path):
+            norm_target = os.path.normcase(os.path.abspath(file_path))
+            for idx, p in enumerate(self.audio_engine.playlist):
+                if os.path.normcase(os.path.abspath(p)) == norm_target:
+                    target_idx = idx
+                    break
+
+            if target_idx == -1:
+                self.audio_engine.playlist.append(file_path)
+                target_idx = len(self.audio_engine.playlist) - 1
+                self.populate_playlist_ui()
+        elif self.audio_engine.playlist:
+            target_idx = len(self.audio_engine.playlist) - 1
+
+        if 0 <= target_idx < len(self.audio_engine.playlist):
             self._is_handling_party_event = True
             try:
-                self.audio_engine.play_index(newest_idx)
+                self.audio_engine.play_index(target_idx)
                 if target_time > 0:
                     self.audio_engine.seek(target_time)
                 if not target_playing:

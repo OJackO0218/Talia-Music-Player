@@ -148,6 +148,92 @@ def search_youtube(query: str, limit: int = 5) -> List[Dict]:
     return results
 
 
+def pick_best_youtube_result(
+    results: List[Dict],
+    target_title: str = "",
+    target_artist: str = "",
+    target_duration: float = 0.0,
+) -> Optional[Dict]:
+    """
+    Selects the best YouTube candidate matching the song.
+    Prioritizes official audio/topic releases with duration matching target_duration (+-3s),
+    and heavily penalizes covers, remixes, live recordings, and skits/dialogue edits.
+    """
+    if not results:
+        return None
+    if len(results) == 1:
+        return results[0]
+
+    best_candidate = results[0]
+    best_score = -9999.0
+
+    clean_target_title = re.sub(r"[^a-z0-9\s]", "", target_title.lower()).strip()
+    clean_target_artist = re.sub(r"[^a-z0-9\s]", "", target_artist.lower()).strip()
+
+    bad_keywords = (
+        "cover", "live", "remix", "acoustic", "slowed", "reverb",
+        "parody", "reaction", "karaoke", "instrumental", "10 hour",
+        "1 hour", "bass boosted", "nightcore", "clean version"
+    )
+
+    for entry in results:
+        if not entry:
+            continue
+        score = 50.0
+        vid_title = (entry.get("title") or "").lower()
+        channel = (entry.get("channel") or entry.get("uploader") or "").lower()
+        cand_dur = float(entry.get("duration") or 0.0)
+
+        # 1. Duration Evaluation
+        if target_duration > 10.0 and cand_dur > 0:
+            diff = abs(cand_dur - target_duration)
+            if diff <= 1.5:
+                score += 65.0
+            elif diff <= 3.5:
+                score += 45.0
+            elif diff <= 6.0:
+                score += 20.0
+            elif diff <= 12.0:
+                score += 5.0
+            elif diff > 25.0:
+                score -= 50.0
+            elif diff > 60.0:
+                score -= 120.0
+
+        # 2. Official Topic / Clean Audio Priority
+        if "- topic" in channel or "provided to youtube by" in vid_title:
+            score += 35.0
+        elif "official audio" in vid_title or "audio" in vid_title:
+            score += 20.0
+        elif "lyric" in vid_title or "lyrics" in vid_title:
+            score += 15.0
+
+        # 3. Title keywords
+        if clean_target_title:
+            words = [w for w in clean_target_title.split() if len(w) > 2]
+            if words:
+                matches = sum(1 for w in words if w in vid_title)
+                score += (matches / len(words)) * 25.0
+
+        # 4. Artist keywords
+        if clean_target_artist:
+            a_words = [w for w in clean_target_artist.split() if len(w) > 2]
+            if a_words:
+                if any(w in vid_title or w in channel for w in a_words):
+                    score += 15.0
+
+        # 5. Penalize unwanted versions unless explicitly requested in title
+        for kw in bad_keywords:
+            if kw in vid_title and kw not in clean_target_title and kw not in clean_target_artist:
+                score -= 40.0
+
+        if score > best_score:
+            best_score = score
+            best_candidate = entry
+
+    return best_candidate
+
+
 def download_and_sync_lrc(
     video_url: str,
     target_dir: str,
@@ -260,17 +346,19 @@ def download_and_sync_lrc(
         return False, "", "Audio download completed but .opus file not found."
 
     # Embed clean metadata tags into the Opus container
-    if track_info:
-        try:
-            from mutagen.oggopus import OggOpus
-            audio = OggOpus(final_opus)
+    try:
+        from mutagen.oggopus import OggOpus
+        audio = OggOpus(final_opus)
+        if track_info:
             if track_info.get("title"):
                 audio["title"] = [str(track_info["title"])]
             if track_info.get("artist"):
                 audio["artist"] = [str(track_info["artist"])]
-            audio.save()
-        except Exception as tag_err:
-            log.debug("Could not write opus tags: %s", tag_err)
+        if video_url:
+            audio["comment"] = [f"yt_url={video_url}"]
+        audio.save()
+    except Exception as tag_err:
+        log.debug("Could not write opus tags: %s", tag_err)
 
     # Auto-fetch synced lyrics (runs in < 1s with direct LRCLIB & NetEase)
     if progress_cb:
@@ -305,6 +393,7 @@ class SongDownloaderService(QObject):
         super().__init__(parent)
         self._is_searching = False
         self._is_downloading = False
+        self.last_downloaded_file: str = ""
 
     def is_busy(self) -> bool:
         return self._is_searching or self._is_downloading
@@ -338,16 +427,24 @@ class SongDownloaderService(QObject):
         progress_cb: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         track_info: Optional[Dict] = None,
-    ) -> bool:
-        """Synchronously searches YouTube (prioritizing lyric/audio videos) and downloads into target_dir."""
+        target_duration: float = 0.0,
+        return_path: bool = False,
+    ):
+        """Synchronously searches YouTube (prioritizing official audio/album versions) and downloads into target_dir."""
         try:
             if cancel_check and cancel_check():
-                return False
+                return (False, "") if return_path else False
+
+            t_artist = str(track_info.get("artist") or "").strip() if track_info else ""
+            t_title = str(track_info.get("title") or "").strip() if track_info else ""
+            if not target_duration and track_info and track_info.get("duration"):
+                try:
+                    target_duration = float(track_info["duration"])
+                except (ValueError, TypeError):
+                    target_duration = 0.0
 
             # Check if file already exists in target_dir to skip duplicate work
-            if track_info and track_info.get("title") and track_info.get("artist"):
-                t_artist = str(track_info.get("artist") or "").strip()
-                t_title = str(track_info.get("title") or "").strip()
+            if t_artist and t_title:
                 track_num = track_info.get("track_number")
                 total_tracks = track_info.get("total_tracks", 0)
                 prefix = ""
@@ -372,46 +469,58 @@ class SongDownloaderService(QObject):
                         log.warning("Could not rename existing track %s: %s", old_stem, e)
 
                 if os.path.exists(exist_opus):
+                    self.last_downloaded_file = exist_opus
                     exist_lrc = os.path.join(target_dir, f"{t_stem}.lrc")
                     if os.path.exists(exist_lrc):
                         if progress_cb:
                             progress_cb(f"Already downloaded: {t_stem}")
-                        return True
+                        return (True, exist_opus) if return_path else True
                     else:
                         if progress_cb:
                             progress_cb(f"Audio exists, fetching lyrics: {t_stem}")
                         if fetch_lyrics_for_file:
                             fetch_lyrics_for_file(exist_opus, force_overwrite=True)
-                        return True
+                        return (True, exist_opus) if return_path else True
 
             is_url = "youtube.com/" in query or "youtu.be/" in query
             if is_url:
                 search_query = query
-            elif track_info and track_info.get("title") and track_info.get("artist"):
-                # Prioritize lyric videos for clean, unedited studio tracks
-                search_query = f"{track_info['artist']} - {track_info['title']} lyrics"
+            elif t_artist and t_title:
+                # Prioritize official audio / topic tracks for accurate duration and sync
+                search_query = f"{t_artist} - {t_title} audio"
             else:
-                search_query = f"{query} lyrics"
+                search_query = f"{query} audio"
 
             if progress_cb:
                 progress_cb(f"Searching YouTube: {search_query if not is_url else query}")
 
-            results = search_youtube(search_query, limit=3 if not is_url else 1)
-            # Fallback to direct query if lyrics search returned nothing
-            if not results and search_query != query:
-                results = search_youtube(query, limit=1)
+            results = search_youtube(search_query, limit=8 if not is_url else 1)
+            # Fallback to lyrics query if audio search returned nothing
+            if not results and not is_url:
+                fallback_query = f"{t_artist} - {t_title} lyrics" if (t_artist and t_title) else f"{query} lyrics"
+                results = search_youtube(fallback_query, limit=6)
+            # Final fallback to raw query
+            if not results and not is_url and search_query != query:
+                results = search_youtube(query, limit=4)
 
             if cancel_check and cancel_check():
-                return False
+                return (False, "") if return_path else False
             if not results:
                 log.warning("[DOWNLOAD] No YouTube results found for '%s'", query)
                 if progress_cb:
                     progress_cb(f"No match found: {query}")
-                return False
+                return (False, "") if return_path else False
 
-            top_url = results[0].get("url")
+            best_entry = pick_best_youtube_result(
+                results,
+                target_title=t_title,
+                target_artist=t_artist,
+                target_duration=target_duration,
+            ) if not is_url else results[0]
+
+            top_url = best_entry.get("url") if best_entry else results[0].get("url")
             if not top_url:
-                return False
+                return (False, "") if return_path else False
 
             ok, opus_path, msg = download_and_sync_lrc(
                 top_url,
@@ -420,13 +529,14 @@ class SongDownloaderService(QObject):
                 cancel_check=cancel_check,
                 track_info=track_info,
             )
+            self.last_downloaded_file = opus_path if ok else ""
             trim_process_memory()
-            return ok
+            return (ok, opus_path) if return_path else ok
         except Exception as e:
             log.warning("[DOWNLOAD] Sync query failed for %s: %s", query, e)
             if progress_cb:
                 progress_cb(f"Error: {e}")
-            return False
+            return (False, "") if return_path else False
 
     def download_and_sync_async(self, video_url: str, target_dir: str):
         """Asynchronously downloads audio, converts to Opus 160kbps in target_dir, and fetches LRC."""
