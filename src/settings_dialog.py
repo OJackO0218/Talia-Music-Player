@@ -662,7 +662,7 @@ class SettingsDialog(DraggableClampedDialogMixin, QDialog):
         self.lbl_update_status.setText("Connecting and downloading update package...")
         self.lbl_update_status.setStyleSheet("color: #38bdf8; font-size: 11px;")
 
-        self._dl_worker = UpdateDownloadWorker(url, self)
+        self._dl_worker = UpdateDownloadWorker(url, target_dir=PROJECT_ROOT, parent=self)
         self._dl_worker.progress.connect(self._on_update_progress)
         self._dl_worker.download_finished.connect(self._on_update_download_finished)
         self._dl_worker.start()

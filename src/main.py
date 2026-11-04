@@ -29,6 +29,7 @@ from config import (
     DEFAULT_MUSIC_DIR,
     ICON_PATH,
     LYRICS_CACHE_DIR,
+    PROJECT_ROOT,
     init_app_fonts,
     load_settings,
     save_settings,
@@ -39,6 +40,7 @@ from logging_setup import setup_logging
 from lyrics_manager import LyricsManager
 from lyrics_overlay import LyricsOverlayWindow
 from overlay import OverlayWindow
+from updater import cleanup_updater_leftovers
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ def _log_uncaught_exception(exc_type, exc_value, exc_tb):
 
 def main():
     setup_logging()
+    cleanup_updater_leftovers(PROJECT_ROOT)
     sys.excepthook = _log_uncaught_exception
     # Elevate to Administrator only if explicitly requested via --admin flag
     if "--admin" in sys.argv:

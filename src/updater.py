@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -151,6 +152,7 @@ def create_updater_batch_script(zip_path: str, target_dir: str, pid: int) -> str
     """Generates the Windows detached updater script."""
     script_dir = os.path.dirname(zip_path)
     bat_path = os.path.join(script_dir, "apply_update.bat")
+    extract_dir = os.path.join(script_dir, "extracted")
 
     is_frozen = getattr(sys, "frozen", False)
     exe_name = os.path.basename(sys.executable) if is_frozen else "Talia.exe"
@@ -170,7 +172,8 @@ set "PID={pid}"
 set "ZIP_PATH={zip_path}"
 set "TARGET_DIR={target_dir}"
 set "EXE_NAME={exe_name}"
-set "EXTRACT_DIR=%TEMP%\\talia_update_extracted"
+set "UPDATE_DIR={script_dir}"
+set "EXTRACT_DIR={extract_dir}"
 
 echo [*] Waiting for previous Talia instance (PID %PID%) to close...
 set /a WAIT_COUNT=0
@@ -207,12 +210,12 @@ if exist "!EXTRACT_DIR!\\Talia\\Talia.exe" set "SRC_DIR=!EXTRACT_DIR!\\Talia"
 
 :: 4. Copy updated binary and asset files in place, safely preserving user music and settings
 echo [*] Applying update to !TARGET_DIR!...
-robocopy "!SRC_DIR!" "!TARGET_DIR!" /E /XD "!TARGET_DIR!\\music" "!TARGET_DIR!\\assets\\lyrics_cache" /XF "!TARGET_DIR!\\settings.json" /R:2 /W:1 >nul
+robocopy "!SRC_DIR!" "!TARGET_DIR!" /E /XD "!TARGET_DIR!\\music" "!TARGET_DIR!\\assets\\lyrics_cache" "!TARGET_DIR!\\_talia_update" /XF "!TARGET_DIR!\\settings.json" /R:2 /W:1 >nul
 
-:: 5. Cleanup temporary extraction folder
+:: 5. Cleanup temporary extraction folder and downloaded archive
 echo [*] Cleaning up temporary files...
-rmdir /s /q "!EXTRACT_DIR!" 2>nul
-del /f /q "!ZIP_PATH!" 2>nul
+if exist "!EXTRACT_DIR!" rmdir /s /q "!EXTRACT_DIR!" 2>nul
+if exist "!ZIP_PATH!" del /f /q "!ZIP_PATH!" 2>nul
 
 :: 6. Relaunch updated Talia executable
 echo [*] Update complete! Relaunching Talia...
@@ -222,8 +225,9 @@ if exist "!TARGET_DIR!\\%EXE_NAME%" (
     start "" "!TARGET_DIR!\\Talia.exe"
 )
 
-:: 7. Self-delete the batch runner
-(goto) 2>nul & del "%~f0"
+:: 7. Self-delete the batch runner and staging folder
+cd /d "!TARGET_DIR!"
+(goto) 2>nul & rmdir /s /q "!UPDATE_DIR!" 2>nul & del "%~f0"
 exit /b 0
 """
     with open(bat_path, "w", encoding="utf-8") as f:
@@ -231,17 +235,34 @@ exit /b 0
     return bat_path
 
 
+def cleanup_updater_leftovers(target_dir: str):
+    """Removes any leftover update folders or zip files inside the target or temp directory."""
+    if target_dir:
+        local_update = os.path.join(target_dir, "_talia_update")
+        if os.path.exists(local_update):
+            try:
+                shutil.rmtree(local_update, ignore_errors=True)
+                log.info("[UPDATER] Cleaned leftover update directory: %s", local_update)
+            except Exception as exc:
+                log.debug("Could not clean %s: %s", local_update, exc)
+    temp_update = os.path.join(tempfile.gettempdir(), "talia_update")
+    if os.path.exists(temp_update):
+        try:
+            shutil.rmtree(temp_update, ignore_errors=True)
+        except Exception:
+            pass
+
+
 def launch_updater_and_exit(zip_path: str, target_dir: str):
     """Spawns the detached updater batch script and exits Talia process cleanly."""
     bat_script = create_updater_batch_script(zip_path, target_dir, os.getpid())
     log.info("[UPDATER] Spawning detached update runner: %s", bat_script)
 
-    DETACHED_PROCESS = 0x00000008
     CREATE_NEW_CONSOLE = 0x00000010
 
     subprocess.Popen(
         ["cmd.exe", "/c", bat_script],
-        creationflags=CREATE_NEW_CONSOLE | DETACHED_PROCESS,
+        creationflags=CREATE_NEW_CONSOLE,
         close_fds=True,
     )
     # Clean exit
@@ -274,16 +295,26 @@ class UpdateDownloadWorker(QThread):
     progress = pyqtSignal(int, str)  # percent, speed_str
     download_finished = pyqtSignal(bool, str, str)  # success, zip_path, error_msg
 
-    def __init__(self, download_url: str, parent=None):
+    def __init__(self, download_url: str, target_dir: Optional[str] = None, parent=None):
         super().__init__(parent)
         self.download_url = download_url
+        self.target_dir = target_dir
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def run(self):
-        dest_dir = os.path.join(tempfile.gettempdir(), "talia_update")
+        if self.target_dir and os.path.isdir(self.target_dir):
+            dest_dir = os.path.join(self.target_dir, "_talia_update")
+        else:
+            dest_dir = os.path.join(tempfile.gettempdir(), "talia_update")
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+        except Exception:
+            dest_dir = os.path.join(tempfile.gettempdir(), "talia_update")
+            os.makedirs(dest_dir, exist_ok=True)
+
         ok, zip_p, err = download_update_zip(
             self.download_url,
             dest_dir,
