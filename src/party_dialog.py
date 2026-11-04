@@ -2,8 +2,14 @@
 Talia Party Sync UI Dialog.
 
 Provides a cyberpunk-themed modal interface for hosting or joining
-synchronized music listening sessions with friends.
+synchronized music listening sessions with friends, including transfer of host
+privileges and a shared room queue where everyone can add tracks and the host
+(or track author) can manage entries.
 """
+
+import os
+import re
+from typing import Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -15,6 +21,8 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -22,14 +30,95 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-import re
+from discord_service import parse_track_info
 from party_sync import DEFAULT_RELAY_URL, generate_room_code, get_local_lan_ip
 from ui_theme import SHARED_PANEL_STYLE
 from ui_widgets import create_section_header
 
 
+class TrackPickerDialog(QDialog):
+    """Searchable dialog for picking a track from the local library to queue."""
+
+    def __init__(self, playlist: list[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Track from Library to Party Queue")
+        self.resize(420, 480)
+        self.setStyleSheet(SHARED_PANEL_STYLE)
+        self.playlist = list(playlist)
+        self.selected_path: Optional[str] = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+
+        lbl = QLabel("Select a track from your library:")
+        lbl.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 13px;")
+        layout.addWidget(lbl)
+
+        self.edit_filter = QLineEdit()
+        self.edit_filter.setPlaceholderText("Filter songs...")
+        self.edit_filter.textChanged.connect(self._filter_tracks)
+        layout.addWidget(self.edit_filter)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setStyleSheet(
+            "QListWidget { background-color: #121215; border: 1px solid #27272a; border-radius: 4px; padding: 4px; color: #f4f4f5; }"
+            "QListWidget::item { padding: 6px; border-radius: 4px; }"
+            "QListWidget::item:selected { background-color: #2563eb; color: #ffffff; }"
+        )
+        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self.list_widget, 1)
+
+        self._populate(self.playlist)
+
+        hbox_btns = QHBoxLayout()
+        hbox_btns.addStretch(1)
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        hbox_btns.addWidget(btn_cancel)
+
+        self.btn_add = QPushButton("Add to Queue")
+        self.btn_add.setStyleSheet(
+            "background-color: #059669; color: #ffffff; font-weight: bold; padding: 6px 14px; border-radius: 4px;"
+        )
+        self.btn_add.clicked.connect(self._on_add_clicked)
+        hbox_btns.addWidget(self.btn_add)
+        layout.addLayout(hbox_btns)
+
+    def _populate(self, paths: list[str]):
+        self.list_widget.clear()
+        for p in paths:
+            fn = os.path.basename(p)
+            title, artist = parse_track_info(fn)
+            display = f"{title} - {artist}" if artist != "Talia Music Player" else title
+            item = QListWidgetItem(display)
+            item.setData(Qt.ItemDataRole.UserRole, p)
+            self.list_widget.addItem(item)
+
+    def _filter_tracks(self, text: str):
+        query = text.strip().lower()
+        if not query:
+            self._populate(self.playlist)
+            return
+        filtered = [
+            p for p in self.playlist if query in os.path.basename(p).lower()
+        ]
+        self._populate(filtered)
+
+    def _on_item_double_clicked(self, item: QListWidgetItem):
+        self.selected_path = item.data(Qt.ItemDataRole.UserRole)
+        self.accept()
+
+    def _on_add_clicked(self):
+        curr = self.list_widget.currentItem()
+        if curr:
+            self.selected_path = curr.data(Qt.ItemDataRole.UserRole)
+            self.accept()
+
+
 class PartySyncDialog(QDialog):
-    """Sleek cyberpunk dialog to host or join real-time listening parties."""
+    """Sleek cyberpunk dialog to host or join real-time listening parties with queue & host transfer."""
 
     def __init__(self, panel, parent=None):
         super().__init__(parent or panel)
@@ -37,8 +126,8 @@ class PartySyncDialog(QDialog):
         self.sync_service = panel.party_sync
 
         self.setWindowTitle("Listen Together - Party Sync")
-        self.setMinimumSize(460, 500)
-        self.resize(480, 540)
+        self.setMinimumSize(480, 580)
+        self.resize(520, 640)
         self.setWindowFlags(Qt.WindowType.Dialog)
         self.setStyleSheet(SHARED_PANEL_STYLE)
 
@@ -59,7 +148,7 @@ class PartySyncDialog(QDialog):
         )
         main_layout.addWidget(lbl_title)
 
-        lbl_desc = QLabel("Synchronize playback and lyrics with friends in real-time.")
+        lbl_desc = QLabel("Synchronize playback, lyrics, and shared song queue with friends in real-time.")
         lbl_desc.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         lbl_desc.setWordWrap(True)
         main_layout.addWidget(lbl_desc)
@@ -224,6 +313,66 @@ class PartySyncDialog(QDialog):
 
         active_layout.addWidget(card)
 
+        # --- SHARED ROOM QUEUE CARD ---
+        card_queue = QFrame()
+        card_queue.setStyleSheet("background-color: #18181b; border: 1px solid #3f3f46; border-radius: 6px; padding: 10px;")
+        queue_card_layout = QVBoxLayout(card_queue)
+        queue_card_layout.setSpacing(8)
+
+        hbox_queue_hdr = QHBoxLayout()
+        self.lbl_queue_header = QLabel("ROOM QUEUE (0)")
+        self.lbl_queue_header.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 13px; letter-spacing: 0.5px;")
+        hbox_queue_hdr.addWidget(self.lbl_queue_header, 1)
+
+        self.btn_clear_queue = QPushButton("Clear")
+        self.btn_clear_queue.setStyleSheet(
+            "padding: 2px 8px; font-size: 10px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 3px; color: #fca5a5;"
+        )
+        self.btn_clear_queue.clicked.connect(self._on_clear_queue_clicked)
+        self.btn_clear_queue.setVisible(False)
+        hbox_queue_hdr.addWidget(self.btn_clear_queue)
+        queue_card_layout.addLayout(hbox_queue_hdr)
+
+        # Queue Add Input Row
+        hbox_add_q = QHBoxLayout()
+        hbox_add_q.setSpacing(6)
+        self.edit_queue_input = QLineEdit()
+        self.edit_queue_input.setPlaceholderText("Enter song name, artist, or YouTube URL...")
+        self.edit_queue_input.returnPressed.connect(self._on_add_queue_clicked)
+        hbox_add_q.addWidget(self.edit_queue_input, 1)
+
+        self.btn_add_queue = QPushButton("+ Add")
+        self.btn_add_queue.setStyleSheet(
+            "background-color: #0284c7; color: #ffffff; font-weight: bold; padding: 5px 12px; border-radius: 4px; font-size: 11px;"
+        )
+        self.btn_add_queue.clicked.connect(self._on_add_queue_clicked)
+        hbox_add_q.addWidget(self.btn_add_queue)
+
+        self.btn_queue_library = QPushButton("+ My Library")
+        self.btn_queue_library.setStyleSheet(
+            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; font-weight: 600; padding: 5px 10px; border-radius: 4px; font-size: 11px;"
+        )
+        self.btn_queue_library.clicked.connect(self._on_add_from_library_clicked)
+        hbox_add_q.addWidget(self.btn_queue_library)
+        queue_card_layout.addLayout(hbox_add_q)
+
+        # Scrollable Queue List
+        self.queue_scroll = QScrollArea()
+        self.queue_scroll.setWidgetResizable(True)
+        self.queue_scroll.setFixedHeight(140)
+        self.queue_scroll.setStyleSheet(
+            "QScrollArea { background-color: #121215; border: 1px solid #27272a; border-radius: 4px; }"
+            "QWidget { background-color: #121215; }"
+        )
+        self.queue_container = QWidget()
+        self.queue_list_layout = QVBoxLayout(self.queue_container)
+        self.queue_list_layout.setContentsMargins(6, 6, 6, 6)
+        self.queue_list_layout.setSpacing(4)
+        self.queue_scroll.setWidget(self.queue_container)
+        queue_card_layout.addWidget(self.queue_scroll)
+
+        active_layout.addWidget(card_queue)
+
         # Event log
         active_layout.addWidget(create_section_header("Party Feed"))
         self.lbl_feed = QLabel("Session active. Play any track to synchronize.")
@@ -255,6 +404,7 @@ class PartySyncDialog(QDialog):
         self.sync_service.peer_joined.connect(self._on_peer_joined)
         self.sync_service.peer_left.connect(self._on_peer_left)
         self.sync_service.host_transferred.connect(self._on_host_transferred)
+        self.sync_service.queue_updated.connect(self._on_queue_updated)
         self.sync_service.status_message.connect(self._set_status)
         self.sync_service.error_occurred.connect(self._set_error)
 
@@ -308,8 +458,6 @@ class PartySyncDialog(QDialog):
     def _on_leave_clicked(self):
         self.sync_service.disconnect_session()
 
-
-
     def _on_connected(self, room_code: str, is_host: bool, members: list):
         relay_url = self.edit_relay_url.text().strip().lower()
         is_lan = "127.0.0.1" in relay_url or "localhost" in relay_url
@@ -322,9 +470,11 @@ class PartySyncDialog(QDialog):
         self.lbl_active_role.setText(role_str)
         self.lbl_members_count.setText(f"Listeners in party: {len(members)}")
         self.btn_copy_invite.setVisible(is_host)
+        self.btn_clear_queue.setVisible(is_host)
 
         self.members = list(members)
         self._update_transfer_ui()
+        self._on_queue_updated(self.sync_service.party_queue)
         self.lbl_feed.setText(f"Connected to room {room_code}. Members: {', '.join(members)}")
         self.stack.setCurrentIndex(1)
         if self.panel and hasattr(self.panel, "update_party_hud"):
@@ -343,6 +493,7 @@ class PartySyncDialog(QDialog):
         self.combo_members.clear()
         self.combo_members.addItems(other_members)
         self.frame_transfer.setVisible(is_host and len(other_members) > 0)
+        self.btn_clear_queue.setVisible(is_host)
 
     def _on_transfer_clicked(self):
         target = self.combo_members.currentText().strip()
@@ -363,6 +514,7 @@ class PartySyncDialog(QDialog):
             self.btn_copy_invite.setVisible(False)
 
         self._update_transfer_ui()
+        self._on_queue_updated(self.sync_service.party_queue)
         self.lbl_feed.setText(f"Host privileges transferred from {old_host} to {new_host}.")
         if self.panel and hasattr(self.panel, "update_party_hud"):
             self.panel.update_party_hud(True, self.sync_service.room_code, is_host)
@@ -386,6 +538,113 @@ class PartySyncDialog(QDialog):
         else:
             self.lbl_feed.setText(f"{name} left the room.")
 
+    # -------------------------------------------------------------------------
+    # Shared Room Queue UI
+    # -------------------------------------------------------------------------
+
+    def _on_add_queue_clicked(self):
+        text = self.edit_queue_input.text().strip()
+        if not text:
+            return
+        title, artist = parse_track_info(text)
+        self.sync_service.add_to_party_queue(
+            title=title,
+            artist=artist,
+            yt_query=text,
+        )
+        self.edit_queue_input.clear()
+        self.lbl_feed.setText(f"Added '{title}' to Party Queue.")
+
+    def _on_add_from_library_clicked(self):
+        playlist = getattr(self.panel.audio_engine, "playlist", [])
+        if not playlist:
+            self.lbl_feed.setText("Your local playlist is empty.")
+            return
+        dlg = TrackPickerDialog(playlist, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_path:
+            fn = os.path.basename(dlg.selected_path)
+            title, artist = parse_track_info(fn)
+            self.sync_service.add_to_party_queue(
+                title=title,
+                artist=artist,
+                filename=fn,
+            )
+            self.lbl_feed.setText(f"Added '{title}' to Party Queue.")
+
+    def _on_clear_queue_clicked(self):
+        self.sync_service.clear_party_queue()
+        self.lbl_feed.setText("Cleared Party Queue.")
+
+    def _on_queue_updated(self, queue: list):
+        """Renders the shared party queue entries with strictly enforced permissions."""
+        self.lbl_queue_header.setText(f"ROOM QUEUE ({len(queue)})")
+
+        # Clear existing layout
+        while self.queue_list_layout.count():
+            child = self.queue_list_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        if not queue:
+            lbl_empty = QLabel("Queue is empty. Anyone in the room can add songs to play next!")
+            lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_empty.setStyleSheet("color: #71717a; font-style: italic; font-size: 11px; padding: 12px 0;")
+            self.queue_list_layout.addWidget(lbl_empty)
+            return
+
+        is_host = self.sync_service.is_host
+        current_user = self.sync_service.user_name
+
+        for idx, item in enumerate(queue):
+            row = QFrame()
+            row.setStyleSheet(
+                "QFrame { background-color: #18181b; border: 1px solid #27272a; border-radius: 4px; padding: 3px 6px; }"
+                "QFrame:hover { border-color: #3f3f46; }"
+            )
+            h_layout = QHBoxLayout(row)
+            h_layout.setContentsMargins(4, 2, 4, 2)
+            h_layout.setSpacing(6)
+
+            # Index badge
+            lbl_num = QLabel(f"#{idx + 1}")
+            lbl_num.setStyleSheet("color: #71717a; font-family: 'Consolas', monospace; font-size: 10px; font-weight: bold;")
+            h_layout.addWidget(lbl_num)
+
+            # Track Title & Artist
+            t_title = item.get("title", "Unknown Title")
+            t_artist = item.get("artist", "")
+            disp = f"<b>{t_title}</b>"
+            if t_artist and t_artist != "Talia Music Player":
+                disp += f" - <span style='color:#a1a1aa;'>{t_artist}</span>"
+            lbl_info = QLabel(disp)
+            lbl_info.setStyleSheet("color: #f4f4f5; font-size: 11px;")
+            h_layout.addWidget(lbl_info, 1)
+
+            # 'Added by' badge
+            added_by = item.get("added_by", "")
+            is_own = (added_by == current_user)
+            tag_color = "#38bdf8" if is_own else "#a1a1aa"
+            tag_text = "You" if is_own else added_by
+            lbl_by = QLabel(f"[by {tag_text}]")
+            lbl_by.setStyleSheet(f"color: {tag_color}; font-size: 10px; font-weight: 600;")
+            h_layout.addWidget(lbl_by)
+
+            # Remove permission: Host can remove any song; member can remove ONLY their own
+            if is_host or is_own:
+                item_id = item.get("id")
+                btn_del = QPushButton("✕")
+                btn_del.setFixedSize(20, 20)
+                btn_del.setToolTip("Remove from room queue" if is_host else "Remove your song")
+                btn_del.setStyleSheet(
+                    "QPushButton { background-color: #27272a; color: #ef4444; border: 1px solid #3f3f46; border-radius: 3px; font-size: 10px; font-weight: bold; padding: 0; }"
+                    "QPushButton:hover { background-color: #ef4444; color: #ffffff; border-color: #dc2626; }"
+                )
+                btn_del.clicked.connect(lambda _, q_id=item_id: self.sync_service.remove_from_party_queue(q_id))
+                h_layout.addWidget(btn_del)
+
+            self.queue_list_layout.addWidget(row)
+
+        self.queue_list_layout.addStretch(1)
 
     def _set_status(self, text: str):
         self.lbl_status.setText(text)

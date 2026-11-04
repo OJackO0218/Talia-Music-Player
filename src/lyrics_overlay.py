@@ -67,11 +67,11 @@ class LyricsOverlayWindow(QWidget):
         self.move_mode = False
         self.dialogue_mode = True  # Cyberpunk 2077 dialogue subtitle mode
 
-        # Color customization (defaults to Cyberpunk Neon Purple)
-        self.color_hex = "#e879f9"
-        self.main_color = QColor(232, 121, 249)
-        self.bloom_color = QColor(200, 140, 255)
-        self.shadow_color = QColor(10, 0, 25)
+        # Color customization (defaults to Electric Blue / Cyan)
+        self.color_hex = "#00ffff"
+        self.main_color = QColor(0, 255, 255)
+        self.bloom_color = QColor(100, 240, 248)
+        self.shadow_color = QColor(10, 15, 25)
         self.set_color(self.color_hex)
 
         # Kinetic pop-up animation state
@@ -103,7 +103,7 @@ class LyricsOverlayWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
 
         # Font size & dynamic window dimensions (14pt to 60pt)
-        self.base_font_size = 25
+        self.base_font_size = 18
         self._update_window_dimensions(keep_center=False)
         self.init_position()
 
@@ -278,7 +278,7 @@ class LyricsOverlayWindow(QWidget):
     def set_font_size(self, size: int, keep_center: bool = True):
         """Sets the base font size (clamped 14-60 pt) and updates window dimensions."""
         size = max(14, min(60, int(size)))
-        if getattr(self, "base_font_size", 25) == size:
+        if getattr(self, "base_font_size", 18) == size:
             return
         self.base_font_size = size
         self._cached_layout_key = None
@@ -505,7 +505,7 @@ class LyricsOverlayWindow(QWidget):
         painter.translate(-cx, -cy)
 
         # Spotify-style sleek bold typography
-        base_pt = getattr(self, "base_font_size", 25)
+        base_pt = getattr(self, "base_font_size", 18)
         font = QFont()
         families = []
         if getattr(self, "custom_font_family", None):

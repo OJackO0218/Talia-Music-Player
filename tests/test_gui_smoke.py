@@ -69,7 +69,7 @@ def test_lyrics_font_sizing_and_wheel(qapp):
     overlay = OverlayWindow(engine)
     panel = ControlPanel(overlay, engine, lyrics)
 
-    assert panel.settings_dialog.slider_lyric_size.value() == 25
+    assert panel.settings_dialog.slider_lyric_size.value() == 18
     assert panel.settings_dialog.slider_lyric_size.minimum() == 14
     assert panel.settings_dialog.slider_lyric_size.maximum() == 60
 

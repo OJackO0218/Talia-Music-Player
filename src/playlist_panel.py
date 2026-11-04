@@ -123,6 +123,8 @@ class TrackRowWidget(QWidget):
         if self.panel and hasattr(self.panel, "audio_engine"):
             self.panel.audio_engine.add_to_queue(self.path)
             self.panel.refresh_queue_ui()
+            if hasattr(self.panel, "save_settings"):
+                self.panel.save_settings()
             # Tactile visual feedback
             self.btn_q.setText("✓")
             self.btn_q.setStyleSheet("""
@@ -266,6 +268,8 @@ class PlaylistPanelMixin:
         if path:
             self.audio_engine.add_to_queue(path)
             self.refresh_queue_ui()
+            if hasattr(self, "save_settings"):
+                self.save_settings()
             self.queue_container.setVisible(True)
 
     def toggle_queue_panel(self):
@@ -274,6 +278,8 @@ class PlaylistPanelMixin:
     def on_clear_queue_clicked(self):
         self.audio_engine.clear_queue()
         self.refresh_queue_ui()
+        if hasattr(self, "save_settings"):
+            self.save_settings()
 
     def refresh_queue_ui(self):
         if not hasattr(self, "btn_toggle_queue"):
@@ -361,6 +367,9 @@ class PlaylistPanelMixin:
         action_play = menu.addAction("Play Now")
         action_queue = menu.addAction("Add to Queue")
         action_play_next = menu.addAction("Play Next in Queue")
+        action_party_queue = None
+        if hasattr(self, "party_sync") and self.party_sync and self.party_sync.is_connected:
+            action_party_queue = menu.addAction("Add to Party Queue")
         menu.addSeparator()
         action_calibrate = menu.addAction("Calibrate this song lyric")
         action_move = menu.addAction("Move to Folder...")
@@ -381,11 +390,24 @@ class PlaylistPanelMixin:
         elif selected == action_queue:
             self.audio_engine.add_to_queue(path)
             self.refresh_queue_ui()
+            if hasattr(self, "save_settings"):
+                self.save_settings()
             self.queue_container.setVisible(True)
         elif selected == action_play_next:
             self.audio_engine.add_to_queue_next(path)
             self.refresh_queue_ui()
+            if hasattr(self, "save_settings"):
+                self.save_settings()
             self.queue_container.setVisible(True)
+        elif action_party_queue and selected == action_party_queue:
+            from discord_service import parse_track_info
+            raw_fn = os.path.basename(path)
+            title, artist = parse_track_info(raw_fn)
+            self.party_sync.add_to_party_queue(
+                title=title,
+                artist=artist,
+                filename=raw_fn,
+            )
         elif selected == action_calibrate:
             self.calibrate_song_lyrics(path)
         elif selected == action_move:
@@ -859,12 +881,18 @@ class PlaylistPanelMixin:
                 self.audio_engine.load_file(path, auto_play=True)
                 self.sync_play_state()
                 self.refresh_queue_ui()
+                if hasattr(self, "save_settings"):
+                    self.save_settings()
         elif selected == action_remove:
             self.audio_engine.remove_from_queue(row)
             self.refresh_queue_ui()
+            if hasattr(self, "save_settings"):
+                self.save_settings()
         elif selected == action_clear:
             self.audio_engine.clear_queue()
             self.refresh_queue_ui()
+            if hasattr(self, "save_settings"):
+                self.save_settings()
         elif selected == action_calibrate:
             if 0 <= row < len(self.audio_engine.queue):
                 self.calibrate_song_lyrics(self.audio_engine.queue[row])

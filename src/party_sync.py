@@ -63,6 +63,7 @@ class PartySyncService(QObject):
     error_occurred = pyqtSignal(str)         # Error message
     track_auto_downloaded = pyqtSignal([str, float, bool], [str, float, bool, str])  # target_dir, target_time, target_playing, [file_path]
     host_transferred = pyqtSignal(str, str)  # new_host, old_host
+    queue_updated = pyqtSignal(list)         # list of queued track dicts
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,6 +73,7 @@ class PartySyncService(QObject):
         self.is_host: bool = False
         self.is_connected: bool = False
         self.allow_guest_control: bool = False
+        self.party_queue: list[dict] = []
 
         # Asyncio background loop and thread
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -265,6 +267,93 @@ class PartySyncService(QObject):
             "target": target_user,
         })
 
+    def add_to_party_queue(
+        self,
+        title: str,
+        artist: str = "",
+        filename: str = "",
+        duration: float = 0.0,
+        yt_query: str = "",
+    ) -> dict:
+        """Adds a track to the shared party queue. Callable by any room member."""
+        if not self.is_connected:
+            return {}
+        item_id = f"q_{int(time.time() * 1000)}_{random.randint(100, 999)}"
+        clean_title = title.strip() or "Unknown Title"
+        clean_artist = artist.strip() or "Unknown Artist"
+        query = yt_query or f"{clean_artist} - {clean_title}".strip(" -")
+        item = {
+            "id": item_id,
+            "title": clean_title,
+            "artist": clean_artist,
+            "filename": filename.strip(),
+            "duration": round(float(duration), 2),
+            "yt_query": query,
+            "added_by": self.user_name,
+        }
+        self.party_queue.append(item)
+        self.queue_updated.emit(list(self.party_queue))
+        self._queue_message({
+            "type": "queue_add",
+            "item": item,
+        })
+        return item
+
+    def remove_from_party_queue(self, item_id: str) -> bool:
+        """
+        Removes a track from the shared party queue.
+        Enforces permissions: Host can remove any song; members can remove only their own.
+        """
+        if not self.is_connected:
+            return False
+        found = None
+        for itm in self.party_queue:
+            if itm.get("id") == item_id:
+                found = itm
+                break
+        if not found:
+            return False
+        if not self.is_host and found.get("added_by") != self.user_name:
+            log.warning(
+                "[PARTY QUEUE] Permission denied: %s cannot remove track added by %s",
+                self.user_name,
+                found.get("added_by"),
+            )
+            return False
+
+        self.party_queue.remove(found)
+        self.queue_updated.emit(list(self.party_queue))
+        self._queue_message({
+            "type": "queue_remove",
+            "item_id": item_id,
+            "removed_by": self.user_name,
+        })
+        return True
+
+    def pop_next_party_track(self) -> Optional[dict]:
+        """Pops the next queued track for playback. Host only."""
+        if not self.is_connected or not self.is_host or not self.party_queue:
+            return None
+        item = self.party_queue.pop(0)
+        self.queue_updated.emit(list(self.party_queue))
+        self._queue_message({
+            "type": "queue_sync",
+            "queue": list(self.party_queue),
+        })
+        return item
+
+    def clear_party_queue(self) -> bool:
+        """Clears all songs from the shared party queue. Host only."""
+        if not self.is_connected or not self.is_host:
+            return False
+        self.party_queue.clear()
+        self.queue_updated.emit([])
+        self._queue_message({
+            "type": "queue_sync",
+            "queue": [],
+        })
+        return True
+
     # -------------------------------------------------------------------------
     # Internal Async Networking Engine
     # -------------------------------------------------------------------------
@@ -299,6 +388,8 @@ class PartySyncService(QObject):
 
         self.is_connected = False
         self.host_name = ""
+        self.party_queue.clear()
+        self.queue_updated.emit([])
         self.disconnected.emit("Disconnected from session.")
 
     async def _start_embedded_and_connect(self, port: int, room_code: str, user_name: str):
@@ -580,6 +671,33 @@ class PartySyncService(QObject):
                     pname = str(data.get("name", "Listener"))
                     count = int(data.get("count", 1))
                     self.peer_joined.emit(pname, count)
+                    if self.is_host and self.party_queue:
+                        self._queue_message({"type": "queue_sync", "queue": list(self.party_queue)})
+                elif mtype == "queue_add":
+                    item = data.get("item", {})
+                    if item and not any(q.get("id") == item.get("id") for q in self.party_queue):
+                        self.party_queue.append(item)
+                        self.queue_updated.emit(list(self.party_queue))
+                        p_by = item.get("added_by", "A listener")
+                        t_name = item.get("title", "Track")
+                        self.status_message.emit(f"{p_by} added '{t_name}' to Party Queue.")
+                elif mtype == "queue_remove":
+                    item_id = str(data.get("item_id", ""))
+                    removed_by = str(data.get("removed_by", "")).strip()
+                    found = None
+                    for q in self.party_queue:
+                        if q.get("id") == item_id:
+                            if removed_by == self.host_name or removed_by == q.get("added_by") or self.is_host:
+                                found = q
+                            break
+                    if found:
+                        self.party_queue.remove(found)
+                        self.queue_updated.emit(list(self.party_queue))
+                        self.status_message.emit(f"Removed '{found.get('title')}' from Party Queue.")
+                elif mtype == "queue_sync":
+                    q_list = data.get("queue", [])
+                    self.party_queue = list(q_list)
+                    self.queue_updated.emit(list(self.party_queue))
                 elif mtype == "room_closed":
                     reason = str(data.get("reason", "Host has left the party session. Room closed."))
                     log.info("Room closed event: %s", reason)

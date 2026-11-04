@@ -10,6 +10,7 @@ import os
 import random
 import re
 import threading
+import time
 
 import numpy as np
 import sounddevice as sd
@@ -33,6 +34,8 @@ class CyberAudioEngine:
 
     def __init__(self, num_bars: int = 28):
         self.stream = None
+        self._stream_lock = threading.Lock()
+        self._last_device_recovery_time = 0.0
         self.data = None
         self.active_sf = None
         self.feeder: AudioFeeder | None = None
@@ -253,6 +256,124 @@ class CyberAudioEngine:
         self.total_frames = 0
         self.track_finished = False
         self.reset_bpm_tracking()
+
+    def recreate_stream(self, force_reinit_device: bool = False) -> bool:
+        """Safely creates or replaces the PortAudio output stream, refreshing hardware endpoints if requested."""
+        with self._stream_lock:
+            if self.stream is not None:
+                try:
+                    self.stream.stop()
+                except Exception:
+                    pass
+                try:
+                    self.stream.close()
+                except Exception:
+                    pass
+                self.stream = None
+
+            if force_reinit_device:
+                try:
+                    log.info("[AUDIO ENGINE] Re-initializing PortAudio hardware devices...")
+                    sd._terminate()
+                    sd._initialize()
+                except Exception as exc:
+                    log.warning("[AUDIO ENGINE] PortAudio re-initialization warning: %s", exc)
+
+            if self.sr <= 0 or self.channels <= 0:
+                return False
+
+            try:
+                self.stream = sd.OutputStream(
+                    samplerate=self.sr,
+                    channels=self.channels,
+                    callback=self._audio_callback,
+                    blocksize=1024,
+                )
+                return True
+            except Exception as exc:
+                log.warning("[AUDIO ENGINE] OutputStream creation failed: %s", exc)
+                if not force_reinit_device:
+                    try:
+                        sd._terminate()
+                        sd._initialize()
+                        self.stream = sd.OutputStream(
+                            samplerate=self.sr,
+                            channels=self.channels,
+                            callback=self._audio_callback,
+                            blocksize=1024,
+                        )
+                        log.info("[AUDIO ENGINE] Recovered output stream after re-init.")
+                        return True
+                    except Exception as exc2:
+                        log.error("[AUDIO ENGINE] Retry stream creation failed: %s", exc2)
+                return False
+
+    def handle_device_changed(self, resume_playback: bool | None = None) -> bool:
+        """Called when system audio output devices change (e.g. headset unplugged/plugged).
+        Safely re-initializes PortAudio and seamlessly reopens output stream on the new default speaker."""
+        now = time.time()
+        if now - getattr(self, "_last_device_recovery_time", 0.0) < 0.4:
+            return False
+        self._last_device_recovery_time = now
+
+        with self._stream_lock:
+            was_playing = self.is_playing if resume_playback is None else resume_playback
+            cur_frame = self.current_frame
+            total = self.total_frames
+
+            if self.stream is not None:
+                try:
+                    self.stream.stop()
+                except Exception:
+                    pass
+                try:
+                    self.stream.close()
+                except Exception:
+                    pass
+                self.stream = None
+
+            try:
+                sd._terminate()
+                sd._initialize()
+                log.info(
+                    "[AUDIO ENGINE] PortAudio refreshed. Active default device: %s",
+                    getattr(sd.default, "device", None),
+                )
+            except Exception as exc:
+                log.warning("[AUDIO ENGINE] PortAudio re-init warning: %s", exc)
+
+            if self.audio_mode == "desktop":
+                if getattr(self, "desktop_running", False):
+                    self._stop_desktop_capture()
+                    self._start_desktop_capture()
+                return True
+
+            if (
+                self.active_sf is not None
+                and self.sr > 0
+                and self.channels > 0
+                and cur_frame < total
+            ):
+                try:
+                    self.stream = sd.OutputStream(
+                        samplerate=self.sr,
+                        channels=self.channels,
+                        callback=self._audio_callback,
+                        blocksize=1024,
+                    )
+                    if was_playing:
+                        self.stream.start()
+                        self.is_playing = True
+                        self.is_paused = False
+                        log.info("[AUDIO ENGINE] Playback seamlessly resumed on new audio device.")
+                    else:
+                        self.is_playing = False
+                        self.is_paused = True
+                    return True
+                except Exception as exc:
+                    log.error("[AUDIO ENGINE] Failed to recreate stream on new device: %s", exc)
+                    return False
+            return True
 
     def _stop_feeder_locked(self) -> None:
         """Stops the reader thread. Caller must hold _audio_lock."""
@@ -581,23 +702,12 @@ class CyberAudioEngine:
                     self.feeder = feeder
             needs_new_stream = (
                 self.stream is None
-                or self.stream.samplerate != self.sr
-                or self.stream.channels != self.channels
+                or getattr(self.stream, "samplerate", None) != self.sr
+                or getattr(self.stream, "channels", None) != self.channels
             )
             if needs_new_stream:
-                if self.stream is not None:
-                    try:
-                        self.stream.stop()
-                        self.stream.close()
-                    except Exception as exc:
-                        log.debug("Could not close previous output stream: %s", exc)
-                    self.stream = None
-                self.stream = sd.OutputStream(
-                    samplerate=self.sr,
-                    channels=self.channels,
-                    callback=self._audio_callback,
-                    blocksize=1024,
-                )
+                if not self.recreate_stream(force_reinit_device=False):
+                    self.recreate_stream(force_reinit_device=True)
             if self.lyrics_manager:
                 self.lyrics_manager.load_track(file_path)
             if auto_play:
@@ -613,6 +723,20 @@ class CyberAudioEngine:
             return True
         except Exception as exc:
             log.exception("Could not open %s: %s", file_path, exc)
+            recovered = False
+            if self.active_sf is not None and self.total_frames > 0:
+                log.info("[AUDIO ENGINE] Audio output error on valid file; attempting device recovery...")
+                if self.recreate_stream(force_reinit_device=True):
+                    try:
+                        if auto_play:
+                            self.play()
+                        recovered = True
+                    except Exception:
+                        pass
+            if recovered:
+                self._consecutive_failures = 0
+                return True
+
             with self._audio_lock:
                 self._stop_feeder_locked()
                 if self.active_sf is not None:
@@ -692,16 +816,28 @@ class CyberAudioEngine:
 
     def play(self):
         if self.stream is None:
-            self.is_playing = False
-            return
+            if self.active_sf is not None:
+                self.recreate_stream(force_reinit_device=True)
+            if self.stream is None:
+                self.is_playing = False
+                return
         if not self.stream.active:
             try:
                 self.stream.start()
             except Exception as e:
-                log.error(f"[AUDIO ERROR] stream.start() failed: {e}")
-                self.is_playing = False
-                self.is_paused = True
-                return
+                log.warning(f"[AUDIO] stream.start() failed: {e}. Attempting hardware device recovery...")
+                if self.recreate_stream(force_reinit_device=True):
+                    try:
+                        self.stream.start()
+                    except Exception as e2:
+                        log.error(f"[AUDIO ERROR] stream.start() failed after device reset: {e2}")
+                        self.is_playing = False
+                        self.is_paused = True
+                        return
+                else:
+                    self.is_playing = False
+                    self.is_paused = True
+                    return
         self.is_playing = True
         self.is_paused = False
 

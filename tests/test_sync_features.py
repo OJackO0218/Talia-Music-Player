@@ -445,3 +445,106 @@ def test_party_track_downloaded_exact_playback(qapp, tmp_path):
     lyrics.hide()
     overlay.hide()
 
+
+
+def test_updater_semver_parsing():
+    from updater import parse_semver
+
+    assert parse_semver("v2.4.0") == (2, 4, 0)
+    assert parse_semver("2.3.1") == (2, 3, 1)
+    assert parse_semver("v1.0.0-beta") == (1, 0, 0)
+    assert parse_semver("2.4.0") > parse_semver("2.3.1")
+    assert parse_semver("2.3.1") == parse_semver("v2.3.1")
+
+
+def test_party_shared_queue_permissions():
+    """Verifies that everyone can add to party queue, but non-hosts can only remove their own tracks."""
+    svc = PartySyncService()
+    svc.is_connected = True
+    svc.is_host = False
+    svc.user_name = "Alice"
+
+    # Alice adds a song
+    svc.add_to_party_queue(title="Song A", artist="Artist A", filename="songA.mp3")
+    assert len(svc.party_queue) == 1
+    alice_item_id = svc.party_queue[0]["id"]
+    assert svc.party_queue[0]["added_by"] == "Alice"
+
+    # Bob's song is added via sync
+    bob_item = {
+        "id": "item_bob_123",
+        "title": "Song B",
+        "artist": "Artist B",
+        "filename": "songB.mp3",
+        "added_by": "Bob",
+    }
+    svc.party_queue.append(bob_item)
+    assert len(svc.party_queue) == 2
+
+    # Alice tries to remove Bob's song -> should fail!
+    assert svc.remove_from_party_queue("item_bob_123") is False
+    assert len(svc.party_queue) == 2
+
+    # Alice removes her own song -> should succeed!
+    assert svc.remove_from_party_queue(alice_item_id) is True
+    assert len(svc.party_queue) == 1
+    assert svc.party_queue[0]["id"] == "item_bob_123"
+
+    # Host can remove Bob's song
+    svc.is_host = True
+    assert svc.remove_from_party_queue("item_bob_123") is True
+    assert len(svc.party_queue) == 0
+
+
+def test_audio_engine_device_recovery():
+    """Tests that audio engine can recreate its stream and handle device reset safely."""
+    engine = CyberAudioEngine()
+    engine.sr = 44100
+    engine.channels = 2
+
+    # Recreate stream with device re-init
+    res = engine.recreate_stream(force_reinit_device=True)
+    assert res is True
+    assert engine.stream is not None
+
+    # Handle device changed
+    res2 = engine.handle_device_changed(resume_playback=False)
+    assert res2 is True
+
+
+@pytest.mark.gui
+def test_controller_queue_persistence(qapp, tmp_path):
+    """Tests that ControlPanel restores queue from settings and saves queue back."""
+    import os
+
+    engine = CyberAudioEngine()
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    # Create dummy track files
+    track1 = str(tmp_path / "track1.mp3")
+    track2 = str(tmp_path / "track2.mp3")
+    with open(track1, "w") as f:
+        f.write("t1")
+    with open(track2, "w") as f:
+        f.write("t2")
+
+    cfg = {
+        "queue": [track1, track2, "non_existent.mp3"],
+    }
+    panel.apply_settings(cfg)
+
+    # Valid existing tracks are restored, non-existent filtered
+    assert len(engine.queue) == 2
+    assert engine.queue[0] == os.path.normpath(track1)
+    assert engine.queue[1] == os.path.normpath(track2)
+
+    # Settings dict includes the restored queue
+    saved = panel.get_current_settings_dict()
+    assert "queue" in saved
+    assert len(saved["queue"]) == 2
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()

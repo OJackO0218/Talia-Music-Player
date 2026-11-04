@@ -18,6 +18,7 @@ log = logging.getLogger("ControlPanel")
 
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtMultimedia import QMediaDevices
 from PyQt6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -85,6 +86,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if self.lyrics_overlay:
             self.lyrics_overlay.panel = self
         self.lyric_presets = {
+            "Electric Blue": "#00ffff",
             "Cyberpunk Blue": "#64f0f8",
             "Electric Cyan": "#00ffff",
             "Pure White": "#ffffff",
@@ -181,6 +183,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.timeline_timer = QTimer(self)
         self.timeline_timer.timeout.connect(self.update_timeline)
         self.timeline_timer.start(500 if getattr(self, "eco_mode", False) else 200)
+
+        # Real-time audio output device monitoring (headset plug/unplug)
+        self._last_stream_drop_check = 0.0
+        try:
+            self.media_devices = QMediaDevices(self)
+            self._device_change_timer = QTimer(self)
+            self._device_change_timer.setSingleShot(True)
+            self._device_change_timer.setInterval(350)
+            self._device_change_timer.timeout.connect(self._do_audio_device_recovery)
+            self.media_devices.audioOutputsChanged.connect(self._on_audio_device_changed)
+        except Exception as exc:
+            log.warning("Could not initialize QMediaDevices monitor: %s", exc)
 
     def init_ui(self):
         root_layout = QVBoxLayout(self)
@@ -811,10 +825,41 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.list_tracks.setCurrentRow(r)
                 break
 
-    def on_next_clicked(self):
-        self.audio_engine.next_track()
+    def play_next_track(self, crossfade: bool = False) -> bool:
+        """
+        Advances to the next track.
+        If in an active Party Sync room as Host and tracks are queued in the party queue,
+        pops and plays the next party track for all room members!
+        Otherwise, plays the next track from the local playlist.
+        """
+        if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+            if self.party_sync.party_queue:
+                next_item = self.party_sync.pop_next_party_track()
+                if next_item:
+                    matched_idx = self.find_matching_party_track(next_item)
+                    if matched_idx >= 0:
+                        self.audio_engine.play_index(matched_idx, crossfade=crossfade)
+                        self.sync_play_state()
+                        self.refresh_queue_ui()
+                        return True
+                    else:
+                        # Auto-download queued song for Host
+                        log.info("[PARTY QUEUE] Host auto-downloading queued track: %s", next_item.get("title"))
+                        self.lbl_track_title.setText(f"[PARTY] Auto-fetching queued '{next_item.get('title')}'...")
+                        threading.Thread(
+                            target=self._auto_download_party_track,
+                            args=(next_item, 0.0, True),
+                            daemon=True,
+                        ).start()
+                        return True
+
+        self.audio_engine.next_track(crossfade=crossfade)
         self.sync_play_state()
         self.refresh_queue_ui()
+        return True
+
+    def on_next_clicked(self):
+        self.play_next_track(crossfade=False)
         if hasattr(self, "lbl_track_title"):
             self.lbl_track_title.trigger_symbol("forward")
         if self.overlay:
@@ -940,6 +985,20 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
                 self.discord_service.update_playback(raw_title, is_playing, pos, dur)
 
+        # Check if stream dropped unexpectedly (e.g. headset unplugged mid-playback)
+        if (
+            self.audio_engine.is_playing
+            and self.audio_engine.audio_mode != "desktop"
+            and not self.audio_engine.track_finished
+            and self.audio_engine.stream is not None
+            and not getattr(self.audio_engine.stream, "active", False)
+        ):
+            now = time.time()
+            if now - getattr(self, "_last_stream_drop_check", 0.0) >= 1.5:
+                self._last_stream_drop_check = now
+                log.warning("[AUDIO] Output stream dropped unexpectedly. Re-routing audio to default device...")
+                self.audio_engine.handle_device_changed(resume_playback=True)
+
         # Auto-advance / 2-second DJ crossfade when song approaches end or finishes
         if self.audio_engine.audio_mode != "desktop":
             is_finished = self.audio_engine.track_finished or (
@@ -951,16 +1010,22 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 and pos >= (dur - crossfade_dur)
                 and not getattr(self.audio_engine, "_in_crossfade", False)
                 and self.audio_engine.is_playing
-                and len(self.audio_engine.playlist) > 1
+                and (len(self.audio_engine.playlist) > 1 or (hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.party_queue))
             ):
-                self.audio_engine.next_track(crossfade=True)
-                self.sync_play_state()
-                self.refresh_queue_ui()
+                self.play_next_track(crossfade=True)
             elif is_finished:
                 self.audio_engine.track_finished = False
-                self.audio_engine.next_track(crossfade=False)
-                self.sync_play_state()
-                self.refresh_queue_ui()
+                self.play_next_track(crossfade=False)
+
+    def _on_audio_device_changed(self):
+        log.info("[AUDIO] Audio outputs change detected. Scheduling device recovery in 350ms...")
+        if hasattr(self, "_device_change_timer"):
+            self._device_change_timer.start(350)
+
+    def _do_audio_device_recovery(self):
+        log.info("[AUDIO] Performing audio device recovery...")
+        if hasattr(self, "audio_engine"):
+            self.audio_engine.handle_device_changed()
 
     def choose_music_folder(self):
         cur = self.audio_engine.folder_path or DEFAULT_MUSIC_DIR
@@ -1514,11 +1579,11 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             settings_dict["lyrics_x"] = int(self.lyrics_overlay.pos().x())
             settings_dict["lyrics_y"] = int(self.lyrics_overlay.pos().y())
             settings_dict["lyrics_font_size"] = int(
-                getattr(self.lyrics_overlay, "base_font_size", 25)
+                getattr(self.lyrics_overlay, "base_font_size", 18)
             )
             settings_dict["show_lyrics"] = bool(self.lyrics_overlay.is_enabled)
             settings_dict["lyrics_color"] = str(
-                getattr(self.lyrics_overlay, "color_hex", "#ffffff")
+                getattr(self.lyrics_overlay, "color_hex", "#00ffff")
             )
             settings_dict["lyrics_word_glow"] = bool(
                 getattr(self.lyrics_overlay, "word_glow", True)
@@ -1543,6 +1608,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "chk_discord_rpc")
             else getattr(self, "_discord_rpc_enabled", True)
         )
+        settings_dict["queue"] = list(getattr(self.audio_engine, "queue", []))
         return settings_dict
 
     def apply_settings(self, cfg: dict):
@@ -1613,7 +1679,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         # Lyrics Overlay Position & Visibility
         if self.lyrics_overlay:
-            font_size = int(cfg.get("lyrics_font_size", 25))
+            font_size = int(cfg.get("lyrics_font_size", 18))
             font_size = max(14, min(60, font_size))
             self.lyrics_overlay.set_font_size(font_size, keep_center=False)
             lx = int(cfg.get("lyrics_x", -1))
@@ -1636,7 +1702,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             else:
                 self.lyrics_overlay.hide()
             self.update_lyrics_ui()
-            lyric_color = cfg.get("lyrics_color", "#f472b6")
+            lyric_color = cfg.get("lyrics_color", "#00ffff")
             self.lyrics_overlay.set_color(lyric_color)
             if hasattr(self, "combo_lyric_color"):
                 matched = None
@@ -1685,6 +1751,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         # Download Destination Folder
         self.saved_dl_folder = str(cfg.get("download_folder", ""))
         self.refresh_dl_folders()
+
+        # Restore Saved Queue
+        saved_q = cfg.get("queue", [])
+        if isinstance(saved_q, list):
+            valid_queue = [
+                os.path.normpath(p) for p in saved_q
+                if isinstance(p, str) and os.path.exists(p)
+            ]
+            self.audio_engine.queue = valid_queue
+            if hasattr(self, "refresh_queue_ui"):
+                self.refresh_queue_ui()
+
         self.overlay.update()
         self.is_loading_settings = False
 

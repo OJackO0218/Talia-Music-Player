@@ -31,6 +31,7 @@ from config import (
     LYRICS_CACHE_DIR,
     init_app_fonts,
     load_settings,
+    save_settings,
     trim_process_memory,
 )
 from controller import ControlPanel
@@ -139,6 +140,17 @@ def main():
     # Show startup controls & shortcuts guide if enabled
     if saved_cfg.get("show_startup_guide", True):
         panel.show_guide_dialog()
+
+    def _save_state_on_exit():
+        try:
+            cfg = panel.get_current_settings_dict()
+            save_settings(cfg)
+            log.info("[SETTINGS] Persisted application state and queue on exit.")
+        except Exception as exc:
+            log.debug("Could not save settings on exit: %s", exc)
+
+    app.aboutToQuit.connect(_save_state_on_exit)
+
     trim_process_memory()
     log.info("[4/4] Talia is ready!")
     log.info("\n=======================================================")

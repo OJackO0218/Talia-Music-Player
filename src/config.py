@@ -96,7 +96,7 @@ DEFAULT_SETTINGS = {
     "lyrics_word_glow": True,
     "lyrics_dialogue_mode": True,
     "lyrics_font": "Rajdhani",
-    "lyrics_font_size": 20,
+    "lyrics_font_size": 18,
     "lyrics_offsets": {},
     "show_startup_guide": True,
     "eco_mode": False,
@@ -106,10 +106,12 @@ DEFAULT_SETTINGS = {
     "show_lyrics": True,
     "download_folder": "",
     "discord_rpc": True,
+    "queue": [],
 }
 
 
 SETTINGS_VERSION = 2
+APP_VERSION = "2.4.0"
 
 
 def portable_path(path: str) -> str:
@@ -150,13 +152,20 @@ def load_settings(path: str | None = None) -> dict:
     for key in ("music_folder", "download_folder"):
         if settings.get(key):
             settings[key] = resolve_path(settings[key])
+    if isinstance(settings.get("queue"), list):
+        settings["queue"] = [
+            resolve_path(p) for p in settings["queue"]
+            if isinstance(p, str) and p.strip()
+        ]
+    else:
+        settings["queue"] = []
     if not isinstance(settings.get("lyrics_offsets"), dict):
         settings["lyrics_offsets"] = {}
     try:
-        val = int(settings.get("lyrics_font_size", 25))
+        val = int(settings.get("lyrics_font_size", 18))
         settings["lyrics_font_size"] = max(14, min(60, val))
     except (TypeError, ValueError):
-        settings["lyrics_font_size"] = 25
+        settings["lyrics_font_size"] = 18
     settings["_version"] = SETTINGS_VERSION
     return settings
 
@@ -169,6 +178,11 @@ def save_settings(data: dict, path: str | None = None) -> bool:
     for key in ("music_folder", "download_folder"):
         if payload.get(key):
             payload[key] = portable_path(payload[key])
+    if isinstance(payload.get("queue"), list):
+        payload["queue"] = [
+            portable_path(p) for p in payload["queue"]
+            if isinstance(p, str) and p.strip()
+        ]
     directory = os.path.dirname(os.path.abspath(settings_path)) or "."
     tmp_path = None
     try:

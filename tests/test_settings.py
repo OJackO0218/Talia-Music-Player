@@ -61,7 +61,7 @@ def test_lyrics_font_size_default_and_clamping(tmp_path):
     target = tmp_path / "settings.json"
     # Defaults
     loaded = load_settings(str(target))
-    assert loaded["lyrics_font_size"] == 20
+    assert loaded["lyrics_font_size"] == 18
 
     # Valid custom value
     save_settings({"lyrics_font_size": 36}, str(target))
@@ -77,3 +77,25 @@ def test_lyrics_font_size_default_and_clamping(tmp_path):
     save_settings({"lyrics_font_size": 999}, str(target))
     loaded = load_settings(str(target))
     assert loaded["lyrics_font_size"] == 60
+
+
+def test_queue_persistence_roundtrip(tmp_path):
+    target = tmp_path / "settings.json"
+    song1 = os.path.join(PROJECT_ROOT, "music", "song1.mp3")
+    song2 = "D:/OutsideMusic/song2.flac"
+
+    # Save queue
+    cfg = {
+        "queue": [song1, song2],
+    }
+    assert save_settings(cfg, str(target))
+
+    # Verify portable conversion
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    assert raw["queue"][0] == "music/song1.mp3"
+    assert raw["queue"][1] == "D:/OutsideMusic/song2.flac"
+
+    # Verify load resolving
+    loaded = load_settings(str(target))
+    assert loaded["queue"][0] == os.path.normpath(song1)
+    assert loaded["queue"][1] == os.path.normpath(song2)

@@ -3,7 +3,7 @@
 import os
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -19,11 +20,18 @@ from PyQt6.QtWidgets import (
 )
 
 from config import (
+    APP_VERSION,
     COLOR_THEMES,
     ICON_PATH,
     MAX_CHAR_SIZE,
     MIN_CHAR_SIZE,
+    PROJECT_ROOT,
     trim_process_memory,
+)
+from updater import (
+    UpdateCheckWorker,
+    UpdateDownloadWorker,
+    launch_updater_and_exit,
 )
 from ui_theme import SHARED_PANEL_STYLE
 from ui_widgets import NoScrollComboBox, create_section_header
@@ -165,9 +173,9 @@ class SettingsDialog(QDialog):
 
         self.slider_lyric_size = QSlider(Qt.Orientation.Horizontal)
         self.slider_lyric_size.setRange(14, 60)
-        init_size = 25
+        init_size = 18
         if self.panel and getattr(self.panel, "lyrics_overlay", None):
-            init_size = getattr(self.panel.lyrics_overlay, "base_font_size", 25)
+            init_size = getattr(self.panel.lyrics_overlay, "base_font_size", 18)
         self.slider_lyric_size.setValue(init_size)
         self.slider_lyric_size.valueChanged.connect(self.panel.on_lyric_size_changed)
         hbox_size.addWidget(self.slider_lyric_size)
@@ -373,7 +381,60 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(card_char)
 
         # -------------------------------------------------------------
-        # CARD 5: ACTIONS & SYSTEM
+        # CARD 5: APPLICATION UPDATES
+        # -------------------------------------------------------------
+        card_updates, layout_updates = create_card_frame("Application Updates")
+
+        hbox_ver = QHBoxLayout()
+        self.lbl_curr_ver = QLabel(f"Installed Version: v{APP_VERSION}")
+        self.lbl_curr_ver.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px;")
+        hbox_ver.addWidget(self.lbl_curr_ver, 1)
+
+        self.btn_check_updates = QPushButton("Check for Updates")
+        self.btn_check_updates.setStyleSheet(
+            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px; font-weight: 600; padding: 4px 12px; font-size: 11px;"
+        )
+        self.btn_check_updates.clicked.connect(self._on_check_updates_clicked)
+        hbox_ver.addWidget(self.btn_check_updates)
+        layout_updates.addLayout(hbox_ver)
+
+        self.lbl_update_status = QLabel("Ready to check GitHub for updates.")
+        self.lbl_update_status.setStyleSheet("color: #a1a1aa; font-size: 11px;")
+        self.lbl_update_status.setWordWrap(True)
+        layout_updates.addWidget(self.lbl_update_status)
+
+        self.progress_update = QProgressBar()
+        self.progress_update.setRange(0, 100)
+        self.progress_update.setValue(0)
+        self.progress_update.setFixedHeight(12)
+        self.progress_update.setStyleSheet("""
+            QProgressBar {
+                background-color: #121215;
+                border: 1px solid #27272a;
+                border-radius: 4px;
+                text-align: center;
+                color: transparent;
+            }
+            QProgressBar::chunk {
+                background-color: #0284c7;
+                border-radius: 3px;
+            }
+        """)
+        self.progress_update.setVisible(False)
+        layout_updates.addWidget(self.progress_update)
+
+        self.btn_install_update = QPushButton("Download & Install Update")
+        self.btn_install_update.setStyleSheet(
+            "background-color: #059669; color: #ffffff; font-weight: bold; padding: 7px; border-radius: 4px; font-size: 12px;"
+        )
+        self.btn_install_update.clicked.connect(self._on_install_update_clicked)
+        self.btn_install_update.setVisible(False)
+        layout_updates.addWidget(self.btn_install_update)
+
+        content_layout.addWidget(card_updates)
+
+        # -------------------------------------------------------------
+        # CARD 6: ACTIONS & SYSTEM
         # -------------------------------------------------------------
         card_actions, layout_actions = create_card_frame("Actions")
 
@@ -433,6 +494,65 @@ class SettingsDialog(QDialog):
         else:
             self.combo_font.setCurrentIndex(0)
         self.combo_font.blockSignals(False)
+
+    def _on_check_updates_clicked(self):
+        self.btn_check_updates.setEnabled(False)
+        self.lbl_update_status.setText("Checking GitHub for the latest release...")
+        self.lbl_update_status.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        self._update_worker = UpdateCheckWorker(APP_VERSION, self)
+        self._update_worker.check_finished.connect(self._on_update_check_finished)
+        self._update_worker.start()
+
+    def _on_update_check_finished(self, info: dict):
+        self.btn_check_updates.setEnabled(True)
+        if info.get("has_update"):
+            ver = info.get("latest_version")
+            self._pending_update_url = info.get("download_url")
+            self.lbl_update_status.setText(f"New version v{ver} available! Click below to update seamlessly.")
+            self.lbl_update_status.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 11px;")
+            self.btn_install_update.setText(f"Update Now to v{ver}")
+            self.btn_install_update.setVisible(True)
+        elif info.get("error"):
+            self.lbl_update_status.setText(f"Could not reach GitHub: {info['error']}")
+            self.lbl_update_status.setStyleSheet("color: #f87171; font-size: 11px;")
+            self.btn_install_update.setVisible(False)
+        else:
+            self.lbl_update_status.setText(f"Talia is up to date (v{APP_VERSION}).")
+            self.lbl_update_status.setStyleSheet("color: #38bdf8; font-size: 11px;")
+            self.btn_install_update.setVisible(False)
+
+    def _on_install_update_clicked(self):
+        url = getattr(self, "_pending_update_url", None)
+        if not url:
+            return
+        self.btn_install_update.setEnabled(False)
+        self.btn_check_updates.setEnabled(False)
+        self.progress_update.setValue(0)
+        self.progress_update.setVisible(True)
+        self.lbl_update_status.setText("Connecting and downloading update package...")
+        self.lbl_update_status.setStyleSheet("color: #38bdf8; font-size: 11px;")
+
+        self._dl_worker = UpdateDownloadWorker(url, self)
+        self._dl_worker.progress.connect(self._on_update_progress)
+        self._dl_worker.download_finished.connect(self._on_update_download_finished)
+        self._dl_worker.start()
+
+    def _on_update_progress(self, percent: int, speed: str):
+        self.progress_update.setValue(percent)
+        spd_str = f" ({speed})" if speed else ""
+        self.lbl_update_status.setText(f"Downloading update: {percent}%{spd_str}...")
+
+    def _on_update_download_finished(self, ok: bool, zip_path: str, err: str):
+        if ok and zip_path and os.path.exists(zip_path):
+            self.progress_update.setValue(100)
+            self.lbl_update_status.setText("Update package downloaded. Talia is restarting to apply update...")
+            self.lbl_update_status.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 11px;")
+            QTimer.singleShot(1000, lambda: launch_updater_and_exit(zip_path, PROJECT_ROOT))
+        else:
+            self.btn_install_update.setEnabled(True)
+            self.btn_check_updates.setEnabled(True)
+            self.lbl_update_status.setText(f"Update download failed: {err}")
+            self.lbl_update_status.setStyleSheet("color: #f87171; font-size: 11px;")
 
     def closeEvent(self, event):
         self.hide()
