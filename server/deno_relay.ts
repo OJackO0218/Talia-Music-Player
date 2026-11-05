@@ -234,16 +234,35 @@ Deno.serve(async (req) => {
         );
 
         // Notify local listeners
-        const peerJoinedMsg = JSON.stringify({
+        const peerJoinedPayload = {
           type: "peer_joined",
           name: peerName,
           count: members.length,
-        });
+        };
+        const peerJoinedMsg = JSON.stringify(peerJoinedPayload);
 
         for (const [peerSocket] of roomMap.entries()) {
           if (peerSocket !== socket && peerSocket.readyState === WebSocket.OPEN) {
             peerSocket.send(peerJoinedMsg);
           }
+        }
+
+        // Broadcast peer_joined to all other edge nodes via BroadcastChannel and Deno KV
+        globalChannel?.postMessage({
+          type: "broadcast_event",
+          room: currentRoom,
+          sender: peerName,
+          payload: peerJoinedPayload,
+        });
+
+        if (kv) {
+          try {
+            await kv.set(
+              ["room_events", currentRoom],
+              { sender: peerName, payload: peerJoinedPayload, ts: Date.now() },
+              { expireIn: 60000 }
+            );
+          } catch {}
         }
 
         // Start real-time cross-region KV event listener for this room
@@ -350,16 +369,31 @@ Deno.serve(async (req) => {
           globalChannel?.postMessage({ type: "room_closed", room: currentRoom });
         } else {
           const members = Array.from(roomMap.values()).map((p) => p.name);
-          const peerLeftMsg = JSON.stringify({
+          const peerLeftPayload = {
             type: "peer_left",
             name: peerName,
             is_host: isHost,
-            count: members.length,
-          });
+            count: Math.max(1, members.length),
+          };
           for (const [peerSocket] of roomMap.entries()) {
             if (peerSocket.readyState === WebSocket.OPEN) {
-              peerSocket.send(peerLeftMsg);
+              peerSocket.send(JSON.stringify(peerLeftPayload));
             }
+          }
+          globalChannel?.postMessage({
+            type: "broadcast_event",
+            room: currentRoom,
+            sender: peerName,
+            payload: peerLeftPayload,
+          });
+          if (kv) {
+            try {
+              await kv.set(
+                ["room_events", currentRoom],
+                { sender: peerName, payload: peerLeftPayload, ts: Date.now() },
+                { expireIn: 60000 }
+              );
+            } catch {}
           }
         }
       } else {
