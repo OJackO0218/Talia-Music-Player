@@ -599,7 +599,7 @@ class PartySyncService(QObject):
                 members = ack.get("members", [user_name])
 
                 # Reject joining if we are a listener but no host is in the room
-                if not is_host and len(members) <= 1:
+                if not is_host and len(members) <= 1 and not ack.get("host_name"):
                     log.warning("Join rejected: Room '%s' has no host online (members=%s)", room_code, members)
                     try:
                         await ws.send(json.dumps({"type": "leave"}))
@@ -613,8 +613,10 @@ class PartySyncService(QObject):
 
                 if is_host:
                     self.host_name = user_name
-                elif members:
+                elif members and len(members) > 1:
                     self.host_name = members[0]
+                else:
+                    self.host_name = ack.get("host_name", "Host")
 
                 self.connected.emit(room_code, is_host, members)
                 self.status_message.emit(f"Connected to Room '{room_code}'! ({len(members)} listening)")

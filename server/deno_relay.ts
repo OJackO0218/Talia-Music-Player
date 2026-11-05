@@ -1,5 +1,5 @@
 // Deno Deploy WebSocket Relay for Talia Music Player
-// Supports multi-region global synchronization via BroadcastChannel
+// Supports multi-region global synchronization via Deno KV + BroadcastChannel
 
 // In-memory room registry for this specific isolate:
 // room_code -> Map<WebSocket, { name: string; isHost: boolean }>
@@ -124,7 +124,20 @@ try {
   // BroadcastChannel unavailable in local fallback environments
 }
 
-Deno.serve((req) => {
+// Global persistent room registry using Deno KV (cross-region synchronization)
+// deno-lint-ignore no-explicit-any
+let kv: any = null;
+try {
+  // @ts-ignore: Deno.openKv available in Deno runtime
+  if (typeof Deno.openKv === "function") {
+    // @ts-ignore: Deno.openKv
+    kv = await Deno.openKv();
+  }
+} catch {
+  // KV unavailable in offline or restricted environments
+}
+
+Deno.serve(async (req) => {
   const upgrade = req.headers.get("upgrade") || "";
   if (upgrade.toLowerCase() !== "websocket") {
     // Health check endpoint for browsers and monitoring
@@ -171,17 +184,32 @@ Deno.serve((req) => {
         // Validate room existence for listeners (prevent phantom room creation)
         if (!isHost) {
           let roomFound = rooms.has(currentRoom) && rooms.get(currentRoom)!.size > 0;
-          const cached = knownRooms.get(currentRoom);
-          if (!roomFound && cached && Date.now() - cached.lastSeen < 60000) {
+          let cached = knownRooms.get(currentRoom);
+          if (!roomFound && cached && Date.now() - cached.lastSeen < 300000) {
             roomFound = true;
           }
 
+          // Check global Deno KV first
+          if (!roomFound && kv) {
+            try {
+              const res = await kv.get(["rooms", currentRoom]);
+              if (res && res.value) {
+                roomFound = true;
+                knownRooms.set(currentRoom, { hostName: res.value.hostName, lastSeen: Date.now() });
+                cached = knownRooms.get(currentRoom);
+              }
+            } catch {
+              // Ignore KV read error
+            }
+          }
+
+          // If still not found, query BroadcastChannel
           if (!roomFound && globalChannel) {
             globalChannel.postMessage({ type: "query_room", room: currentRoom });
-            await new Promise((resolve) => setTimeout(resolve, 350));
+            await new Promise((resolve) => setTimeout(resolve, 450));
             roomFound = rooms.has(currentRoom) && rooms.get(currentRoom)!.size > 0;
             const postCached = knownRooms.get(currentRoom);
-            if (!roomFound && postCached && Date.now() - postCached.lastSeen < 60000) {
+            if (!roomFound && postCached && Date.now() - postCached.lastSeen < 300000) {
               roomFound = true;
             }
           }
@@ -206,6 +234,13 @@ Deno.serve((req) => {
             room: currentRoom,
             hostName: peerName,
           });
+          if (kv) {
+            try {
+              await kv.set(["rooms", currentRoom], { hostName: peerName, createdAt: Date.now() }, { expireIn: 1000 * 60 * 60 * 4 });
+            } catch {
+              // Ignore KV write error
+            }
+          }
         }
 
         if (!rooms.has(currentRoom)) {
@@ -215,7 +250,14 @@ Deno.serve((req) => {
         const roomMap = rooms.get(currentRoom)!;
         roomMap.set(socket, { name: peerName, isHost });
 
-        const members = Array.from(roomMap.values()).map((p) => p.name);
+        // Ensure host is always in the member list even across different edge datacenters
+        const activeHost = isHost ? peerName : (knownRooms.get(currentRoom)?.hostName || "Host");
+        const membersSet = new Set<string>();
+        if (!isHost) membersSet.add(activeHost);
+        for (const p of roomMap.values()) {
+          membersSet.add(p.name);
+        }
+        const members = Array.from(membersSet);
 
         // Acknowledge join to the sender
         socket.send(
@@ -223,6 +265,7 @@ Deno.serve((req) => {
             type: "joined",
             room: currentRoom,
             is_host: isHost,
+            host_name: activeHost,
             members: members,
             count: members.length,
           })
@@ -264,6 +307,12 @@ Deno.serve((req) => {
             roomMap.set(socket, { name: peerName, isHost: false });
             roomMap.set(targetSocket, { name: targetName, isHost: true });
             knownRooms.set(currentRoom, { hostName: targetName, lastSeen: Date.now() });
+
+            if (kv) {
+              try {
+                await kv.set(["rooms", currentRoom], { hostName: targetName, createdAt: Date.now() }, { expireIn: 1000 * 60 * 60 * 4 });
+              } catch {}
+            }
 
             const transferMsg = JSON.stringify({
               type: "host_transferred",
@@ -316,7 +365,7 @@ Deno.serve((req) => {
     }
   };
 
-  socket.onclose = () => {
+  socket.onclose = async () => {
     if (currentRoom && rooms.has(currentRoom)) {
       const roomMap = rooms.get(currentRoom)!;
       roomMap.delete(socket);
@@ -343,6 +392,11 @@ Deno.serve((req) => {
           }
           rooms.delete(currentRoom);
           knownRooms.delete(currentRoom);
+          if (kv) {
+            try {
+              await kv.delete(["rooms", currentRoom]);
+            } catch {}
+          }
           globalChannel?.postMessage({ type: "room_closed", room: currentRoom });
         } else {
           const members = Array.from(roomMap.values()).map((p) => p.name);
@@ -362,6 +416,11 @@ Deno.serve((req) => {
         rooms.delete(currentRoom);
         if (isHost) {
           knownRooms.delete(currentRoom);
+          if (kv) {
+            try {
+              await kv.delete(["rooms", currentRoom]);
+            } catch {}
+          }
           globalChannel?.postMessage({ type: "room_closed", room: currentRoom });
         }
       }
