@@ -11,19 +11,14 @@ def _make_engine(monkeypatch, playlist):
     return engine
 
 
-def test_balanced_shuffle_covers_every_track(monkeypatch):
+def test_random_shuffle_covers_every_track_without_repeat(monkeypatch):
     playlist = [f"C:/music/Artist{i % 3} - Song{i}.opus" for i in range(12)]
     engine = _make_engine(monkeypatch, playlist)
 
     engine.shuffle = True
     order = engine._shuffle_order
     assert sorted(order) == list(range(len(playlist)))
-
-    keys = [engine._extract_cluster_key(playlist[i]) for i in order]
-    for left, right in zip(keys, keys[1:]):
-        if left == right:
-            # Only acceptable when one artist dominates the playlist.
-            assert keys.count(left) > len(keys) / 2
+    assert len(order) == len(playlist)
 
 
 def test_disabling_shuffle_clears_history(monkeypatch):
@@ -149,3 +144,147 @@ def test_shuffle_toggle_never_repeats_current_on_next(monkeypatch):
     engine.next_track()
     assert engine.current_index != curr
     assert played[-1] != playlist[curr]
+
+
+def test_control_panel_play_next_track_respects_queue(tmp_path, monkeypatch, qapp):
+    """Ensures ControlPanel.play_next_track consumes and plays queued songs before advancing playlist."""
+    from controller import ControlPanel
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from overlay import OverlayWindow
+
+    t1 = tmp_path / "song1.mp3"
+    t2 = tmp_path / "song2.mp3"
+    t_queued = tmp_path / "queued_song.mp3"
+    for t in (t1, t2, t_queued):
+        t.write_bytes(b"")
+
+    engine = _make_engine(monkeypatch, [str(t1), str(t2)])
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    played = []
+    monkeypatch.setattr(
+        engine,
+        "load_file",
+        lambda path, auto_play=True, blocking=False: played.append(path) or True,
+    )
+
+    # Queue a song
+    assert engine.add_to_queue(str(t_queued))
+    assert engine.queue == [str(t_queued)]
+
+    # Advance track via control panel hook
+    assert panel.play_next_track() is True
+    assert played == [str(t_queued)]
+    assert engine.queue == []
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+
+def test_queue_playlist_and_indicator_integration(tmp_path, monkeypatch, qapp):
+    """Ensures Queue appears as a playlist, queue indicator displays and toggles, and tracks are removed when played."""
+    from controller import ControlPanel
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from overlay import OverlayWindow
+
+    t1 = tmp_path / "song1.mp3"
+    t2 = tmp_path / "song2.mp3"
+    t_queued = tmp_path / "queued_song.mp3"
+    for t in (t1, t2, t_queued):
+        t.write_bytes(b"")
+
+    engine = _make_engine(monkeypatch, [str(t1), str(t2)])
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    played = []
+    monkeypatch.setattr(
+        engine,
+        "load_file",
+        lambda path, auto_play=True, blocking=False: played.append(path) or True,
+    )
+
+    # Queue playlist should be an option in dropdown
+    items = [panel.combo_playlist.itemText(i) for i in range(panel.combo_playlist.count())]
+    assert "Queue" in items
+
+    # Initially empty queue: indicator hidden
+    assert len(engine.queue) == 0
+    assert panel.btn_queue_indicator.isHidden()
+
+    # Add song to queue
+    engine.add_to_queue(str(t_queued))
+    panel.refresh_queue_ui()
+    assert not panel.btn_queue_indicator.isHidden()
+    assert "≡ 1" in panel.btn_queue_indicator.text()
+
+    # Click indicator toggles to Queue playlist
+    panel.btn_queue_indicator.click()
+    assert panel.current_playlist == "Queue"
+    assert panel.combo_playlist.currentText() == "Queue"
+    assert panel.list_tracks.count() == 1
+    assert panel.list_tracks.item(0).data(0x0100 + 1) == str(t_queued)
+
+    # Click indicator again toggles back to All Tracks
+    panel.btn_queue_indicator.click()
+    assert panel.current_playlist == "All Tracks"
+    assert panel.combo_playlist.currentText() == "All Tracks"
+
+    # Switch back to Queue to test playback removal
+    panel.on_playlist_selected("Queue")
+    assert panel.list_tracks.count() == 1
+    item = panel.list_tracks.item(0)
+    panel.on_track_double_clicked(item)
+
+    # Song was played and removed from queue
+    assert played == [str(t_queued)]
+    assert engine.queue == []
+    assert panel.btn_queue_indicator.isHidden()
+    assert panel.list_tracks.count() == 0
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+
+
+def test_add_to_queue_does_not_open_blank_window(tmp_path, monkeypatch, qapp):
+    """Ensures adding songs to queue does not instantiate or open any unparented top-level windows."""
+    from controller import ControlPanel
+    from lyrics_manager import LyricsManager
+    from lyrics_overlay import LyricsOverlayWindow
+    from overlay import OverlayWindow
+    from PyQt6.QtWidgets import QApplication
+
+    t1 = tmp_path / "song1.mp3"
+    t1.write_bytes(b"")
+
+    engine = _make_engine(monkeypatch, [str(t1)])
+    lyrics = LyricsOverlayWindow(engine, LyricsManager())
+    overlay = OverlayWindow(engine)
+    panel = ControlPanel(overlay, engine, lyrics)
+
+    top_levels_before = set(QApplication.topLevelWidgets())
+
+    # Trigger queue on the row widget directly
+    row_widget = panel.list_tracks.itemWidget(panel.list_tracks.item(0))
+    assert row_widget is not None
+    row_widget._on_queue_clicked()
+
+    top_levels_after = set(QApplication.topLevelWidgets())
+    new_top_levels = [w for w in (top_levels_after - top_levels_before) if w.isVisible()]
+
+    # Zero new visible top-level windows should have opened!
+    assert len(new_top_levels) == 0
+    assert str(t1) in engine.queue
+
+    panel.hide()
+    lyrics.hide()
+    overlay.hide()
+

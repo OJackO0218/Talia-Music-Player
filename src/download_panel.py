@@ -172,6 +172,8 @@ class DownloadPanelMixin:
     def _on_download_progress(self, msg):
         self.lbl_dl_status.setText(msg)
         self.lbl_dl_status.setStyleSheet("color: #3b82f6; font-size: 11px;")
+        if hasattr(self, "show_download_status"):
+            self.show_download_status(msg)
 
     def _on_download_finished(self, success, opus_path, status_msg):
         self.btn_dl_action.setEnabled(True)
@@ -179,6 +181,8 @@ class DownloadPanelMixin:
         if success:
             self.lbl_dl_status.setText(status_msg)
             self.lbl_dl_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 500;")
+            if hasattr(self, "show_download_status"):
+                self.show_download_status(status_msg, is_done=True)
 
             # Automatically refresh playlist to include the new track
             self.audio_engine.refresh_playlist()

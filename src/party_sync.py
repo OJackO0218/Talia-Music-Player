@@ -7,19 +7,37 @@ and communicates with the PyQt6 main thread via thread-safe signals.
 """
 
 import asyncio
+import atexit
 import json
 import logging
 import random
 import re
 import socket
-import time
-import string
 import threading
+import time
 from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 log = logging.getLogger("PartySync")
+
+_active_workers: list[tuple[Any, threading.Thread]] = []
+
+def _cleanup_party_services():
+    for loop, thread in list(_active_workers):
+        try:
+            if loop and loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            pass
+        try:
+            if thread and thread.is_alive():
+                thread.join(timeout=0.1)
+        except Exception:
+            pass
+    _active_workers.clear()
+
+atexit.register(_cleanup_party_services)
 
 # Default public relay URL or fallback
 DEFAULT_RELAY_URL = "wss://soft-mongoose-6754.ojacko0218.deno.net"
@@ -84,7 +102,11 @@ class PartySyncService(QObject):
         self._stop_event = threading.Event()
         self._embedded_server = None
 
-        self._ensure_worker_thread()
+    def __del__(self):
+        try:
+            self.stop()
+        except Exception:
+            pass
 
     def _ensure_worker_thread(self):
         """Starts the dedicated asyncio networking thread if not already running."""
@@ -99,11 +121,42 @@ class PartySyncService(QObject):
             asyncio.set_event_loop(self._loop)
             self._send_queue = asyncio.Queue()
             ready_event.set()
-            self._loop.run_forever()
+            try:
+                self._loop.run_forever()
+            finally:
+                try:
+                    self._loop.close()
+                except Exception:
+                    pass
 
         self._thread = threading.Thread(target=_runner, daemon=True, name="PartySyncWorker")
         self._thread.start()
         ready_event.wait(timeout=2.0)
+        if self._loop:
+            _active_workers.append((self._loop, self._thread))
+
+    def stop(self):
+        """Stops the asyncio loop and worker thread cleanly."""
+        loop = self._loop
+        thread = self._thread
+        if loop and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except Exception:
+                pass
+        if thread and thread.is_alive():
+            try:
+                thread.join(timeout=0.3)
+            except Exception:
+                pass
+        for item in list(_active_workers):
+            if item[1] is thread:
+                try:
+                    _active_workers.remove(item)
+                except Exception:
+                    pass
+        self._loop = None
+        self._thread = None
 
     # -------------------------------------------------------------------------
     # Public Control API (called from Qt thread)
@@ -632,11 +685,15 @@ class PartySyncService(QObject):
                 for task in pending:
                     task.cancel()
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             self.error_occurred.emit("Connection timed out. Check the relay server address.")
+            if is_host and not self.is_connected:
+                raise exc
         except Exception as exc:
             log.info("Party connection terminated: %s", exc)
             self.error_occurred.emit(f"Party connection closed: {exc}")
+            if is_host and not self.is_connected:
+                raise exc
         finally:
             was_connected = self.is_connected
             self.is_connected = False

@@ -8,7 +8,9 @@ import ctypes
 import logging
 import os
 import random
+import socket
 import sys
+import threading
 
 # Prevent OpenMP / BLAS from spawning multi-threaded thread pools for micro-FFT ops
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -21,6 +23,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
@@ -81,15 +84,28 @@ def main():
                 )
             sys.exit(0)
 
+    WAKEUP_PORT = 48721
+
     # Ensure only 1 instance of Talia runs at a time (pass --multi to allow multiple instances for testing)
     if "--multi" not in sys.argv:
+        # Check named Win32 mutex first (< 0.01ms) to avoid blocking cold starts with a loopback socket connect
         mutex = ctypes.windll.kernel32.CreateMutexW(  # noqa: F841 (handle must outlive app)
             None, False, "AtharTaliaCyberpunkVisualizerMutex"
         )
         if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-            log.warning(
-                "[!] Another instance of Talia is already running! Exiting duplicate process..."
-            )
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.3)
+                sock.connect(("127.0.0.1", WAKEUP_PORT))
+                sock.sendall(b"WAKEUP\n")
+                sock.close()
+                log.warning(
+                    "[!] Another instance of Talia is already running! Activated existing instance."
+                )
+            except Exception:
+                log.warning(
+                    "[!] Talia mutex already held. Exiting duplicate instance."
+                )
             sys.exit(0)
     log.info("[1/4] Starting Talia Cyberpunk Visualizer...")
     app = QApplication(sys.argv)
@@ -114,21 +130,33 @@ def main():
 
     # Initialize transparent Live2D character overlay & synced lyrics overlay
     log.info("[2/4] Loading Talia character rig & visualizer surface...")
-    overlay = OverlayWindow(audio_engine)
+    overlay = OverlayWindow(audio_engine, initial_volume=saved_cfg.get("volume", 0.49))
     lyrics_overlay = LyricsOverlayWindow(audio_engine, lyrics_manager)
     overlay.lyrics_overlay = lyrics_overlay
 
     # Initialize controller panel and apply saved layout/settings
     # Note: Controller panel starts closed/hidden as requested; open with 3 clicks on Talia!
     log.info("[3/4] Initializing Controller Panel & restoring saved settings...")
-    panel = ControlPanel(overlay, audio_engine, lyrics_overlay)
+    panel = ControlPanel(
+        overlay,
+        audio_engine,
+        lyrics_overlay,
+        defer_populate=True,
+        initial_settings=saved_cfg,
+    )
     panel.apply_settings(saved_cfg)
 
-    # Load initial track into engine in paused state (random selection on launch)
-    if audio_engine.playlist:
+    # Load initial track in paused state (respecting ★ Random Mix when active)
+    if getattr(panel, "current_playlist", "All Tracks") == "★ Random Mix" and hasattr(panel, "radio_mix"):
+        cached_radio = panel.radio_mix.played_history or panel.radio_mix.get_cached_tracks()
+        if cached_radio and os.path.exists(cached_radio[-1]):
+            audio_engine.load_file(cached_radio[-1], auto_play=False, blocking=False)
+            panel.sync_play_state()
+        QTimer.singleShot(800, panel.radio_mix.prefetch_next)
+    elif audio_engine.playlist:
         start_idx = random.randint(0, len(audio_engine.playlist) - 1)
         audio_engine.current_index = start_idx
-        audio_engine.load_file(audio_engine.playlist[start_idx], auto_play=False, blocking=True)
+        audio_engine.load_file(audio_engine.playlist[start_idx], auto_play=False, blocking=False)
         if audio_engine.shuffle:
             audio_engine.rebuild_shuffle_order(starting_index=start_idx)
         panel.sync_play_state()
@@ -144,6 +172,35 @@ def main():
     if saved_cfg.get("show_startup_guide", True):
         panel.show_guide_dialog()
 
+    def _start_ipc_listener():
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", WAKEUP_PORT))
+            srv.listen(2)
+            while True:
+                conn, _ = srv.accept()
+                try:
+                    data = conn.recv(64)
+                    if b"WAKEUP" in data:
+                        def _wake():
+                            overlay.show()
+                            overlay.raise_()
+                            overlay.activateWindow()
+                            if lyrics_overlay and getattr(lyrics_overlay, "is_enabled", False):
+                                lyrics_overlay.show()
+                                lyrics_overlay.enforce_topmost()
+                        QTimer.singleShot(0, _wake)
+                except Exception:
+                    pass
+                finally:
+                    conn.close()
+        except Exception as exc:
+            log.debug("Wakeup listener stopped: %s", exc)
+
+    if "--multi" not in sys.argv:
+        threading.Thread(target=_start_ipc_listener, daemon=True, name="TaliaIpcListener").start()
+
     def _save_state_on_exit():
         try:
             cfg = panel.get_current_settings_dict()
@@ -154,22 +211,14 @@ def main():
 
     app.aboutToQuit.connect(_save_state_on_exit)
 
-    trim_process_memory()
-    log.info("[4/4] Talia is ready!")
-    log.info("\n=======================================================")
-    log.info("  TALIA CYBERPUNK AUDIO VISUALIZER")
-    log.info("  - Click Talia 1x to Play / Pause.")
-    log.info("  - Click Talia 2x on Right to Skip / Left to Rewind.")
-    log.info("  - Click Talia 3x to Open / Show Controller Window.")
-    log.info("  - Close Controller with [X] anytime (reopen with 3 clicks).")
-    log.info("  - Hold Talia for 0.7s & release to toggle Move Mode (Talia & Lyrics).")
-    log.info("  - Hold Talia for 2s to Power Down & Exit.")
-    log.info("  - Scroll wheel on Talia to adjust volume (or resize in Move Mode).")
-    log.info("  - Press [F7] to toggle Synced Lyrics Overlay.")
-    log.info("  - Press [F8] to toggle Move Mode.")
-    log.info("  - Press [F10] to switch Desktop Mode vs Local Player.")
-    log.info("  - Press [F11] to toggle Eco Mode (< 1% CPU).")
-    log.info("=======================================================\n")
+    # Warm PortAudio asynchronously after first frame is on screen, and defer RAM trim
+    threading.Thread(
+        target=audio_engine.prewarm_audio_backend,
+        daemon=True,
+        name="AudioBackendWarmup",
+    ).start()
+    QTimer.singleShot(2500, trim_process_memory)
+    log.info("[4/4] Talia initialized and ready.")
     sys.exit(app.exec())
 
 

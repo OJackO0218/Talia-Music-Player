@@ -1,9 +1,3 @@
-from party_dialog import PartySyncDialog
-from party_sync import PartySyncService
-from spotify_dialog import SpotifySyncDialog
-from spotify_sync import SpotifySyncService
-from discord_service import DiscordRpcService, parse_track_info
-from typing import Optional
 """Main controller panel for Talia playback, appearance, and configuration."""
 
 import logging
@@ -14,14 +8,23 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
+from typing import Optional
 
-log = logging.getLogger("ControlPanel")
-
-from PyQt6.QtCore import QSize, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPropertyAnimation,
+    QRect,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
+from PyQt6.QtGui import QColor, QCursor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtMultimedia import QMediaDevices
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QColorDialog,
     QFileDialog,
@@ -30,9 +33,11 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
+    QProgressBar,
     QPushButton,
-    QScrollArea,
     QSlider,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -45,46 +50,312 @@ from config import (
     ICON_PATH,
     MAX_CHAR_SIZE,
     MIN_CHAR_SIZE,
-    PNGS_DIR,
     PROJECT_ROOT,
     SUPPORTED_AUDIO_EXTS,
     VK_CONTROL,
-    VK_F7,
-    VK_F8,
-    VK_F9,
-    VK_F10,
-    VK_F11,
     VK_OEM_4,
     VK_OEM_6,
+    apply_playtime_exp,
+    get_cumulative_exp_for_level,
+    load_settings,
     save_settings,
     trim_process_memory,
     user32,
 )
+from discord_service import DiscordRpcService, parse_track_info
 from download_panel import DownloadPanelMixin
 from guide_dialog import GuideDialog
 from overlay import OverlayWindow
+from party_sync import PartySyncService
 from playlist_panel import PlaylistPanelMixin
 from settings_dialog import SettingsDialog
 from song_downloader import SongDownloaderService
-from ui_theme import SHARED_PANEL_STYLE
+from spotify_sync import SpotifySyncService
 from ui_widgets import (
+    CyberButton,
+    CyberCardContainer,
+    CyberChamferButton,
     CyberScrollingTrackLabel,
+    CyberVerticalVolumeSlider,
     NoScrollComboBox,
-    create_section_header,
 )
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("ControlPanel")
+
+USER_SPRITES_DIR = os.path.join(PROJECT_ROOT, "assets", "user_sprites")
+
+
+class OutsideClickFilter(QObject):
+    """Detects clicks outside the sliding panel and controls bar to auto-close."""
+
+    def __init__(self, panel, controls_bar, overlay, parent=None):
+        super().__init__(parent)
+        self._panel_ref = weakref.ref(panel)
+        self._controls_ref = weakref.ref(controls_bar)
+        self._overlay_ref = weakref.ref(overlay)
+
+    @property
+    def panel(self):
+        return self._panel_ref()
+
+    @property
+    def controls_bar(self):
+        return self._controls_ref()
+
+    @property
+    def overlay(self):
+        return self._overlay_ref()
+
+    def eventFilter(self, obj, event):
+        panel = self.panel
+        controls_bar = self.controls_bar
+        overlay = self.overlay
+        if panel is None or controls_bar is None or overlay is None:
+            return False
+        if event.type() == QEvent.Type.MouseButtonPress:
+            try:
+                is_vis = panel.isVisible()
+            except RuntimeError:
+                return False
+            if is_vis and not getattr(panel, "is_animating", False):
+                pos = event.globalPosition().toPoint()
+                # Don't auto-close if settings dialog or another modal / popup is open
+                if hasattr(self.panel, "settings_dialog") and self.panel.settings_dialog.isVisible():
+                    return False
+                party_dlg = getattr(self.panel, "_party_dialog", None)
+                if party_dlg is not None and party_dlg.isVisible():
+                    return False
+                spotify_dlg = getattr(self.panel, "_spotify_dialog", None)
+                if spotify_dlg is not None and spotify_dlg.isVisible():
+                    return False
+                if (
+                    hasattr(self.panel, "_lyrics_fetcher_win")
+                    and self.panel._lyrics_fetcher_win is not None
+                    and self.panel._lyrics_fetcher_win.isVisible()
+                ):
+                    return False
+                if QApplication.activePopupWidget() or QApplication.activeModalWidget():
+                    return False
+
+                in_panel = self.panel.frameGeometry().contains(pos)
+                in_ctrl = self.controls_bar.isVisible() and self.controls_bar.frameGeometry().contains(pos)
+                in_overlay = self.overlay.frameGeometry().contains(pos)
+                if not (in_panel or in_ctrl or in_overlay):
+                    self.panel.close_slide_panel()
+        return False
+
+
+class TaliaControlsBar(QWidget):
+    """
+    Floating playback controls bar that pops out below (or above) Talia.
+    - Transparent background (zero black box).
+    - 4 buttons: Previous, Play/Pause, Next, Shuffle.
+    - Nearest-neighbor crisp scaling (FastTransformation, no blurriness).
+    """
+
+    def __init__(self, panel, parent=None):
+        super().__init__(parent)
+        self.panel = panel
+        self.audio_engine = panel.audio_engine
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setObjectName("taliaControlsBar")
+        self.setStyleSheet("""
+            QWidget#taliaControlsBar {
+                background-color: rgba(6, 20, 36, 220);
+                border: 1px solid rgba(0, 240, 255, 95);
+                border-radius: 6px;
+            }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 3, 8, 3)
+        layout.setSpacing(4)
+
+        btn_style = """
+            QPushButton {
+                background-color: transparent;
+                border: none;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: rgba(0, 240, 255, 45);
+                border-radius: 5px;
+            }
+            QPushButton:pressed {
+                background-color: rgba(0, 240, 255, 90);
+                border-radius: 5px;
+            }
+        """
+
+        self.btn_prev = QPushButton(self)
+        self.btn_prev.setFixedSize(28, 28)
+        self.btn_prev.setStyleSheet(btn_style)
+        self.btn_prev.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_prev.setToolTip("Previous Track")
+        self.btn_prev.clicked.connect(self._on_prev_clicked)
+
+        self.btn_play = QPushButton(self)
+        self.btn_play.setFixedSize(28, 28)
+        self.btn_play.setStyleSheet(btn_style)
+        self.btn_play.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_play.setToolTip("Play / Pause")
+        self.btn_play.clicked.connect(self._on_play_clicked)
+
+        self.btn_next = QPushButton(self)
+        self.btn_next.setFixedSize(28, 28)
+        self.btn_next.setStyleSheet(btn_style)
+        self.btn_next.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_next.setToolTip("Next Track")
+        self.btn_next.clicked.connect(self._on_next_clicked)
+
+        self.btn_shuffle = QPushButton(self)
+        self.btn_shuffle.setFixedSize(28, 28)
+        self.btn_shuffle.setStyleSheet(btn_style)
+        self.btn_shuffle.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_shuffle.setToolTip("Toggle Shuffle")
+        self.btn_shuffle.clicked.connect(self._on_shuffle_clicked)
+
+        layout.addWidget(self.btn_prev)
+        layout.addWidget(self.btn_play)
+        layout.addWidget(self.btn_next)
+        layout.addWidget(self.btn_shuffle)
+
+        self._load_icons()
+        self.sync_state()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(6, 20, 36, 230))
+        painter.setPen(QPen(QColor(0, 240, 255, 120), 1.2))
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        painter.drawRoundedRect(rect, 6, 6)
+
+    def _load_crisp_icon(self, filename: str, target_size: int = 24) -> QIcon:
+        """Loads sprite with nearest-neighbor scaling (FastTransformation) for crisp pixel art."""
+        p = os.path.join(USER_SPRITES_DIR, filename)
+        if not os.path.exists(p):
+            return QIcon()
+        pix = QPixmap(p)
+        if pix.isNull():
+            return QIcon()
+        scaled = pix.scaled(
+            target_size,
+            target_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        return QIcon(scaled)
+
+    def _load_icons(self):
+        self.icon_prev = self._load_crisp_icon("previous_button.png", 24)
+        self.icon_play = self._load_crisp_icon("play_button.png", 24)
+        self.icon_pause = self._load_crisp_icon("pause_button.png", 24)
+        self.icon_next = self._load_crisp_icon("next_button.png", 24)
+        self.icon_shuffle_on = self._load_crisp_icon("shuffle_button.png", 24)   # Blue when ON
+        self.icon_shuffle_off = self._load_crisp_icon("shuffle_active.png", 24)  # Red when OFF
+        self.icon_shuffle = self.icon_shuffle_off
+        self.icon_shuffle_active = self.icon_shuffle_on
+
+        self.btn_prev.setIcon(self.icon_prev)
+        self.btn_prev.setIconSize(QSize(24, 24))
+        self.btn_next.setIcon(self.icon_next)
+        self.btn_next.setIconSize(QSize(24, 24))
+
+    def sync_state(self):
+        """Synchronizes play/pause and shuffle button icons without setting any text."""
+        is_playing = getattr(self.audio_engine, "is_playing", False)
+        if is_playing:
+            self.btn_play.setIcon(self.icon_pause)
+        else:
+            self.btn_play.setIcon(self.icon_play)
+        self.btn_play.setIconSize(QSize(24, 24))
+        self.btn_play.setText("")
+
+        is_shuffle = getattr(self.audio_engine, "shuffle", False)
+        if is_shuffle:
+            self.btn_shuffle.setIcon(self.icon_shuffle_on)
+        else:
+            self.btn_shuffle.setIcon(self.icon_shuffle_off)
+        self.btn_shuffle.setIconSize(QSize(24, 24))
+        self.btn_shuffle.setText("")
+
+    def _on_prev_clicked(self):
+        if hasattr(self.panel, "on_prev_clicked"):
+            self.panel.on_prev_clicked()
+        else:
+            self.audio_engine.prev_track()
+        self.sync_state()
+
+    def _on_play_clicked(self):
+        if hasattr(self.panel, "toggle_play_pause"):
+            self.panel.toggle_play_pause()
+        else:
+            self.audio_engine.toggle_play_pause()
+        self.sync_state()
+
+    def _on_next_clicked(self):
+        if hasattr(self.panel, "on_next_clicked"):
+            self.panel.on_next_clicked()
+        else:
+            self.audio_engine.next_track()
+        self.sync_state()
+
+    def _on_shuffle_clicked(self):
+        if hasattr(self.panel, "toggle_shuffle"):
+            self.panel.toggle_shuffle()
+        else:
+            self.audio_engine.shuffle = not getattr(self.audio_engine, "shuffle", False)
+            self.sync_state()
+            if hasattr(self.panel, "save_settings"):
+                self.panel.save_settings()
+
+
+
 
 
 class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     """Clean, modern controller for Talia Music Player, Visualizer, and Settings."""
 
-    def __init__(self, overlay: OverlayWindow, audio_engine: CyberAudioEngine, lyrics_overlay=None):
+    yt_search_progress = pyqtSignal(str)
+    yt_search_done = pyqtSignal(bool, str, str)
+
+    def __init__(
+        self,
+        overlay: OverlayWindow,
+        audio_engine: CyberAudioEngine,
+        lyrics_overlay=None,
+        defer_populate: bool = False,
+        initial_settings: dict | None = None,
+    ):
         super().__init__()
+        self._defer_initial_populate = defer_populate
+        self.yt_search_progress.connect(self._on_yt_search_progress_safe)
+        self.yt_search_done.connect(self._on_yt_search_download_done)
         self.overlay = overlay
         self.overlay.panel = self
         self.audio_engine = audio_engine
+        self.audio_engine.track_started_hook = self.record_track_played
         self.lyrics_overlay = lyrics_overlay
+
+        # Pre-register bundled Cyberpunk and mono fonts (no-op if already initialized)
+        from config import init_app_fonts
+        init_app_fonts()
+
+        # Persistent level / XP state. Held in memory while Talia runs and
+        # written back through every save path (song change, settings, close).
+        cfg = initial_settings if isinstance(initial_settings, dict) else load_settings()
+        self.level = max(0, int(cfg.get("level", 0)))
+        self.exp = max(0, int(cfg.get("exp", 0)))
+        self.playtime_seconds = max(0, int(cfg.get("playtime_seconds", 0)))
+        self._last_exp_save = time.time()
         if self.lyrics_overlay:
             self.lyrics_overlay.panel = self
         self.lyric_presets = {
@@ -98,24 +369,60 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             "Soft Yellow": "#fde047",
             "Mint Green": "#4ade80",
         }
-        self.last_f7_state = False
         self.last_bracket_left_state = False
         self.last_bracket_right_state = False
-        self.last_f8_state = False
-        self.last_f9_state = False
-        self.last_f10_state = False
-        self.last_f11_state = False
         self.is_user_scrubbing = False
         self.setWindowTitle("Talia Player")
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
 
-        # Stylized minimal player window
-        self.setMinimumSize(420, 540)
-        self.resize(460, 640)
-        self.setWindowFlags(Qt.WindowType.Window)
-        self.setStyleSheet(SHARED_PANEL_STYLE)
+        # Slide-out Settings Panel configuration
+        self.setFixedSize(380, 460)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setObjectName("taliaSlidePanel")
+
+        self.play_counts = {}
+        self.favourite_tracks = set()
+        self.custom_playlists = {}
+        self.selected_batch_tracks = set()
+        self.current_playlist = "All Tracks"
+        self.current_sort = "Default"
+        self._duration_cache = {}
+
+        self.is_animating = False
+        self.controls_bar = TaliaControlsBar(self)
+
+        from radio_mix import RadioMixManager
+
+        self.radio_mix = RadioMixManager(self)
+        self.radio_mix.status_changed.connect(self._on_radio_status_changed)
+        self.radio_mix.track_ready.connect(self._on_radio_track_ready)
+        self.radio_mix.prefetch_ready.connect(self._on_radio_prefetch_ready)
+        self.radio_mix.track_saved_permanently.connect(self._on_radio_saved_permanently)
+
         self.init_ui()
+
+        # Outside click listener to smoothly auto-close on desktop clicks (single filter per QApplication)
+        qapp = QApplication.instance()
+        if qapp is not None:
+            prev_flt = getattr(qapp, "_talia_outside_filter", None)
+            if prev_flt is not None:
+                try:
+                    qapp.removeEventFilter(prev_flt)
+                except Exception:
+                    pass
+            self.outside_click_filter = OutsideClickFilter(
+                self, self.controls_bar, self.overlay, parent=qapp
+            )
+            qapp._talia_outside_filter = self.outside_click_filter
+            qapp.installEventFilter(self.outside_click_filter)
+        else:
+            self.outside_click_filter = OutsideClickFilter(self, self.controls_bar, self.overlay)
 
         # Dedicated Full Settings & Customization Dialog
         self.settings_dialog = SettingsDialog(self)
@@ -137,6 +444,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.btn_pick_color = self.settings_dialog.btn_pick_color
         self.chk_word_glow = self.settings_dialog.chk_word_glow
         self.chk_dialogue_mode = getattr(self.settings_dialog, "chk_dialogue_mode", None)
+        self.chk_subtitle_bg = getattr(self.settings_dialog, "chk_subtitle_bg", None)
         self.lbl_sync_offset = self.settings_dialog.lbl_sync_offset
         self.btn_save_settings = self.settings_dialog.btn_save_settings
         self.lbl_folder_path = self.settings_dialog.lbl_folder_path
@@ -150,7 +458,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         # Real-time Party Sync Service (Listen Together)
         self.party_sync = PartySyncService(self)
-        self.party_dialog = PartySyncDialog(self)
+        self._party_dialog = None
         self.party_sync.track_received.connect(self._on_party_track_received)
         self.party_sync.play_received.connect(self._on_party_play_received)
         self.party_sync.pause_received.connect(self._on_party_pause_received)
@@ -171,7 +479,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
         # Spotify Playlist Sync & Import Service
         self.spotify_service = SpotifySyncService(self)
-        self.spotify_dialog = SpotifySyncDialog(self)
+        self._spotify_dialog = None
 
         # Discord Rich Presence Service
         self._discord_rpc_enabled = True
@@ -204,554 +512,794 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         except Exception as exc:
             log.warning("Could not initialize QMediaDevices monitor: %s", exc)
 
+        self._init_tray_icon()
+
+    @property
+    def party_dialog(self):
+        """Lazily construct Listen Together dialog on first access."""
+        if self._party_dialog is None:
+            from party_dialog import PartySyncDialog
+
+            self._party_dialog = PartySyncDialog(self)
+        return self._party_dialog
+
+    @property
+    def spotify_dialog(self):
+        """Lazily construct Spotify Sync dialog on first access."""
+        if self._spotify_dialog is None:
+            from spotify_dialog import SpotifySyncDialog
+
+            self._spotify_dialog = SpotifySyncDialog(self)
+        return self._spotify_dialog
+
     def init_ui(self):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # -------------------------------------------------------------
-        # PINNED PLAYBACK HEADER (Always visible even when scrolled)
-        # -------------------------------------------------------------
-        pinned_header = QWidget()
-        pinned_header.setObjectName("pinnedPlaybackHeader")
-        pinned_layout = QVBoxLayout(pinned_header)
-        pinned_layout.setContentsMargins(12, 10, 12, 6)
-        pinned_layout.setSpacing(8)
+        # Card container with stylish Cyberpunk dark background & single chamfer border (Figma node 2215:411)
+        self.card_container = CyberCardContainer(self)
+        self.card_container.setObjectName("slidePanelCard")
+        self.card_container.setStyleSheet("QFrame#slidePanelCard { border: none; background: transparent; color: #ff003c; }")
 
-        # --- PRIMARY TOGGLES (Settings, Move, Mode, Lyrics, Eco) ---
-        hbox_top_toggles = QHBoxLayout()
-        hbox_top_toggles.setSpacing(4)
-        self.btn_open_settings = QPushButton("Settings")
-        self.btn_open_settings.setObjectName("btnOpenSettings")
-        self.btn_open_settings.setToolTip("Open Full Settings & Customization")
-        self.btn_open_settings.setStyleSheet(
-            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; font-weight: 600; font-size: 11px; padding: 5px 8px;"
-        )
-        self.btn_open_settings.clicked.connect(self.open_settings_window)
-        hbox_top_toggles.addWidget(self.btn_open_settings)
-        self.btn_move_talia = QPushButton("Lock Window")
-        self.btn_move_talia.setObjectName("btnMoveTalia")
-        self.btn_move_talia.clicked.connect(self.toggle_move_talia)
-        # Note: Move mode is now controlled exclusively via X/Y sliders & Center Talia in Settings
-        self.btn_audio_mode = QPushButton("Player Mode")
-        self.btn_audio_mode.setObjectName("btnAudioMode")
-        self.btn_audio_mode.clicked.connect(self.toggle_audio_mode)
-        hbox_top_toggles.addWidget(self.btn_audio_mode)
-        self.btn_lyrics = QPushButton("Lyrics: On")
-        self.btn_lyrics.setObjectName("btnLyrics")
-        self.btn_lyrics.setStyleSheet(
-            "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: bold; font-size: 11px; padding: 5px 8px;"
-        )
-        self.btn_lyrics.clicked.connect(self.toggle_lyrics)
-        hbox_top_toggles.addWidget(self.btn_lyrics)
-        self.btn_eco = QPushButton("Eco Mode: Off")
-        self.btn_eco.setObjectName("btnEco")
-        self.btn_eco.setToolTip("Toggle Eco Mode (< 1% CPU) [F11]")
-        self.btn_eco.clicked.connect(self.toggle_eco_mode)
-        hbox_top_toggles.addWidget(self.btn_eco)
-        pinned_layout.addLayout(hbox_top_toggles)
+        lbl_menu_anchor = QLabel("MENU", self.card_container)
+        lbl_menu_anchor.setStyleSheet("color: #ff003c;")
+        lbl_menu_anchor.hide()
 
-        # --- SYNC & PARTY BUTTONS (Listen Together & Spotify Sync) ---
-        hbox_sync_tools = QHBoxLayout()
-        hbox_sync_tools.setSpacing(6)
+        container_layout = QVBoxLayout(self.card_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
 
-        self.btn_party_sync = QPushButton("Listen Together")
-        self.btn_party_sync.setObjectName("btnPartySync")
-        self.btn_party_sync.setToolTip("Listen together with friends in real-time with synchronized lyrics and playback")
-        self.btn_party_sync.setStyleSheet(
-            "background-color: #1e1b4b; color: #a78bfa; border: 1px solid #7c3aed; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
+        # 1. Top Header Bar (spans full card width over red header_geometry4 banner)
+        header_widget = QWidget()
+        header_widget.setFixedHeight(42)
+        hbox_header = QHBoxLayout(header_widget)
+        hbox_header.setContentsMargins(12, 2, 12, 2)
+        hbox_header.setSpacing(6)
+
+        # 1a. Level / XP block:
+        #     Level number + "LEVEL" label, 110x2 XP bar, and playtime readout.
+        level_widget = QWidget()
+        level_widget.setFixedSize(220, 36)
+
+        self.lbl_level_badge = QLabel(level_widget)
+        self.lbl_level_badge.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_level_badge.setStyleSheet(
+            "color: #5EF6FF; background: transparent;"
         )
+        self.lbl_level_badge.setGeometry(0, 0, 100, 30)
+        self.lbl_level_badge.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom
+        )
+
+        self.exp_bar = QProgressBar(level_widget)
+        self.exp_bar.setGeometry(0, 29, 110, 2)
+        self.exp_bar.setTextVisible(False)
+        self.exp_bar.setStyleSheet(
+            "QProgressBar { background-color: #000000; border: none; }"
+            "QProgressBar::chunk { background-color: #5EF6FF; }"
+        )
+
+        self.lbl_exp_progress = QLabel(level_widget)
+        self.lbl_exp_progress.setStyleSheet(
+            "color: #5EF6FF; font-size: 11px;"
+            "font-family: 'Share Tech Mono', 'Consolas', monospace;"
+        )
+        self.lbl_exp_progress.setGeometry(114, 18, 106, 17)
+        self.lbl_exp_progress.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom
+        )
+
+        hbox_header.addWidget(level_widget)
+        self._refresh_level_display()
+
+        hbox_header.addStretch()
+
+        # 1c. Action Buttons with Chamfered Corners matching Figma (26x26)
+        # Order: [Party 👥] -> [Spotify Sync] -> [Settings ⚙] -> [Close ✕]
+        self.btn_party_sync = CyberChamferButton("Listen Together", variant="party")
+        self.btn_party_sync.setFixedSize(26, 26)
+        self.btn_party_sync.setToolTip("Listen Together (Real-time Party Sync)")
         self.btn_party_sync.clicked.connect(self.open_party_dialog)
-        hbox_sync_tools.addWidget(self.btn_party_sync, 1)
+        hbox_header.addWidget(self.btn_party_sync)
 
-        self.btn_spotify_sync = QPushButton("Spotify Sync")
-        self.btn_spotify_sync.setObjectName("btnSpotifySync")
-        self.btn_spotify_sync.setToolTip("Import and auto-download Spotify playlists with synchronized lyrics")
-        self.btn_spotify_sync.setStyleSheet(
-            "background-color: #064e3b; color: #6ee7b7; border: 1px solid #059669; font-weight: bold; font-size: 11px; padding: 5px 10px; border-radius: 4px;"
-        )
+        self.btn_spotify_sync = CyberChamferButton("Spotify", variant="spotify")
+        self.btn_spotify_sync.setFixedSize(26, 26)
+        self.btn_spotify_sync.setToolTip("Spotify Playlist Sync")
         self.btn_spotify_sync.clicked.connect(self.open_spotify_dialog)
-        hbox_sync_tools.addWidget(self.btn_spotify_sync, 1)
+        hbox_header.addWidget(self.btn_spotify_sync)
 
-        pinned_layout.addLayout(hbox_sync_tools)
+        self.btn_open_settings = CyberChamferButton("⚙", variant="settings")
+        self.btn_open_settings.setObjectName("btnOpenSettings")
+        self.btn_open_settings.setFixedSize(26, 26)
+        self.btn_open_settings.setToolTip("Advanced Settings")
+        self.btn_open_settings.clicked.connect(self.open_settings_window)
+        hbox_header.addWidget(self.btn_open_settings)
 
-        # --- SECTION: PLAYBACK & VOLUME ---
-        pinned_layout.addWidget(create_section_header("Playback & Volume"))
+        self.btn_close = CyberChamferButton("✕", variant="exit")
+        self.btn_close.setFixedSize(26, 26)
+        self.btn_close.setToolTip("Close Panel")
+        self.btn_close.clicked.connect(self.close_slide_panel)
+        hbox_header.addWidget(self.btn_close)
 
-        # Track title banner (Cyberpunk Rajdhani marquee)
-        self.lbl_track_title = CyberScrollingTrackLabel()
-        pinned_layout.addWidget(self.lbl_track_title)
+        container_layout.addWidget(header_widget)
 
-        # Timeline seeker
-        hbox_time = QHBoxLayout()
-        hbox_time.setSpacing(6)
-        self.lbl_time_cur = QLabel("00:00")
-        self.lbl_time_cur.setStyleSheet(
-            "color: #a1a1aa; font-family: 'Consolas', monospace; font-size: 11px;"
-        )
-        self.slider_seek = QSlider(Qt.Orientation.Horizontal)
-        self.slider_seek.setRange(0, 1000)
-        self.slider_seek.setValue(0)
-        self.slider_seek.sliderPressed.connect(self.on_seek_pressed)
-        self.slider_seek.sliderReleased.connect(self.on_seek_released)
-        self.slider_seek.sliderMoved.connect(self.on_seek_moved)
-        self.lbl_time_dur = QLabel("00:00")
-        self.lbl_time_dur.setStyleSheet(
-            "color: #a1a1aa; font-family: 'Consolas', monospace; font-size: 11px;"
-        )
-        hbox_time.addWidget(self.lbl_time_cur)
-        hbox_time.addWidget(self.slider_seek)
-        hbox_time.addWidget(self.lbl_time_dur)
-        pinned_layout.addLayout(hbox_time)
+        # 2. Main Middle Body (Volume strip on left, Content on right)
+        body_widget = QWidget()
+        body_layout = QHBoxLayout(body_widget)
+        body_layout.setContentsMargins(14, 0, 16, 6)
+        body_layout.setSpacing(6)
 
-        # Playback Transport Buttons (Clean Symbols: Shuffle, Rewind, Play/Pause, Next)
-        hbox_controls = QHBoxLayout()
-        hbox_controls.setSpacing(8)
-        hbox_controls.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.btn_shuffle = QPushButton("⇄")
-        self.btn_shuffle.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
-        self.btn_shuffle.setToolTip("Shuffle: Disabled")
-        self.btn_shuffle.setFixedSize(38, 30)
-        self.btn_shuffle.setStyleSheet(
-            "background-color: #27272a; color: #71717a; border: 1px solid #3f3f46; border-radius: 4px;"
-        )
-        self.btn_shuffle.clicked.connect(self.toggle_shuffle)
-        hbox_controls.addWidget(self.btn_shuffle)
-
-        self.btn_prev = QPushButton("⏮")
-        self.btn_prev.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
-        self.btn_prev.setToolTip("Previous Track [Rewind]")
-        self.btn_prev.setFixedSize(46, 30)
-        self.btn_prev.setStyleSheet(
-            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px;"
-        )
-        self.btn_prev.clicked.connect(self.on_prev_clicked)
-        hbox_controls.addWidget(self.btn_prev)
-
-        self.btn_play_pause = QPushButton("▶")
-        self.btn_play_pause.setFont(QFont("Segoe UI Symbol", 13, QFont.Weight.Bold))
-        self.btn_play_pause.setObjectName("btnPlayPause")
-        self.btn_play_pause.setToolTip("Play / Pause [Space]")
-        self.btn_play_pause.setFixedSize(56, 30)
-        self.btn_play_pause.setStyleSheet(
-            "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; border-radius: 4px;"
-        )
-        self.btn_play_pause.clicked.connect(self.on_play_pause_clicked)
-        hbox_controls.addWidget(self.btn_play_pause)
-
-        self.btn_next = QPushButton("⏭")
-        self.btn_next.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
-        self.btn_next.setToolTip("Next Track [Next]")
-        self.btn_next.setFixedSize(46, 30)
-        self.btn_next.setStyleSheet(
-            "background-color: #27272a; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 4px;"
-        )
-        self.btn_next.clicked.connect(self.on_next_clicked)
-        hbox_controls.addWidget(self.btn_next)
-
-        pinned_layout.addLayout(hbox_controls)
-
-        # Small Volume Slider
-        hbox_vol = QHBoxLayout()
-        hbox_vol.setSpacing(8)
-        lbl_vol_title = QLabel("Vol:")
-        lbl_vol_title.setStyleSheet("color: #a1a1aa; font-weight: 600; font-size: 11px;")
-        hbox_vol.addWidget(lbl_vol_title)
-        self.slider_vol = QSlider(Qt.Orientation.Horizontal)
-        self.slider_vol.setRange(0, 100)
-        self.slider_vol.setValue(int(self.audio_engine.volume * 100))
+        # Left side vertical volume slider (Figma Demo frame rotated volume slider spanning full flank)
+        init_vol = int(getattr(self.audio_engine, "volume", 1.0) * 100)
+        self.slider_vol = CyberVerticalVolumeSlider(self)
+        self.slider_vol.setValue(init_vol)
         self.slider_vol.valueChanged.connect(self.on_volume_changed)
-        hbox_vol.addWidget(self.slider_vol)
-        self.lbl_vol_val = QLabel(f"{int(self.audio_engine.volume * 100)}%")
-        self.lbl_vol_val.setFixedWidth(40)
-        self.lbl_vol_val.setStyleSheet(
-            "color: #f4f4f5; font-family: 'Consolas', monospace; font-weight: 600; font-size: 11px;"
-        )
-        hbox_vol.addWidget(self.lbl_vol_val)
-        pinned_layout.addLayout(hbox_vol)
+        body_layout.addWidget(self.slider_vol)
 
-        # Divider separating pinned playback area from scrollable playlist
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setStyleSheet("background-color: #27272a; max-height: 1px;")
-        pinned_layout.addWidget(divider)
+        # Hidden label kept for backwards compatibility with tests checking lbl_vol_val
+        self.lbl_vol_val = QLabel(f"{init_vol}%", self)
+        self.lbl_vol_val.hide()
 
-        root_layout.addWidget(pinned_header)
+        # Right side main content layout (with top breathing room below header banner)
+        card_layout = QVBoxLayout()
+        card_layout.setContentsMargins(0, 8, 0, 0)
+        card_layout.setSpacing(6)
+        body_layout.addLayout(card_layout, 1)
 
-        # -------------------------------------------------------------
-        # SCROLLABLE CONTENT BODY (Song Selection, Download Songs)
-        # -------------------------------------------------------------
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(12, 6, 12, 12)
-        content_layout.setSpacing(8)
+        container_layout.addWidget(body_widget, 1)
 
-        # --- SECTION: SONG SELECTION ---
-        content_layout.addWidget(create_section_header("Song Selection"))
+        # 2a. Playlist row: PLAYLIST: [ All Tracks v ] [+] [A] [X]
+        hbox_playlist = QHBoxLayout()
+        hbox_playlist.setSpacing(6)
 
-        # Folder Quick-Switcher (Clean 1-line dropdown + browse button)
-        hbox_folder = QHBoxLayout()
-        hbox_folder.setSpacing(6)
-        lbl_folder_icon = QLabel("Folder:")
-        lbl_folder_icon.setStyleSheet("color: #a1a1aa; font-weight: 600; font-size: 11px;")
-        hbox_folder.addWidget(lbl_folder_icon)
+        lbl_pl_icon = QLabel("PLAYLIST:")
+        lbl_pl_icon.setStyleSheet("color: #5EF6FF; font-family: 'Rajdhani', sans-serif; font-weight: 800; font-size: 11px; letter-spacing: 1px;")
+        hbox_playlist.addWidget(lbl_pl_icon)
 
-        self.combo_active_folder = NoScrollComboBox()
-        self.combo_active_folder.setStyleSheet("""
+        self.combo_playlist = NoScrollComboBox()
+        self.combo_playlist.addItem("All Tracks")
+        self.combo_playlist.addItem("Queue")
+        self.combo_playlist.addItem("★ Favourites")
+        self.combo_playlist.addItem("★ Random Mix")
+        self.combo_playlist.setStyleSheet("""
             QComboBox {
-                background-color: #202024;
-                color: #f4f4f5;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                padding: 3px 8px;
+                background-color: #050505;
+                color: #ff8a84;
+                border: 1px solid rgba(247, 80, 73, 77);
+                border-radius: 2px;
+                padding: 3px 6px;
+                font-family: 'Rajdhani', sans-serif;
                 font-size: 11px;
-                font-weight: 500;
+                font-weight: 600;
             }
-            QComboBox:hover {
-                border-color: #3b82f6;
+            QComboBox:hover, QComboBox:focus {
+                border-color: #F75049;
+                background-color: rgba(247, 80, 73, 26);
             }
             QComboBox::drop-down {
                 border: none;
-                width: 18px;
+                width: 16px;
             }
             QComboBox QAbstractItemView {
-                background-color: #1f1f23;
-                color: #f4f4f5;
-                selection-background-color: #3b82f6;
-                border: 1px solid #3f3f46;
+                background-color: #222325;
+                color: #ff8a84;
+                selection-background-color: #F75049;
+                selection-color: #0e0e17;
+                border: 1px solid rgba(247, 80, 73, 77);
                 padding: 4px;
             }
         """)
-        self.combo_active_folder.activated.connect(self.on_active_folder_selected)
-        hbox_folder.addWidget(self.combo_active_folder, 1)
+        self.combo_playlist.currentTextChanged.connect(self.on_playlist_selected)
+        hbox_playlist.addWidget(self.combo_playlist, 1)
 
-        self.btn_browse_folder = QPushButton("...")
-        self.btn_browse_folder.setToolTip("Browse and choose a custom music folder")
-        self.btn_browse_folder.setFixedWidth(34)
-        self.btn_browse_folder.setStyleSheet(
-            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-weight: bold; border-radius: 4px;"
+        self.btn_queue_indicator = QPushButton("≡ 0")
+        self.btn_queue_indicator.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_queue_indicator.setFixedHeight(26)
+        self.btn_queue_indicator.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(94, 246, 255, 0.12);
+                color: #5EF6FF;
+                border: 1px solid #5EF6FF;
+                border-radius: 2px;
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 11px;
+                font-weight: 800;
+                padding: 2px 7px;
+            }
+            QPushButton:hover {
+                background-color: #5EF6FF;
+                color: #050505;
+                border: 1px solid #5EF6FF;
+            }
+        """)
+        self.btn_queue_indicator.clicked.connect(self.on_queue_indicator_clicked)
+        self.btn_queue_indicator.hide()
+        hbox_playlist.addWidget(self.btn_queue_indicator)
+
+        self.btn_new_playlist = CyberChamferButton("+", variant="new_playlist")
+        self.btn_new_playlist.setFixedSize(26, 26)
+        self.btn_new_playlist.setToolTip("Create a new playlist")
+        self.btn_new_playlist.clicked.connect(self.on_new_playlist_clicked)
+        hbox_playlist.addWidget(self.btn_new_playlist)
+
+        self.btn_group_artist = CyberChamferButton("A", variant="action_cyan")
+        self.btn_group_artist.setFixedSize(26, 26)
+        self.btn_group_artist.setToolTip("Group songs by primary artist")
+        self.btn_group_artist.clicked.connect(self.group_songs_by_artist)
+        self.btn_group_artist.hide()
+
+        self.btn_add_to_playlist = None
+
+        self.btn_delete_playlist = CyberChamferButton("✕", variant="delete_playlist")
+        self.btn_delete_playlist.setFixedSize(26, 26)
+        self.btn_delete_playlist.setToolTip("Delete current custom playlist")
+        self.btn_delete_playlist.clicked.connect(self.delete_current_playlist)
+        hbox_playlist.addWidget(self.btn_delete_playlist)
+
+        card_layout.addLayout(hbox_playlist)
+
+        # 2b. Compact Random Mix Bar (shown only when ★ Random Mix is active)
+        self.radio_mix_bar = QFrame()
+        self.radio_mix_bar.setStyleSheet(
+            "QFrame { background-color: rgba(14, 16, 26, 200); border: 1px solid rgba(94, 246, 255, 85); border-radius: 3px; }"
         )
-        self.btn_browse_folder.clicked.connect(self.choose_music_folder)
-        hbox_folder.addWidget(self.btn_browse_folder)
-        content_layout.addLayout(hbox_folder)
+        hbox_radio = QHBoxLayout(self.radio_mix_bar)
+        hbox_radio.setContentsMargins(6, 4, 6, 4)
+        hbox_radio.setSpacing(6)
 
-        # Search Bar with live filter and clear button
+        self.btn_radio_exclude = CyberChamferButton("EXCLUDE ▾", variant="action_neutral")
+        self.btn_radio_exclude.setFixedHeight(24)
+        self.btn_radio_exclude.setToolTip("Choose what types or artists to exclude from Random Mix")
+        self.btn_radio_exclude.clicked.connect(self._show_radio_exclude_menu)
+        hbox_radio.addWidget(self.btn_radio_exclude)
+
+        self.btn_radio_save = CyberChamferButton("SAVE TRACK", variant="action_green")
+        self.btn_radio_save.setFixedHeight(24)
+        self.btn_radio_save.setToolTip("Move the current Random Mix song permanently into Downloaded Songs")
+        self.btn_radio_save.clicked.connect(lambda: self.save_radio_track_permanently())
+        hbox_radio.addWidget(self.btn_radio_save)
+
+        self.lbl_radio_status = QLabel("Press Play to start Radio")
+        self.lbl_radio_status.setStyleSheet(
+            "color: #5EF6FF; font-family: 'Rajdhani', sans-serif; font-size: 11px; font-weight: 600; background: transparent; border: none;"
+        )
+        hbox_radio.addWidget(self.lbl_radio_status, 1)
+
+        self.radio_mix_bar.hide()
+        card_layout.addWidget(self.radio_mix_bar)
+
+        # 3. Search Bar + Clear + Sort Selector
         hbox_search = QHBoxLayout()
+        hbox_search.setSpacing(6)
+
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search songs...")
         self.search_input.setStyleSheet("""
             QLineEdit {
-                background-color: #202024;
-                color: #f4f4f5;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                padding: 5px 8px;
+                background-color: #050505;
+                color: #ff8a84;
+                border: 1px solid rgba(247, 80, 73, 77);
+                border-radius: 2px;
+                padding: 4px 8px;
+                font-family: 'Rajdhani', sans-serif;
                 font-size: 11px;
+                selection-background-color: #F75049;
+                selection-color: #0e0e17;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                background-color: rgba(247, 80, 73, 26);
+                border: 1px solid #F75049;
+                color: #ff8a84;
             }
         """)
         self.search_input.textChanged.connect(self.filter_tracks)
-        hbox_search.addWidget(self.search_input)
+        hbox_search.addWidget(self.search_input, 1)
 
-        self.btn_clear_search = QPushButton("✕")
-        self.btn_clear_search.setFixedWidth(28)
-        self.btn_clear_search.setStyleSheet(
-            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-weight: bold; border-radius: 4px;"
-        )
+        self.btn_clear_search = CyberChamferButton("✕", variant="exit")
+        self.btn_clear_search.setFixedSize(24, 24)
         self.btn_clear_search.clicked.connect(lambda: self.search_input.clear())
-        hbox_search.addWidget(self.btn_clear_search)
-        content_layout.addLayout(hbox_search)
+        self.btn_clear_search.hide()
 
-        # Track List (Wider & Taller, each row includes tactile + queue button)
+        lbl_sort = QLabel("SORT:")
+        lbl_sort.setStyleSheet("color: #5EF6FF; font-family: 'Rajdhani', sans-serif; font-weight: 800; font-size: 10px; letter-spacing: 1px;")
+        hbox_search.addWidget(lbl_sort)
+
+        self.combo_sort = NoScrollComboBox()
+        self.combo_sort.addItems([
+            "Default",
+            "Time Added",
+            "Alphabetical (A-Z)",
+            "Sort by artist",
+            "Duration",
+            "Most Played",
+            "Least Played",
+            "Random",
+        ])
+        self.combo_sort.setStyleSheet("""
+            QComboBox {
+                background-color: #050505;
+                color: #ff8a84;
+                border: 1px solid rgba(247, 80, 73, 77);
+                border-radius: 2px;
+                padding: 3px 6px;
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QComboBox:hover, QComboBox:focus {
+                border-color: #F75049;
+                background-color: rgba(247, 80, 73, 26);
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 14px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #222325;
+                color: #ff8a84;
+                selection-background-color: #F75049;
+                selection-color: #0e0e17;
+                border: 1px solid rgba(247, 80, 73, 77);
+                padding: 4px;
+            }
+        """)
+        self.combo_sort.currentTextChanged.connect(self.on_sort_changed)
+        self.combo_sort.activated.connect(self.on_sort_activated)
+        hbox_search.addWidget(self.combo_sort)
+
+        card_layout.addLayout(hbox_search)
+        self.search_input.returnPressed.connect(self.on_search_return_pressed)
+
+        # YouTube Download Banner / Prompt (merged with search)
+        self.yt_download_card = QFrame()
+        self.yt_download_card.setObjectName("ytDownloadCard")
+        self.yt_download_card.setStyleSheet("""
+            QFrame#ytDownloadCard {
+                background-color: rgba(30, 20, 24, 240);
+                border: 1px solid rgba(255, 0, 60, 160);
+                border-radius: 6px;
+                padding: 4px;
+            }
+        """)
+        yt_card_layout = QVBoxLayout(self.yt_download_card)
+        yt_card_layout.setContentsMargins(8, 6, 8, 6)
+        yt_card_layout.setSpacing(4)
+
+        self.lbl_yt_prompt = QLabel("No song detected.")
+        self.lbl_yt_prompt.setStyleSheet("color: #fca5a5; font-size: 11px; font-weight: 500;")
+        self.lbl_yt_prompt.setWordWrap(True)
+        yt_card_layout.addWidget(self.lbl_yt_prompt)
+
+        self.btn_yt_download = QPushButton("Download from YouTube")
+        self.btn_yt_download.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_yt_download.setStyleSheet("""
+            QPushButton {
+                background-color: #ff003c;
+                color: #ffffff;
+                font-weight: bold;
+                font-size: 11px;
+                border: none;
+                border-radius: 4px;
+                padding: 5px 8px;
+            }
+            QPushButton:hover {
+                background-color: #e10034;
+            }
+            QPushButton:pressed {
+                background-color: #b30029;
+            }
+        """)
+        self.btn_yt_download.clicked.connect(self.on_yt_prompt_download_clicked)
+        yt_card_layout.addWidget(self.btn_yt_download)
+
+        self.yt_download_card.hide()
+        card_layout.addWidget(self.yt_download_card)
+
+        # 4. Playlist selection: Track List (ListWidget)
         self.list_tracks = QListWidget()
-        self.list_tracks.setMinimumHeight(180)
-        self.list_tracks.setFixedHeight(210)
+        self.list_tracks.setSpacing(5)
         self.list_tracks.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list_tracks.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_tracks.customContextMenuRequested.connect(self.show_track_context_menu)
+        self.list_tracks.itemClicked.connect(self.on_track_clicked)
+        self.list_tracks.currentItemChanged.connect(self._on_track_selection_changed)
         self.list_tracks.itemDoubleClicked.connect(self.on_track_double_clicked)
         self.list_tracks.setStyleSheet("""
             QListWidget {
-                background-color: #18181b;
-                border: 1px solid #2d2d35;
-                border-radius: 4px;
-                padding: 2px;
+                background-color: transparent;
+                border: none;
+                padding: 0px;
             }
             QListWidget::item {
-                border-radius: 3px;
-                padding: 1px;
+                background-color: transparent;
+                border: none;
+                padding: 1px 0px;
             }
             QListWidget::item:selected {
-                background-color: #27272a;
+                background-color: transparent;
             }
             QListWidget::item:hover {
-                background-color: #222227;
+                background-color: transparent;
             }
         """)
-        content_layout.addWidget(self.list_tracks)
+        card_layout.addWidget(self.list_tracks, 1)
 
-        # Queue Status & Toggle Actions
-        hbox_track_actions = QHBoxLayout()
-        hbox_track_actions.setSpacing(6)
-        self.btn_toggle_queue = QPushButton("Queue (0)")
-        self.btn_toggle_queue.setStyleSheet(
-            "background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; font-size: 10px; font-weight: 500; padding: 4px 10px; border-radius: 3px;"
-        )
-        self.btn_toggle_queue.clicked.connect(self.toggle_queue_panel)
-        hbox_track_actions.addWidget(self.btn_toggle_queue)
+        # 5. Batch actions & summary row
+        hbox_batch = QHBoxLayout()
+        hbox_batch.setSpacing(6)
 
-        self.btn_clear_queue = QPushButton("Clear Queue")
-        self.btn_clear_queue.setStyleSheet(
-            "background-color: #27272a; color: #f87171; border: 1px solid #3f3f46; font-size: 10px; padding: 4px 10px; border-radius: 3px;"
-        )
-        self.btn_clear_queue.clicked.connect(self.on_clear_queue_clicked)
-        hbox_track_actions.addWidget(self.btn_clear_queue)
-        hbox_track_actions.addStretch()
-        content_layout.addLayout(hbox_track_actions)
+        # Bottom batch actions bar (Figma node 2215:411 Buttons/Web)
+        bottom_widget = QWidget()
+        bottom_widget.setFixedHeight(30)
+        hbox_batch = QHBoxLayout(bottom_widget)
+        hbox_batch.setContentsMargins(42, 0, 78, 6)
+        hbox_batch.setSpacing(8)
 
-        # Collapsible Upcoming Queue Container
-        self.queue_container = QWidget()
-        queue_layout = QVBoxLayout(self.queue_container)
-        queue_layout.setContentsMargins(0, 4, 0, 4)
-        queue_layout.setSpacing(4)
-        lbl_queue_hdr = QLabel("Upcoming Queue:")
-        lbl_queue_hdr.setStyleSheet("color: #a1a1aa; font-weight: 600; font-size: 10px;")
-        queue_layout.addWidget(lbl_queue_hdr)
-        self.list_queue = QListWidget()
-        self.list_queue.setFixedHeight(85)
-        self.list_queue.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.list_queue.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.list_queue.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list_queue.customContextMenuRequested.connect(self.show_queue_context_menu)
-        self.list_queue.itemDoubleClicked.connect(self.on_queue_item_double_clicked)
-        if hasattr(self.list_queue.model(), "rowsMoved"):
-            self.list_queue.model().rowsMoved.connect(self.on_queue_rows_moved)
-        orig_queue_key_press = self.list_queue.keyPressEvent
-        def _queue_key_press(event):
-            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-                row = self.list_queue.currentRow()
-                if 0 <= row < len(self.audio_engine.queue):
-                    self.audio_engine.remove_from_queue(row)
-                    self.refresh_queue_ui()
-                    if hasattr(self, "save_settings"):
-                        self.save_settings()
-                    return
-            orig_queue_key_press(event)
-        self.list_queue.keyPressEvent = _queue_key_press
-        queue_layout.addWidget(self.list_queue)
-        self.queue_container.setVisible(False)
-        content_layout.addWidget(self.queue_container)
-
-        # --- SECTION: SONG SEARCH & AUTO-DOWNLOAD ---
-        content_layout.addWidget(create_section_header("Download Songs"))
-
-        # Download Destination Folder Dropdown Row
-        hbox_dl_folder = QHBoxLayout()
-        hbox_dl_folder.setSpacing(6)
-        lbl_dl_folder = QLabel("Save to:")
-        lbl_dl_folder.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
-        hbox_dl_folder.addWidget(lbl_dl_folder)
-        self.combo_dl_folder = NoScrollComboBox()
-
-        self.combo_dl_folder.setStyleSheet("""
-
-            QComboBox {
-
-                background-color: #202024;
-
-                border: 1px solid #3f3f46;
-
-                border-radius: 4px;
-
-                color: #f4f4f5;
-
-                padding: 4px 8px;
-
-                font-size: 11px;
-
+        btn_cyber_action_style = """
+            QPushButton {
+                background-color: rgba(14, 24, 38, 0.85);
+                color: #5EF6FF;
+                border: 1px solid #5EF6FF;
+                border-radius: 2px;
+                font-size: 9px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                padding: 2px 7px;
+                text-transform: uppercase;
             }
-
-            QComboBox:hover {
-
-                border-color: #52525b;
-
-            }
-
-            QComboBox QAbstractItemView {
-
-                background-color: #18181b;
-
-                color: #f4f4f5;
-
-                border: 1px solid #3f3f46;
-
-                selection-background-color: #3b82f6;
-
-                selection-color: #ffffff;
-
-            }
-
-        """)
-
-        self.combo_dl_folder.currentIndexChanged.connect(self.on_dl_folder_changed)
-        hbox_dl_folder.addWidget(self.combo_dl_folder, 1)
-        content_layout.addLayout(hbox_dl_folder)
-
-        # Search Input row
-        hbox_dl_search = QHBoxLayout()
-        hbox_dl_search.setSpacing(6)
-        self.edit_dl_search = QLineEdit()
-        self.edit_dl_search.setPlaceholderText(
-            "Search YouTube (e.g. Hate Me Ellie Goulding) or paste URL..."
-        )
-
-        self.edit_dl_search.setStyleSheet("""
-
-            QLineEdit {
-
-                background-color: #202024;
-
-                color: #f4f4f5;
-
-                border: 1px solid #3f3f46;
-
-                border-radius: 4px;
-
-                padding: 5px 8px;
-
-                font-size: 11px;
-
-            }
-
-            QLineEdit:focus {
-
-                border-color: #3b82f6;
-
-            }
-
-        """)
-
-        self.edit_dl_search.returnPressed.connect(self.on_dl_search_clicked)
-        hbox_dl_search.addWidget(self.edit_dl_search)
-        self.btn_dl_search = QPushButton("Search")
-        self.btn_dl_search.setStyleSheet(
-            "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; font-weight: 500; font-size: 11px; padding: 5px 12px;"
-        )
-        self.btn_dl_search.clicked.connect(self.on_dl_search_clicked)
-        hbox_dl_search.addWidget(self.btn_dl_search)
-        content_layout.addLayout(hbox_dl_search)
-
-        # Download Tip Label
-        self.lbl_dl_tip = QLabel(
-            "Tip: For best lyric sync, download Lyric Videos or Audio Tracks instead of Official MVs (music videos often have extra intros/breaks that desync lyrics)."
-        )
-        self.lbl_dl_tip.setStyleSheet(
-            "color: #71717a; font-size: 10px; font-style: italic; margin-top: 1px;"
-        )
-        self.lbl_dl_tip.setWordWrap(True)
-        content_layout.addWidget(self.lbl_dl_tip)
-
-        # Search Results List (Collapsible / Dynamic)
-        self.list_dl_results = QListWidget()
-        self.list_dl_results.setFixedHeight(95)
-
-        self.list_dl_results.setStyleSheet("""
-
-            QListWidget {
-
-                background-color: #202024;
-
-                border: 1px solid #3f3f46;
-
-                border-radius: 4px;
-
-                color: #f4f4f5;
-
-                font-size: 11px;
-
-                padding: 2px;
-
-            }
-
-            QListWidget::item {
-
-                padding: 4px 6px;
-
-                border-bottom: 1px solid #27272a;
-
-            }
-
-            QListWidget::item:selected {
-
-                background-color: #3b82f6;
-
+            QPushButton:hover {
+                background-color: rgba(94, 246, 255, 0.25);
                 color: #ffffff;
-
+                border-color: #ffffff;
             }
+            QPushButton:pressed {
+                background-color: rgba(94, 246, 255, 0.45);
+            }
+        """
 
+        btn_cyber_delete_style = """
+            QPushButton {
+                background-color: rgba(28, 12, 16, 0.85);
+                color: #f87171;
+                border: 1px solid #ef4444;
+                border-radius: 2px;
+                font-size: 9px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                padding: 2px 7px;
+                text-transform: uppercase;
+            }
+            QPushButton:hover {
+                background-color: rgba(239, 68, 68, 0.35);
+                color: #ffffff;
+                border-color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: rgba(239, 68, 68, 0.60);
+            }
+        """
+
+        self.btn_select_all = CyberChamferButton("SELECT ALL", variant="action_cyan")
+        self.btn_select_all.setFixedHeight(24)
+        self.btn_select_all.setToolTip("Toggle select all visible tracks")
+        self.btn_select_all.clicked.connect(self.on_select_all_clicked)
+        hbox_batch.addWidget(self.btn_select_all)
+
+        self.btn_batch_delete = CyberChamferButton("DELETE SELECTED", variant="action_cyan")
+        self.btn_batch_delete.setFixedHeight(24)
+        self.btn_batch_delete.setToolTip("Remove selected songs from playlist")
+        self.btn_batch_delete.clicked.connect(self.batch_delete_selected)
+        hbox_batch.addWidget(self.btn_batch_delete)
+
+        hbox_batch.addStretch()
+
+        self.lbl_track_summary = QLabel("")
+        self.lbl_track_summary.setStyleSheet("color: #a1a1aa; font-size: 10px; font-family: monospace;")
+        hbox_batch.addWidget(self.lbl_track_summary)
+
+        container_layout.addWidget(bottom_widget)
+        root_layout.addWidget(self.card_container)
+
+        # Wire transport button references to controls bar
+        self.btn_play_pause = self.controls_bar.btn_play
+        self.btn_prev = self.controls_bar.btn_prev
+        self.btn_next = self.controls_bar.btn_next
+        self.btn_shuffle = self.controls_bar.btn_shuffle
+
+        # Persistent floating download status badge on bottom-right of menu panel
+        self.download_status_badge = QFrame(self)
+        self.download_status_badge.setObjectName("downloadStatusBadge")
+        self.download_status_badge.setStyleSheet("""
+            QFrame#downloadStatusBadge {
+                background-color: rgba(10, 16, 30, 0.96);
+                border: 1px solid #00f0ff;
+                border-radius: 6px;
+            }
         """)
+        badge_layout = QHBoxLayout(self.download_status_badge)
+        badge_layout.setContentsMargins(8, 4, 8, 4)
+        badge_layout.setSpacing(6)
 
-        self.list_dl_results.itemDoubleClicked.connect(self.on_dl_item_double_clicked)
-        self.list_dl_results.itemSelectionChanged.connect(self.on_dl_selection_changed)
-        self.list_dl_results.setVisible(False)
-        content_layout.addWidget(self.list_dl_results)
+        self.lbl_download_badge_icon = QLabel("⬇")
+        self.lbl_download_badge_icon.setStyleSheet("color: #00f0ff; font-size: 11px; font-weight: bold;")
+        badge_layout.addWidget(self.lbl_download_badge_icon)
 
-        # Download Action Button
-        self.btn_dl_action = QPushButton("+ Add to Library")
-        self.btn_dl_action.setStyleSheet(
-            "background-color: #166534; color: #4ade80; border: 1px solid #22c55e; font-size: 11px; font-weight: 600; padding: 6px 10px; border-radius: 4px;"
-        )
-        self.btn_dl_action.clicked.connect(self.on_dl_download_clicked)
-        self.btn_dl_action.setVisible(False)
-        content_layout.addWidget(self.btn_dl_action)
+        self.lbl_download_badge_text = QLabel("Downloading...")
+        self.lbl_download_badge_text.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 500;")
+        badge_layout.addWidget(self.lbl_download_badge_text)
 
-        # Real-time Status / Progress Log
+        self.download_status_badge.hide()
+
+        # Compatibility proxies for background services
+        self.lbl_track_title = CyberScrollingTrackLabel()
+        self.slider_seek = QSlider(Qt.Orientation.Horizontal)
+        self.lbl_time_cur = QLabel("00:00")
+        self.lbl_time_dur = QLabel("00:00")
+        self.btn_lyrics = CyberButton("Lyrics: On", variant="primary")
+        self.btn_eco = QPushButton("Eco Mode: Off")
+        self.btn_audio_mode = QPushButton("Player Mode")
+        self.btn_move_talia = QPushButton("Lock Window")
+        self.queue_container = QWidget(self)
+        self.queue_container.hide()
+        self.list_queue = QListWidget()
+        self.btn_toggle_queue = QPushButton("Queue (0)")
+        self.btn_clear_queue = QPushButton("Clear Queue")
+        self.combo_active_folder = NoScrollComboBox()
+        self.btn_browse_folder = QPushButton("...")
+        self.combo_dl_folder = NoScrollComboBox()
+        self.edit_dl_search = QLineEdit()
+        self.btn_dl_search = QPushButton("Search")
+        self.list_dl_results = QListWidget()
         self.lbl_dl_status = QLabel("")
-        self.lbl_dl_status.setStyleSheet("color: #a1a1aa; font-size: 11px;")
-        self.lbl_dl_status.setWordWrap(True)
-        self.lbl_dl_status.setVisible(False)
-        content_layout.addWidget(self.lbl_dl_status)
-        scroll_area.setWidget(content_widget)
-        root_layout.addWidget(scroll_area, 1)
+        self.progress_dl = QSlider(Qt.Orientation.Horizontal)
 
-        # -------------------------------------------------------------
+        if not getattr(self, "_defer_initial_populate", False):
+            self.populate_playlist_ui()
 
-        # BOTTOM SHORTCUT BAR (Clean and subtle)
+    def calculate_slide_geometries(self):
+        """
+        Calculates screen-edge aware coordinates for sliding panel and popped-out controls.
+        - Default: panel slides left out of Talia, controls sit below Talia.
+        - If left blocked: slides right.
+        - If bottom blocked: controls sit above Talia.
+        - If both left and right blocked: panel falls back to above/below.
+        - Never lets any part go off-screen.
+        """
+        talia_geo = self.overlay.geometry()
+        screen = QApplication.screenAt(talia_geo.center()) or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
 
-        # -------------------------------------------------------------
-        bottom_bar = QWidget()
-        bottom_bar.setStyleSheet(
-            "background-color: #18181b; border-top: 1px solid #27272a; padding: 4px;"
-        )
-        bottom_layout = QHBoxLayout(bottom_bar)
-        bottom_layout.setContentsMargins(12, 6, 12, 6)
-        shortcuts = [
-            ("F7", "Lyrics"),
-            ("F8", "Move"),
-            ("F9", "Toggle"),
-            ("F10", "Source"),
-            ("F11", "Eco"),
-        ]
-        for i, (key, desc) in enumerate(shortcuts):
-            lbl = QLabel(
-                f"<span style='color: #a1a1aa; font-weight: 600;'>{key}:</span> <span style='color: #71717a;'>{desc}</span>"
-            )
-            lbl.setStyleSheet("font-size: 10px; font-family: 'Segoe UI', Arial, sans-serif;")
-            bottom_layout.addWidget(lbl)
-            if i < len(shortcuts) - 1:
-                sep = QLabel("•")
-                sep.setStyleSheet("color: #3f3f46; font-size: 10px;")
-                bottom_layout.addWidget(sep)
-        root_layout.addWidget(bottom_bar)
-        self.populate_playlist_ui()
+        panel_w = self.width() if self.width() > 50 else 380
+        panel_h = self.height() if self.height() > 50 else 460
+        ctrl_w = 136
+        ctrl_h = 34
+
+        # 1. Controls Bar Placement (Below Talia default; Above if bottom blocked)
+        space_below = avail.bottom() - talia_geo.bottom()
+        space_above = talia_geo.top() - avail.top()
+
+        if space_below >= ctrl_h + 6:
+            ctrl_end_y = talia_geo.bottom() + 4
+            ctrl_start_y = talia_geo.bottom() - 10
+        elif space_above >= ctrl_h + 6:
+            ctrl_end_y = talia_geo.top() - ctrl_h - 4
+            ctrl_start_y = talia_geo.top() + 10
+        else:
+            ctrl_end_y = max(avail.top(), min(avail.bottom() - ctrl_h, talia_geo.bottom() + 4))
+            ctrl_start_y = ctrl_end_y
+
+        ctrl_end_x = max(avail.left(), min(avail.right() - ctrl_w, talia_geo.center().x() - ctrl_w // 2))
+        ctrl_start_x = ctrl_end_x
+
+        ctrl_target = QRect(ctrl_end_x, ctrl_end_y, ctrl_w, ctrl_h)
+        ctrl_start = QRect(ctrl_start_x, ctrl_start_y, ctrl_w, ctrl_h)
+
+        # 2. Settings Panel Placement (Left default; Right if left blocked; Above/Below fallback)
+        space_left = talia_geo.left() - avail.left()
+        space_right = avail.right() - talia_geo.right()
+
+        panel_target_y = max(avail.top() + 4, min(avail.bottom() - panel_h - 4, talia_geo.top()))
+
+        if space_left >= panel_w + 6:
+            # Slides LEFT (Default)
+            panel_end_x = talia_geo.left() - panel_w - 6
+            panel_start_x = talia_geo.left() - 20
+            panel_end_y = panel_target_y
+            panel_start_y = panel_target_y
+        elif space_right >= panel_w + 6:
+            # Slides RIGHT
+            panel_end_x = talia_geo.right() + 6
+            panel_start_x = talia_geo.right() - panel_w + 20
+            panel_end_y = panel_target_y
+            panel_start_y = panel_target_y
+        else:
+            # Both Left and Right blocked: Fallback to Above / Below
+            panel_end_x = max(avail.left() + 4, min(avail.right() - panel_w - 4, talia_geo.center().x() - panel_w // 2))
+            panel_start_x = panel_end_x
+            if space_above >= panel_h + ctrl_h + 10:
+                panel_end_y = talia_geo.top() - panel_h - 6
+                panel_start_y = talia_geo.top() - 20
+            else:
+                panel_end_y = min(avail.bottom() - panel_h, ctrl_end_y + ctrl_h + 6)
+                panel_start_y = ctrl_end_y
+
+        # Clamping guarantees: Never go off-screen
+        panel_end_x = max(avail.left(), min(avail.right() - panel_w, panel_end_x))
+        panel_end_y = max(avail.top(), min(avail.bottom() - panel_h, panel_end_y))
+
+        panel_target = QRect(panel_end_x, panel_end_y, panel_w, panel_h)
+        panel_start = QRect(panel_start_x, panel_start_y, panel_w, panel_h)
+
+        return panel_start, panel_target, ctrl_start, ctrl_target
+
+    def open_slide_panel(self):
+        """Smoothly slides the settings panel out of Talia and pops out playback controls."""
+        if self.isVisible() or getattr(self, "is_animating", False):
+            return
+
+        try:
+            from cyber_sfx import get_cyber_sfx
+            get_cyber_sfx().play_open()
+        except Exception:
+            pass
+
+        if getattr(self, "_defer_initial_populate", False):
+            self._defer_initial_populate = False
+            self.populate_playlist_ui()
+
+        panel_start, panel_target, ctrl_start, ctrl_target = self.calculate_slide_geometries()
+
+        self.setGeometry(panel_start)
+        self.show()
+        self.raise_()
+
+        self.controls_bar.setGeometry(ctrl_start)
+        self.controls_bar.show()
+        self.controls_bar.raise_()
+        self.controls_bar.sync_state()
+        if hasattr(self.overlay, "update_transport_state"):
+            self.overlay.update_transport_state()
+
+        self.is_animating = True
+
+        self.panel_anim = QPropertyAnimation(self, b"geometry")
+        self.panel_anim.setDuration(250)
+        self.panel_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.panel_anim.setStartValue(panel_start)
+        self.panel_anim.setEndValue(panel_target)
+
+        self.ctrl_anim = QPropertyAnimation(self.controls_bar, b"geometry")
+        self.ctrl_anim.setDuration(250)
+        self.ctrl_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.ctrl_anim.setStartValue(ctrl_start)
+        self.ctrl_anim.setEndValue(ctrl_target)
+
+        def _on_open_done():
+            self.is_animating = False
+
+        self.panel_anim.finished.connect(_on_open_done)
+        self.panel_anim.start()
+        self.ctrl_anim.start()
+
+    def close_slide_panel(self):
+        """Smoothly slides the settings panel and controls back into Talia and hides them."""
+        if not self.isVisible() or getattr(self, "is_animating", False):
+            return
+
+        try:
+            from cyber_sfx import get_cyber_sfx
+            get_cyber_sfx().play_close()
+        except Exception:
+            pass
+
+        panel_start, _, ctrl_start, _ = self.calculate_slide_geometries()
+
+        self.is_animating = True
+
+        self.panel_anim = QPropertyAnimation(self, b"geometry")
+        self.panel_anim.setDuration(220)
+        self.panel_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.panel_anim.setStartValue(self.geometry())
+        self.panel_anim.setEndValue(panel_start)
+
+        self.ctrl_anim = QPropertyAnimation(self.controls_bar, b"geometry")
+        self.ctrl_anim.setDuration(220)
+        self.ctrl_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.ctrl_anim.setStartValue(self.controls_bar.geometry())
+        self.ctrl_anim.setEndValue(ctrl_start)
+
+        def _on_close_done():
+            self.hide()
+            self.controls_bar.hide()
+            if getattr(self, "_party_dialog", None) is not None and self._party_dialog.isVisible():
+                self._party_dialog.hide()
+            if getattr(self, "_spotify_dialog", None) is not None and self._spotify_dialog.isVisible():
+                self._spotify_dialog.hide()
+            self.is_animating = False
+            if hasattr(self.overlay, "update_transport_state"):
+                self.overlay.update_transport_state()
+
+        self.panel_anim.finished.connect(_on_close_done)
+        self.panel_anim.start()
+        self.ctrl_anim.start()
+
+    def toggle_slide_panel(self):
+        """Toggles the slide-out panel and controls."""
+        if self.isVisible():
+            self.close_slide_panel()
+        else:
+            self.open_slide_panel()
+
+    def toggle_minigame(self):
+        """Toggles the Mania 4K minigame overlay."""
+        if hasattr(self, "osu_overlay") and self.osu_overlay:
+            self.osu_overlay.toggle_game()
+        elif hasattr(self, "minigame_overlay") and self.minigame_overlay:
+            self.minigame_overlay.toggle_game()
+
+    def toggle_osu_minigame(self):
+        """Backwards compatibility alias for toggle_minigame."""
+        self.toggle_minigame()
+
+    def update_sliding_panel_position(self):
+        """Keeps panel and controls locked with Talia when Talia is moved."""
+        if self.isVisible() and not getattr(self, "is_animating", False):
+            _, panel_target, _, ctrl_target = self.calculate_slide_geometries()
+            self.setGeometry(panel_target)
+            self.controls_bar.setGeometry(ctrl_target)
+
+    def open_settings_window(self):
+        """Opens dedicated Settings Dialog."""
+        if hasattr(self, "settings_dialog"):
+            try:
+                from cyber_sfx import get_cyber_sfx
+                get_cyber_sfx().play_open()
+            except Exception:
+                pass
+            self.settings_dialog.show()
+            self.settings_dialog.raise_()
+            self.settings_dialog.activateWindow()
+
+    def open_advanced_settings(self):
+        self.open_settings_window()
+
+    def toggle_play_pause(self):
+        self.on_play_pause_clicked()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_download_badge_position()
+
+    def _update_download_badge_position(self):
+        if hasattr(self, "download_status_badge") and self.download_status_badge:
+            self.download_status_badge.adjustSize()
+            bw = self.download_status_badge.width()
+            bh = self.download_status_badge.height()
+            self.download_status_badge.move(self.width() - bw - 14, self.height() - bh - 14)
+            self.download_status_badge.raise_()
+
+    def show_download_status(self, text: str, is_done: bool = False, is_error: bool = False):
+        """Displays persistent download status badge on bottom-right of menu panel (always on top)."""
+        if not hasattr(self, "download_status_badge"):
+            return
+        self.lbl_download_badge_text.setText(text)
+        if is_error:
+            self.lbl_download_badge_icon.setText("✕")
+            self.lbl_download_badge_icon.setStyleSheet("color: #f87171; font-size: 11px; font-weight: bold;")
+            self.lbl_download_badge_text.setStyleSheet("color: #f87171; font-size: 11px;")
+        elif is_done:
+            self.lbl_download_badge_icon.setText("✓")
+            self.lbl_download_badge_icon.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: bold;")
+            self.lbl_download_badge_text.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: bold;")
+            QTimer.singleShot(4000, self.download_status_badge.hide)
+        else:
+            self.lbl_download_badge_icon.setText("⬇")
+            self.lbl_download_badge_icon.setStyleSheet("color: #00f0ff; font-size: 11px; font-weight: bold;")
+            self.lbl_download_badge_text.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 500;")
+        self.download_status_badge.show()
+        self.download_status_badge.raise_()
+        self._update_download_badge_position()
 
     def toggle_audio_mode(self):
         """Toggles between Built-in Player and Desktop Audio loopback."""
@@ -782,6 +1330,22 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if self.audio_engine.audio_mode == "desktop":
             self.audio_engine.toggle_play_pause()
             return
+        if (
+            getattr(self, "current_playlist", "") == "★ Random Mix"
+            and hasattr(self, "radio_mix")
+            and self.radio_mix
+        ):
+            cur_path = getattr(self.audio_engine, "_active_file_path", "") or None
+            if not cur_path:
+                cur_idx = self.audio_engine.current_index
+                cur_path = (
+                    self.audio_engine.playlist[cur_idx]
+                    if 0 <= cur_idx < len(self.audio_engine.playlist)
+                    else None
+                )
+            if not self.radio_mix.is_radio_cached_track(cur_path):
+                self.radio_mix.request_next_track(auto_play=True)
+                return
         if not self.audio_engine.playlist:
             return
         if self.audio_engine.current_index < 0:
@@ -796,31 +1360,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def sync_play_state(self):
         self.update_sync_offset_display()
-        if self.audio_engine.audio_mode == "desktop":
-            self.btn_play_pause.setText("Live Audio")
-            self.btn_play_pause.setStyleSheet(
-                "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6;"
-            )
-            self.lbl_track_title.setText("Desktop Audio")
-            return
-        if self.audio_engine.is_playing:
-            self.btn_play_pause.setText("Pause")
-            self.btn_play_pause.setStyleSheet(
-                "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6;"
-            )
-            self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
-        else:
-            self.btn_play_pause.setText("Play")
-            self.btn_play_pause.setStyleSheet("")
-            self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
+        if hasattr(self, "controls_bar") and self.controls_bar:
+            self.controls_bar.sync_state()
+        if hasattr(self.overlay, "update_transport_state"):
+            self.overlay.update_transport_state()
+
+        self.lbl_track_title.setText(f"{self.audio_engine.get_current_track_title()}")
 
         # Update Discord Rich Presence
-        if hasattr(self, "discord_service") and self.discord_service:
-            raw_title = self.audio_engine.get_current_track_title()
-            is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
-            pos = self.audio_engine.get_position()
-            dur = self.audio_engine.get_duration()
-            self.discord_service.update_playback(raw_title, is_playing, pos, dur)
+        self._push_discord_playback(
+            self.audio_engine.get_position(),
+            self.audio_engine.get_duration(),
+        )
 
         # Broadcast playback state to Listen Together party
         if hasattr(self, "party_sync") and self.party_sync.is_connected:
@@ -858,9 +1409,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def refresh_queue_ui(self):
         """Refreshes both local player queue UI and Party Sync room queue UI."""
         PlaylistPanelMixin.refresh_queue_ui(self)
-        if hasattr(self, "party_dialog") and self.party_dialog and hasattr(self.party_dialog, "_on_queue_updated"):
+        party_dlg = getattr(self, "_party_dialog", None)
+        if party_dlg is not None and hasattr(party_dlg, "_on_queue_updated"):
             if hasattr(self, "party_sync") and self.party_sync:
-                self.party_dialog._on_queue_updated(self.party_sync.party_queue)
+                party_dlg._on_queue_updated(self.party_sync.party_queue)
 
     def _on_party_queue_updated(self, queue: list):
         """Called whenever the room queue updates. Automatically checks and prefetches the next song."""
@@ -944,7 +1496,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             if target_idx == -1:
                 self.audio_engine.playlist.append(file_path)
                 target_idx = len(self.audio_engine.playlist) - 1
-                self.populate_playlist_ui()
+            self.populate_playlist_ui()
             log.info("[PARTY QUEUE] Pre-download ready for '%s' at index %d", track_data.get("title"), target_idx)
 
             if hasattr(self, "party_sync") and self.party_sync.party_queue:
@@ -1079,7 +1631,67 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                             ).start()
                         return True
 
-        self.audio_engine.next_track(crossfade=crossfade)
+        # 1. Local Queue Priority: If songs are queued, play the next in queue!
+        while getattr(self.audio_engine, "queue", None):
+            next_p = self.audio_engine.queue.pop(0)
+            if not os.path.exists(next_p):
+                continue
+            if next_p in self.audio_engine.playlist:
+                new_idx = self.audio_engine.playlist.index(next_p)
+                self.audio_engine.play_index(new_idx, crossfade=crossfade)
+            else:
+                self.audio_engine.load_file(next_p, auto_play=True)
+            self.sync_play_state()
+            self.refresh_queue_ui()
+            if hasattr(self, "save_settings"):
+                self.save_settings()
+            if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+                self._broadcast_party_track()
+            return True
+
+        if (
+            getattr(self, "current_playlist", "") == "★ Random Mix"
+            and hasattr(self, "radio_mix")
+            and self.radio_mix
+        ):
+            self.radio_mix.request_next_track(auto_play=True)
+            return True
+
+        active_tracks = self.get_active_filtered_tracks()
+        if not active_tracks:
+            return False
+
+        cur_idx = self.audio_engine.current_index
+        cur_p = self.audio_engine.playlist[cur_idx] if 0 <= cur_idx < len(self.audio_engine.playlist) else None
+
+        if self.audio_engine.shuffle:
+            played_paths = {
+                self.audio_engine.playlist[i]
+                for i in getattr(self.audio_engine, "_played_indices", set())
+                if 0 <= i < len(self.audio_engine.playlist)
+            }
+            unplayed = [
+                p for p in active_tracks
+                if p not in played_paths and (len(active_tracks) <= 1 or p != cur_p)
+            ]
+            if not unplayed:
+                self.audio_engine._played_indices.clear()
+                unplayed = [p for p in active_tracks if p != cur_p] or active_tracks
+            next_p = random.choice(unplayed)
+            if next_p in self.audio_engine.playlist:
+                self.audio_engine._played_indices.add(self.audio_engine.playlist.index(next_p))
+        else:
+            if cur_p in active_tracks:
+                pos = active_tracks.index(cur_p)
+                next_p = active_tracks[(pos + 1) % len(active_tracks)]
+            else:
+                next_p = active_tracks[0]
+
+        if next_p in self.audio_engine.playlist:
+            new_idx = self.audio_engine.playlist.index(next_p)
+            self.audio_engine.play_index(new_idx, crossfade=crossfade)
+        else:
+            self.audio_engine.load_file(next_p, auto_play=True)
         self.sync_play_state()
         if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
             self._broadcast_party_track()
@@ -1095,10 +1707,188 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if self.overlay:
             self.overlay.trigger_skip_feedback("forward")
 
+    # -------------------------------------------------------------
+    # RANDOM MIX (ENDLESS RADIO) HANDLERS
+    # -------------------------------------------------------------
+    def _on_radio_status_changed(self, msg: str):
+        if hasattr(self, "lbl_radio_status") and self.lbl_radio_status:
+            self.lbl_radio_status.setText(msg)
+
+    def _on_radio_track_ready(self, path: str, auto_play: bool):
+        if not path or not os.path.exists(path):
+            return
+        if auto_play:
+            self.radio_mix.record_played_radio_track(path)
+            self.audio_engine.load_file(path, auto_play=True)
+            self.sync_play_state()
+            if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+                self._broadcast_party_track()
+        if getattr(self, "current_playlist", "") == "★ Random Mix":
+            self.populate_playlist_ui()
+
+    def _on_radio_prefetch_ready(self, _path: str):
+        if getattr(self, "current_playlist", "") == "★ Random Mix":
+            self.populate_playlist_ui()
+
+    def _on_radio_saved_permanently(self, new_path: str):
+        if hasattr(self, "lbl_radio_status") and self.lbl_radio_status:
+            self.lbl_radio_status.setText(f"Saved: {os.path.basename(new_path)}")
+        self.populate_playlist_ui()
+        if hasattr(self, "save_settings"):
+            self.save_settings()
+
+    def save_radio_track_permanently(self, target_path: Optional[str] = None):
+        if not hasattr(self, "radio_mix") or not self.radio_mix:
+            return
+        candidate = target_path
+        if not candidate:
+            cur_p = getattr(self.audio_engine, "_active_file_path", "")
+            if cur_p and self.radio_mix.is_radio_cached_track(cur_p):
+                candidate = cur_p
+        if not candidate:
+            cur_idx = self.audio_engine.current_index
+            if 0 <= cur_idx < len(self.audio_engine.playlist):
+                cur_p = self.audio_engine.playlist[cur_idx]
+                if self.radio_mix.is_radio_cached_track(cur_p):
+                    candidate = cur_p
+        if not candidate and hasattr(self, "list_tracks"):
+            it = self.list_tracks.currentItem()
+            if it:
+                p = it.data(Qt.ItemDataRole.UserRole + 1)
+                if p and self.radio_mix.is_radio_cached_track(p):
+                    candidate = p
+        if not candidate:
+            cached = self.radio_mix.get_cached_tracks()
+            candidate = cached[0] if cached else None
+        if not candidate:
+            self._on_radio_status_changed("No cached Random Mix song to save.")
+            return
+        ok, msg = self.radio_mix.save_track_permanently(candidate)
+        self._on_radio_status_changed(msg)
+        if ok:
+            self.sync_play_state()
+            if self.overlay:
+                self.overlay._trigger_click_feedback(
+                    color=QColor(74, 222, 128), rot_degrees=2.2, alpha=0.72
+                )
+                self.overlay.osd_symbol = "saved"
+                self.overlay.osd_title = f"Saved: {os.path.basename(candidate)}"
+                self.overlay.osd_timer = 1.8
+                self.overlay.update()
+
+    def _show_radio_exclude_menu(self):
+        from PyQt6.QtWidgets import QInputDialog
+        from radio_mix import DEFAULT_EXCLUSIONS
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #14151e;
+                color: #f4f4f5;
+                border: 1px solid #5EF6FF;
+                padding: 4px;
+                border-radius: 3px;
+            }
+            QMenu::item {
+                padding: 5px 14px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(247, 80, 73, 180);
+                color: #ffffff;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: rgba(247, 80, 73, 95);
+                margin: 4px 8px;
+            }
+        """)
+
+        for key, (label, _default) in DEFAULT_EXCLUSIONS.items():
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self.radio_mix.exclusions.get(key, False))
+            act.toggled.connect(
+                lambda checked, k=key: (
+                    self.radio_mix.toggle_exclusion(k, checked),
+                    self.save_settings() if hasattr(self, "save_settings") else None,
+                )
+            )
+
+        menu.addSeparator()
+        artist_pool = list(
+            dict.fromkeys(self.radio_mix.excluded_artists + self.radio_mix.recent_artists)
+        )
+        if artist_pool:
+            sub_art = menu.addMenu("Exclude Artists")
+            for artist in artist_pool[:12]:
+                act_a = sub_art.addAction(artist)
+                act_a.setCheckable(True)
+                act_a.setChecked(self.radio_mix.is_artist_excluded(artist))
+                act_a.toggled.connect(
+                    lambda checked, a=artist: (
+                        self.radio_mix.toggle_excluded_artist(a, checked),
+                        self.save_settings() if hasattr(self, "save_settings") else None,
+                    )
+                )
+
+        act_add_kw = menu.addAction("+ Add Artist / Keyword to Exclude...")
+        act_clear_hist = menu.addAction("Reset Heard Track History")
+
+        chosen = menu.exec(
+            self.btn_radio_exclude.mapToGlobal(self.btn_radio_exclude.rect().bottomLeft())
+        )
+        if chosen == act_add_kw:
+            kw, ok = QInputDialog.getText(
+                self,
+                "Exclude from Random Mix",
+                "Artist name or keyword to exclude:",
+            )
+            if ok and kw.strip():
+                self.radio_mix.toggle_excluded_artist(kw.strip(), True)
+                self._on_radio_status_changed(f"Excluded: {kw.strip()}")
+                if hasattr(self, "save_settings"):
+                    self.save_settings()
+        elif chosen == act_clear_hist:
+            self.radio_mix.seen_video_ids.clear()
+            self._on_radio_status_changed("Radio history cleared.")
+
     def on_prev_clicked(self):
         self._waiting_for_download_to_play = False
         self._party_downloading_track = None
-        self.audio_engine.prev_track()
+
+        if (
+            getattr(self, "current_playlist", "") == "★ Random Mix"
+            and hasattr(self, "radio_mix")
+            and self.radio_mix
+        ):
+            cur_p = getattr(self.audio_engine, "_active_file_path", "") or None
+            prev_p = self.radio_mix.get_previous_track(cur_p)
+            if prev_p and os.path.exists(prev_p):
+                self.audio_engine.load_file(prev_p, auto_play=True)
+                self.sync_play_state()
+                self.populate_playlist_ui()
+                return True
+            self.radio_mix.request_next_track(auto_play=True)
+            return True
+
+        active_tracks = self.get_active_filtered_tracks()
+        if not active_tracks:
+            return
+
+        cur_idx = self.audio_engine.current_index
+        cur_p = self.audio_engine.playlist[cur_idx] if 0 <= cur_idx < len(self.audio_engine.playlist) else None
+
+        if cur_p in active_tracks:
+            pos = active_tracks.index(cur_p)
+            prev_p = active_tracks[(pos - 1) % len(active_tracks)]
+        else:
+            prev_p = active_tracks[-1]
+
+        if prev_p in self.audio_engine.playlist:
+            new_idx = self.audio_engine.playlist.index(prev_p)
+            self.audio_engine.play_index(new_idx)
+        else:
+            self.audio_engine.load_file(prev_p, auto_play=True)
         self.sync_play_state()
         if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
             self._broadcast_party_track()
@@ -1114,27 +1904,45 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         self.save_settings()
 
     def update_shuffle_ui(self):
-        if not hasattr(self, "btn_shuffle"):
-            return
-        if self.audio_engine.shuffle:
-            self.btn_shuffle.setText("⇄")
-            self.btn_shuffle.setToolTip("Shuffle: Enabled")
-            self.btn_shuffle.setStyleSheet(
-                "background-color: #1e3a8a; color: #60a5fa; border: 1px solid #3b82f6; border-radius: 4px; font-weight: bold; font-size: 13px;"
-            )
-        else:
-            self.btn_shuffle.setText("⇄")
-            self.btn_shuffle.setToolTip("Shuffle: Disabled")
-            self.btn_shuffle.setStyleSheet(
-                "background-color: #27272a; color: #71717a; border: 1px solid #3f3f46; border-radius: 4px; font-size: 13px;"
-            )
+        if hasattr(self, "controls_bar") and self.controls_bar:
+            self.controls_bar.sync_state()
+
+    def _on_track_selection_changed(self, current, previous):
+        if current and current != previous:
+            try:
+                from cyber_sfx import get_cyber_sfx
+                get_cyber_sfx().play_click()
+            except Exception:
+                pass
+
+    def on_track_clicked(self, item):
+        try:
+            from cyber_sfx import get_cyber_sfx
+            get_cyber_sfx().play_click()
+        except Exception:
+            pass
 
     def on_track_double_clicked(self, item):
+        try:
+            from cyber_sfx import get_cyber_sfx
+            get_cyber_sfx().play_click()
+        except Exception:
+            pass
         self._waiting_for_download_to_play = False
         self._party_downloading_track = None
         orig_idx = item.data(Qt.ItemDataRole.UserRole)
+        path = item.data(Qt.ItemDataRole.UserRole + 1)
+        if path and hasattr(self.audio_engine, "queue") and path in self.audio_engine.queue:
+            self.audio_engine.queue.remove(path)
+            if hasattr(self, "save_settings"):
+                self.save_settings()
         if orig_idx is not None and 0 <= orig_idx < len(self.audio_engine.playlist):
             self.audio_engine.play_index(orig_idx)
+        elif path and os.path.exists(path):
+            if path in self.audio_engine.playlist:
+                self.audio_engine.play_index(self.audio_engine.playlist.index(path))
+            else:
+                self.audio_engine.load_file(path, auto_play=True)
         else:
             row = self.list_tracks.row(item)
             self.audio_engine.play_index(row)
@@ -1186,20 +1994,86 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 if self.party_sync.is_host or self.party_sync.allow_guest_control:
                     self.party_sync.broadcast_seek(target_sec)
 
+    @staticmethod
+    def _format_time_component(minutes: int) -> str:
+        """Formats minute duration, switching to 'Xh Ym' past 60m."""
+        if minutes < 60:
+            return f"{minutes}m"
+        h = minutes // 60
+        m = minutes % 60
+        return f"{h}h {m}m"
+
+    @classmethod
+    def _format_level_playtime(cls, exp: int, req: int) -> str:
+        """Formats XP progress.
+        Under 60m: 1/10m, 5/11m.
+        At or past 60m: converts to hours and minutes (e.g. 1h 0m/1h 9m).
+        """
+        current_min = max(0, int(exp)) // 60
+        total_min = max(1, (max(1, int(req)) + 59) // 60)
+        if total_min < 60 and current_min < 60:
+            return f"{current_min}/{total_min}m"
+        return f"{cls._format_time_component(current_min)}/{cls._format_time_component(total_min)}"
+
+    def _refresh_level_display(self):
+        """Updates the header level display, XP bar, and playtime readout."""
+        cum_req = get_cumulative_exp_for_level(self.level)
+        base_exp = get_cumulative_exp_for_level(self.level - 1) if self.level > 0 else 0
+        current_exp = max(getattr(self, "playtime_seconds", 0), base_exp + getattr(self, "exp", 0))
+        if hasattr(self, "lbl_level_badge"):
+            self.lbl_level_badge.setText(
+                f"<span style=\"font-size:24px; font-family:'Share Tech Mono';\">{self.level}</span>"
+                "<span style=\"font-size:10px; font-family:'Rajdhani'; font-weight:700;\">&nbsp;LEVEL</span>"
+            )
+        if hasattr(self, "lbl_exp_progress"):
+            self.lbl_exp_progress.setText(self._format_level_playtime(current_exp, cum_req))
+        if hasattr(self, "exp_bar"):
+            self.exp_bar.setRange(0, max(1, cum_req))
+            self.exp_bar.setValue(max(0, min(int(current_exp), cum_req)))
+
+    def _push_discord_playback(self, pos: float, dur: float):
+        """Send playback metadata and active mode context cleanly to Discord RPC."""
+        if not (hasattr(self, "discord_service") and self.discord_service and self.discord_service.enabled):
+            return
+        if self.audio_engine.audio_mode == "desktop":
+            self.discord_service.update_playback(
+                "Desktop Audio",
+                bool(self.audio_engine.is_playing),
+                0.0,
+                0.0,
+                mode_hint="Desktop Audio",
+            )
+            return
+        raw_title = self.audio_engine.get_current_track_title()
+        is_playing = bool(self.audio_engine.is_playing and not self.audio_engine.is_paused)
+        mode_hint = ""
+        if hasattr(self, "party_sync") and self.party_sync.is_connected:
+            mode_hint = f"Party {self.party_sync.room_code}" if self.party_sync.room_code else "Listen Together"
+        elif getattr(self, "current_playlist", "") == "★ Random Mix":
+            mode_hint = "Random Mix"
+        self.discord_service.update_playback(raw_title, is_playing, pos, dur, mode_hint=mode_hint)
+
     def update_timeline(self):
         if self.is_user_scrubbing:
             return
+        panel_visible = self.isVisible()
+        audio_active = bool(self.audio_engine.is_playing and not self.audio_engine.is_paused)
+        party_connected = bool(
+            hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host
+        )
+        if not panel_visible and not audio_active and not party_connected:
+            return
+
         pos = self.audio_engine.get_position()
         dur = self.audio_engine.get_duration()
-        if self.isVisible():
+        if panel_visible:
             if self.audio_engine.audio_mode == "desktop":
                 self.lbl_time_cur.setText("LIVE")
                 self.lbl_time_dur.setText("LOOP")
                 self.slider_seek.setValue(1000)
             else:
                 if dur > 0:
-                    pct = int((pos / dur) * 1000)
-                    self.slider_seek.setValue(pct)
+                    self.slider_seek.setValue(int((pos / dur) * 1000))
                 else:
                     self.slider_seek.setValue(0)
                 m_pos, s_pos = int(pos // 60), int(pos % 60)
@@ -1207,21 +2081,43 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.lbl_time_cur.setText(f"{m_pos:02d}:{s_pos:02d}")
                 self.lbl_time_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
 
-        # Periodic party heartbeat (every 3s for host)
-        if hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.is_host:
+        # Active Playtime & EXP progression tracking (every 1s while actively playing)
+        if audio_active:
+            now = time.time()
+            if now - getattr(self, "_last_exp_tick", 0.0) >= 1.0:
+                self._last_exp_tick = now
+                lvl, exp, total, _req, leveled_up = apply_playtime_exp(
+                    self.level, self.exp, self.playtime_seconds, 1
+                )
+                self.level, self.exp, self.playtime_seconds = lvl, exp, total
+                if panel_visible or leveled_up:
+                    self._refresh_level_display()
+                if leveled_up:
+                    try:
+                        from cyber_sfx import get_cyber_sfx
+                        get_cyber_sfx().play_level_up()
+                    except Exception:
+                        pass
+                if leveled_up or now - getattr(self, "_last_exp_save", now) >= 60.0:
+                    self._last_exp_save = now
+                    self.save_settings()
+
+        if party_connected:
             now = time.time()
             if now - getattr(self, "_last_party_heartbeat", 0.0) >= 3.0:
                 self._last_party_heartbeat = now
                 self.party_sync.broadcast_heartbeat(pos, self.audio_engine.is_playing)
 
-        # Periodic Discord Rich Presence timeline update (every 4s while playing)
-        if hasattr(self, "discord_service") and self.discord_service and self.discord_service.enabled:
+        if (
+            audio_active
+            and hasattr(self, "discord_service")
+            and self.discord_service
+            and self.discord_service.enabled
+        ):
             now = time.time()
             if now - getattr(self, "_last_discord_update", 0.0) >= 4.0:
                 self._last_discord_update = now
-                raw_title = self.audio_engine.get_current_track_title()
-                is_playing = self.audio_engine.is_playing and self.audio_engine.audio_mode != "desktop"
-                self.discord_service.update_playback(raw_title, is_playing, pos, dur)
+                self._push_discord_playback(pos, dur)
 
         # Check if stream dropped unexpectedly (e.g. headset unplugged mid-playback)
         if (
@@ -1378,48 +2274,19 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         log.info("[STATUS] Reloaded fresh images from assets/eye_parts/ folder!")
 
     def check_hotkeys(self):
-        """Monitors global hotkeys without polling lag."""
-
-        # F7: Toggle Lyrics Overlay
-        f7_down = bool(user32.GetAsyncKeyState(VK_F7) & 0x8000)
-        if f7_down and not self.last_f7_state:
-            self.toggle_lyrics()
-        self.last_f7_state = f7_down
-
-        # Ctrl+[ and Ctrl+]: Manual lyric offset adjustments
-        ctrl_down = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+        """Monitors Ctrl+[ / Ctrl+] lyric offset hotkeys with minimal Win32 calls."""
+        if not (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000):
+            self.last_bracket_left_state = False
+            self.last_bracket_right_state = False
+            return
         bracket_l = bool(user32.GetAsyncKeyState(VK_OEM_4) & 0x8000)
-        if ctrl_down and bracket_l and not self.last_bracket_left_state:
+        if bracket_l and not self.last_bracket_left_state:
             self.adjust_lyrics_offset(-0.25)
         self.last_bracket_left_state = bracket_l
         bracket_r = bool(user32.GetAsyncKeyState(VK_OEM_6) & 0x8000)
-        if ctrl_down and bracket_r and not self.last_bracket_right_state:
+        if bracket_r and not self.last_bracket_right_state:
             self.adjust_lyrics_offset(0.25)
         self.last_bracket_right_state = bracket_r
-
-        # F8: Toggle Move Talia mode
-        f8_down = bool(user32.GetAsyncKeyState(VK_F8) & 0x8000)
-        if f8_down and not self.last_f8_state:
-            self.toggle_move_talia()
-        self.last_f8_state = f8_down
-
-        # F9: Toggle Show/Hide overlay
-        f9_down = bool(user32.GetAsyncKeyState(VK_F9) & 0x8000)
-        if f9_down and not self.last_f9_state:
-            self.toggle_visibility()
-        self.last_f9_state = f9_down
-
-        # F10: Toggle Audio Source Mode (Desktop vs Player)
-        f10_down = bool(user32.GetAsyncKeyState(VK_F10) & 0x8000)
-        if f10_down and not self.last_f10_state:
-            self.toggle_audio_mode()
-        self.last_f10_state = f10_down
-
-        # F11: Toggle Eco Mode (< 1% CPU)
-        f11_down = bool(user32.GetAsyncKeyState(VK_F11) & 0x8000)
-        if f11_down and not self.last_f11_state:
-            self.toggle_eco_mode()
-        self.last_f11_state = f11_down
 
     def toggle_eco_mode(self):
         """Toggles Eco Mode (< 1% CPU target) and persists preference."""
@@ -1449,10 +2316,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                     "background-color: #166534; color: #4ade80; border: 1px solid #22c55e; font-weight: 500; font-size: 11px; padding: 7px 8px;"
                 )
             if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "btn_eco"):
-                self.settings_dialog.btn_eco.setText("Eco Mode: On")
-                self.settings_dialog.btn_eco.setStyleSheet(
-                    "background-color: #166534; color: #4ade80; border: 1px solid #22c55e; font-weight: 500; font-size: 11px; padding: 7px 8px;"
-                )
+                eco_btn = self.settings_dialog.btn_eco
+                eco_btn.setText("Eco Mode: On")
+                eco_btn.setProperty("role", "success")
+                if eco_btn.style():
+                    eco_btn.style().unpolish(eco_btn)
+                    eco_btn.style().polish(eco_btn)
             log.info("[STATUS] Eco Mode enabled (< 1% CPU).")
         else:
             self.hotkey_timer.setInterval(50)
@@ -1461,8 +2330,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.btn_eco.setText("Eco Mode: Off")
                 self.btn_eco.setStyleSheet("")
             if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "btn_eco"):
-                self.settings_dialog.btn_eco.setText("Eco Mode: Off")
-                self.settings_dialog.btn_eco.setStyleSheet("")
+                eco_btn = self.settings_dialog.btn_eco
+                eco_btn.setText("Eco Mode: Off")
+                eco_btn.setProperty("role", None)
+                if eco_btn.style():
+                    eco_btn.style().unpolish(eco_btn)
+                    eco_btn.style().polish(eco_btn)
             log.info("[STATUS] Eco Mode disabled (Standard).")
 
     def toggle_lyrics(self):
@@ -1605,6 +2478,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             except Exception:
                 pass
 
+    def on_subtitle_bg_toggled(self, checked: bool):
+        if self.lyrics_overlay:
+            self.lyrics_overlay.set_subtitle_bg_enabled(checked)
+            self.lyrics_overlay._cached_layout_key = None
+            self.lyrics_overlay.update()
+        if not getattr(self, "is_loading_settings", False):
+            try:
+                cfg = self.get_current_settings_dict()
+                save_settings(cfg)
+            except Exception:
+                pass
+
     def on_lyric_preset_changed(self, text: str):
         if getattr(self, "is_loading_settings", False):
             return
@@ -1653,15 +2538,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def _update_color_btn_style(self, hex_code: str):
         if hasattr(self, "btn_pick_color"):
-            self.btn_pick_color.setStyleSheet(
-                f"background-color: #27272a; color: {hex_code}; border: 1px solid {hex_code}; font-weight: 500;"
-            )
-
-    def open_settings_window(self):
-        if hasattr(self, "settings_dialog"):
-            self.settings_dialog.show()
-            self.settings_dialog.raise_()
-            self.settings_dialog.activateWindow()
+            if hasattr(self.btn_pick_color, "set_custom_tint"):
+                self.btn_pick_color.set_custom_tint(hex_code)
+            else:
+                self.btn_pick_color.setStyleSheet(
+                    f"background-color: #27272a; color: {hex_code}; border: 1px solid {hex_code}; font-weight: 500;"
+                )
 
     def on_font_changed(self, text: str):
         if getattr(self, "is_loading_settings", False):
@@ -1687,20 +2569,19 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                         subprocess.run(["xdg-open", os.path.normpath(FONTS_DIR)])
 
     def open_lyric_fetcher(self, track_path: Optional[str] = None, select_calibrate_tab: bool = False):
-        # Open automated lyric fetcher GUI
+        """Open the integrated in-app Lyrics & Calibration Studio."""
         if not isinstance(track_path, str):
             track_path = None
         try:
-            fetcher_dir = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
-            if fetcher_dir not in sys.path:
-                sys.path.insert(0, fetcher_dir)
-            from gui_fetcher import LyricsFetcherWindow
+            from lyrics_studio_dialog import LyricsStudioDialog
 
             if not hasattr(self, "_lyrics_fetcher_win") or self._lyrics_fetcher_win is None:
-                self._lyrics_fetcher_win = LyricsFetcherWindow()
+                self._lyrics_fetcher_win = LyricsStudioDialog(self)
                 self._lyrics_fetcher_win.lyrics_saved.connect(self._on_lyrics_saved_externally)
+            elif hasattr(self._lyrics_fetcher_win, "refresh_track_list"):
+                self._lyrics_fetcher_win.refresh_track_list()
 
-            # Auto-select the target track (or currently playing track) in the calibrator tab for instant editing
+            # Auto-select the target track (or currently playing track) for instant calibration
             curr_track = track_path
             if not curr_track:
                 if hasattr(
@@ -1716,20 +2597,14 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self._lyrics_fetcher_win._load_cal_track(os.path.normpath(curr_track))
 
             if select_calibrate_tab and hasattr(self._lyrics_fetcher_win, "tabs"):
-                self._lyrics_fetcher_win.tabs.setCurrentIndex(2)
+                self._lyrics_fetcher_win.tabs.setCurrentIndex(0)
 
             self._lyrics_fetcher_win.show()
             self._lyrics_fetcher_win.raise_()
             self._lyrics_fetcher_win.activateWindow()
-            log.info(f"[ACTION] Opened Lyrics Fetcher Window (target track: {curr_track}).")
+            log.info(f"[ACTION] Opened Lyrics & Calibration Studio (target track: {curr_track}).")
         except Exception as e:
-            log.info(f"[ERROR] In-process lyric fetcher launch failed: {e}")
-            try:
-                folder = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
-                if os.path.exists(folder):
-                    os.startfile(folder)
-            except Exception as e2:
-                log.info(f"[ERROR] Fallback lyric fetcher launch failed: {e2}")
+            log.info(f"[ERROR] In-process lyrics studio launch failed: {e}")
 
     def _on_lyrics_saved_externally(self, lrc_path: str):
         """Auto-refreshes lyrics immediately when saved from Lyrics Fetcher without changing tracks."""
@@ -1764,6 +2639,97 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         if self.lyrics_overlay:
             self.lyrics_overlay.set_move_mode(new_state)
         self.update_move_talia_ui()
+
+    def _init_tray_icon(self):
+        """Initializes system tray icon in Windows notification area (hidden icons)."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = None
+            return
+
+        icon = QIcon(ICON_PATH) if os.path.exists(ICON_PATH) else self.windowIcon()
+        self.tray_icon = QSystemTrayIcon(icon, self)
+        from config import APP_VERSION
+        self.tray_icon.setToolTip(f"Talia v{APP_VERSION} - Cyberpunk Music Player")
+
+        tray_menu = QMenu()
+        tray_menu.setStyleSheet("""
+            QMenu {
+                background-color: #121215;
+                color: #f4f4f5;
+                border: 1px solid #F75049;
+                padding: 4px;
+                font-family: 'Rajdhani', sans-serif;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QMenu::item {
+                padding: 5px 20px;
+                border-radius: 2px;
+            }
+            QMenu::item:selected {
+                background-color: #F75049;
+                color: #0e0e17;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #3f3f46;
+                margin: 4px 8px;
+            }
+        """)
+
+        act_toggle = tray_menu.addAction("Show / Hide Talia")
+        act_toggle.triggered.connect(self.toggle_visibility)
+
+        act_panel = tray_menu.addAction("Playlist & Controls")
+        act_panel.triggered.connect(self.toggle_slide_panel)
+
+        tray_menu.addSeparator()
+
+        act_play = tray_menu.addAction("Play / Pause")
+        act_play.triggered.connect(self.on_play_pause_clicked)
+
+        act_next = tray_menu.addAction("Next Track")
+        act_next.triggered.connect(self.on_next_clicked)
+
+        act_prev = tray_menu.addAction("Previous Track")
+        act_prev.triggered.connect(self.on_prev_clicked)
+
+        tray_menu.addSeparator()
+
+        act_party = tray_menu.addAction("Listen Together (Party Sync)")
+        act_party.triggered.connect(self.open_party_dialog)
+
+        act_spotify = tray_menu.addAction("Spotify Playlist Sync")
+        act_spotify.triggered.connect(self.open_spotify_dialog)
+
+        act_settings = tray_menu.addAction("Advanced Settings")
+        act_settings.triggered.connect(self.open_settings_window)
+
+        tray_menu.addSeparator()
+
+        act_exit = tray_menu.addAction("Exit Talia")
+        act_exit.triggered.connect(self.exit_application)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._on_tray_icon_activated)
+        self.tray_icon.show()
+
+    def _on_tray_icon_activated(self, reason):
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self.toggle_visibility()
+
+    def exit_application(self):
+        try:
+            self.save_settings_action()
+        except Exception:
+            pass
+        if self.overlay:
+            self.overlay.close_application()
+        else:
+            QApplication.quit()
 
     def toggle_visibility(self):
         if self.overlay.isVisible():
@@ -1802,6 +2768,9 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             pos_y = int(self.overlay.pos().y())
         user_opacity = max(0.20, min(1.0, self.slider_opacity.value() / 100.0))
         settings_dict = {
+            "level": max(0, int(getattr(self, "level", 0))),
+            "exp": max(0, int(getattr(self, "exp", 0))),
+            "playtime_seconds": max(0, int(getattr(self, "playtime_seconds", 0))),
             "pos_x": pos_x,
             "pos_y": pos_y,
             "char_size": max(MIN_CHAR_SIZE, int(self.overlay.width())),
@@ -1833,6 +2802,9 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             settings_dict["lyrics_dialogue_mode"] = bool(
                 getattr(self.lyrics_overlay, "dialogue_mode", True)
             )
+            settings_dict["show_subtitle_bg"] = bool(
+                getattr(self.lyrics_overlay, "show_subtitle_bg", False)
+            )
             font_val = (
                 self.combo_font.currentText()
                 if hasattr(self, "combo_font")
@@ -1851,12 +2823,27 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             else getattr(self, "_discord_rpc_enabled", True)
         )
         settings_dict["queue"] = list(getattr(self.audio_engine, "queue", []))
+        settings_dict["play_counts"] = dict(getattr(self, "play_counts", {}))
+        settings_dict["favourite_tracks"] = list(getattr(self, "favourite_tracks", []))
+        settings_dict["custom_playlists"] = dict(getattr(self, "custom_playlists", {}))
+        settings_dict["current_playlist"] = str(getattr(self, "current_playlist", "All Tracks"))
+        settings_dict["current_sort"] = str(getattr(self, "current_sort", "Default"))
+        if hasattr(self, "radio_mix") and self.radio_mix:
+            settings_dict.update(self.radio_mix.export_state())
         return settings_dict
 
     def apply_settings(self, cfg: dict):
         # Apply settings to overlay and controls
         self.is_loading_settings = True
         self.show_startup_guide = bool(cfg.get("show_startup_guide", True))
+
+        # Level / XP state (never reset when a song changes or settings reload)
+        self.level = max(0, int(cfg.get("level", self.level)))
+        self.exp = max(0, int(cfg.get("exp", self.exp)))
+        self.playtime_seconds = max(
+            0, int(cfg.get("playtime_seconds", self.playtime_seconds))
+        )
+        self._refresh_level_display()
 
         # Size
         size = int(cfg.get("char_size", 300))
@@ -1889,10 +2876,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         # Features
         self.overlay.enable_scanlines = False
         self.chk_bass_pop.setChecked(cfg.get("bass_pop", True))
+        head_bop_on = bool(cfg.get("head_bop", False))
+        self.overlay.enable_head_bop = head_bop_on
+        if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "chk_head_bop"):
+            self.settings_dialog.chk_head_bop.blockSignals(True)
+            self.settings_dialog.chk_head_bop.setChecked(head_bop_on)
+            self.settings_dialog.chk_head_bop.blockSignals(False)
         discord_on = bool(cfg.get("discord_rpc", True))
         self._discord_rpc_enabled = discord_on
         if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "chk_discord_rpc"):
+            self.settings_dialog.chk_discord_rpc.blockSignals(True)
             self.settings_dialog.chk_discord_rpc.setChecked(discord_on)
+            self.settings_dialog.chk_discord_rpc.blockSignals(False)
         if hasattr(self, "discord_service") and self.discord_service:
             self.discord_service.set_enabled(discord_on)
         self.overlay.enable_bass_pop = cfg.get("bass_pop", True)
@@ -1973,6 +2968,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 self.chk_dialogue_mode.setChecked(dialogue_mode)
                 self.chk_dialogue_mode.blockSignals(False)
 
+            subtitle_bg = bool(cfg.get("show_subtitle_bg", True))
+            self.lyrics_overlay.set_subtitle_bg_enabled(subtitle_bg)
+            chk_sub = getattr(self, "chk_subtitle_bg", None) or (
+                getattr(self.settings_dialog, "chk_subtitle_bg", None)
+                if hasattr(self, "settings_dialog")
+                else None
+            )
+            if chk_sub:
+                chk_sub.blockSignals(True)
+                chk_sub.setChecked(subtitle_bg)
+                chk_sub.blockSignals(False)
+
             # Lyrics Font
             lyrics_font = cfg.get("lyrics_font", "Rajdhani")
             if hasattr(self, "settings_dialog"):
@@ -2005,6 +3012,30 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             if hasattr(self, "refresh_queue_ui"):
                 self.refresh_queue_ui()
 
+        # Play counts, favourites, playlists, and sort
+        self.play_counts = dict(cfg.get("play_counts", {}))
+        self.favourite_tracks = set(cfg.get("favourite_tracks", []))
+        self.custom_playlists = dict(cfg.get("custom_playlists", {}))
+        self.current_playlist = str(cfg.get("current_playlist", "All Tracks"))
+        self.current_sort = str(cfg.get("current_sort", "Default"))
+        if hasattr(self, "radio_mix") and self.radio_mix:
+            self.radio_mix.load_state(cfg)
+            self.radio_mix.restore_from_cache()
+        if hasattr(self, "radio_mix_bar") and self.radio_mix_bar is not None:
+            self.radio_mix_bar.setVisible(self.current_playlist == "★ Random Mix")
+        if hasattr(self, "refresh_playlist_dropdown"):
+            self.refresh_playlist_dropdown()
+        if hasattr(self, "combo_sort"):
+            idx_s = self.combo_sort.findText(self.current_sort)
+            if idx_s >= 0:
+                self.combo_sort.blockSignals(True)
+                self.combo_sort.setCurrentIndex(idx_s)
+                self.combo_sort.blockSignals(False)
+
+        if self.current_playlist == "★ Random Mix" or not getattr(self, "_defer_initial_populate", False):
+            self._defer_initial_populate = False
+            self.populate_playlist_ui()
+
         self.overlay.update()
         self.is_loading_settings = False
 
@@ -2029,7 +3060,18 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Ensure window header is never stuck off-screen
+        if getattr(self, "_defer_initial_populate", False):
+            self._defer_initial_populate = False
+            self.populate_playlist_ui()
+        self._update_download_badge_position()
+        if hasattr(self, "download_status_badge") and self.download_status_badge.isVisible():
+            self.download_status_badge.raise_()
+        if hasattr(self, "controls_bar") and not self.controls_bar.isVisible():
+            _, _, _, ctrl_target = self.calculate_slide_geometries()
+            self.controls_bar.setGeometry(ctrl_target)
+            self.controls_bar.show()
+            self.controls_bar.raise_()
+            self.controls_bar.sync_state()
         screen = QApplication.primaryScreen().availableGeometry()
         if self.y() < screen.top() + 30:
             self.move(self.x(), screen.top() + 40)
@@ -2070,8 +3112,10 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        if hasattr(self, "controls_bar") and self.controls_bar.isVisible():
+            self.controls_bar.hide()
         if hasattr(self, "timeline_timer"):
-            self.timeline_timer.setInterval(600)
+            self.timeline_timer.setInterval(900)
         if (
             self.overlay
             and hasattr(self.overlay, "sound_menu_close")
@@ -2085,6 +3129,16 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         save_settings(cfg)
         if hasattr(self, "settings_dialog") and self.settings_dialog.isVisible():
             self.settings_dialog.hide()
+        if getattr(self, "_party_dialog", None) is not None and self._party_dialog.isVisible():
+            self._party_dialog.hide()
+        if getattr(self, "_spotify_dialog", None) is not None and self._spotify_dialog.isVisible():
+            self._spotify_dialog.hide()
+        if (
+            hasattr(self, "_lyrics_fetcher_win")
+            and self._lyrics_fetcher_win is not None
+            and self._lyrics_fetcher_win.isVisible()
+        ):
+            self._lyrics_fetcher_win.hide()
         self.hide()
         if (
             self.overlay
@@ -2095,27 +3149,65 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
         trim_process_memory()
         event.ignore()
 
-    # -------------------------------------------------------------
+    def _position_popup_dialog(self, dlg: QWidget):
+        """Positions popup dialog adjacent to the slide-out control panel or centered."""
+        try:
+            screen_obj = self.screen() if hasattr(self, "screen") and self.screen() else (
+                QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+            )
+            screen = screen_obj.availableGeometry() if screen_obj else QRect(0, 0, 1920, 1080)
+            dlg_w = dlg.width()
+            dlg_h = dlg.height()
 
-    # SONG SEARCH & AUTO-DOWNLOAD SLOTS
+            if self.isVisible() and not getattr(self, "is_animating", False):
+                panel_geo = self.geometry()
+                margin = 10
+                target_x = panel_geo.left() - dlg_w - margin
+                if target_x < screen.left() + 10:
+                    target_x = panel_geo.right() + margin
+                    if target_x + dlg_w > screen.right() - 10:
+                        target_x = screen.left() + max(10, (screen.width() - dlg_w) // 2)
 
-    # -------------------------------------------------------------
+                target_y = max(screen.top() + 10, min(panel_geo.top(), screen.bottom() - dlg_h - 10))
+                dlg._custom_positioned = True
+                dlg.move(target_x, target_y)
+            else:
+                dlg._custom_positioned = False
+                if hasattr(dlg, "center_and_clamp_on_screen"):
+                    dlg.center_and_clamp_on_screen()
+        except Exception as exc:
+            log.warning("Could not position popup dialog: %s", exc)
 
-    # -------------------------------------------------------------------------
-    # Party Sync (Listen Together) & Spotify Integration Handlers
-    # -------------------------------------------------------------------------
+    def _toggle_tool_dialog(self, dialog, sibling):
+        """Uniform open/close/hide toggle for Party Sync and Spotify Sync popups."""
+        if dialog.isVisible():
+            try:
+                from cyber_sfx import get_cyber_sfx
+                get_cyber_sfx().play_close()
+            except Exception:
+                pass
+            dialog.hide()
+            return
+        if sibling is not None and sibling.isVisible():
+            sibling.hide()
+        try:
+            from cyber_sfx import get_cyber_sfx
+            get_cyber_sfx().play_open()
+        except Exception:
+            pass
+        self._position_popup_dialog(dialog)
+        if dialog.isMinimized():
+            dialog.showNormal()
+        else:
+            dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def open_party_dialog(self):
-        if hasattr(self, "party_dialog"):
-            self.party_dialog.show()
-            self.party_dialog.raise_()
-            self.party_dialog.activateWindow()
+        self._toggle_tool_dialog(self.party_dialog, getattr(self, "_spotify_dialog", None))
 
     def open_spotify_dialog(self):
-        if hasattr(self, "spotify_dialog"):
-            self.spotify_dialog.show()
-            self.spotify_dialog.raise_()
-            self.spotify_dialog.activateWindow()
+        self._toggle_tool_dialog(self.spotify_dialog, getattr(self, "_party_dialog", None))
 
     def update_party_hud(self, is_connected: bool, room_code: str, is_host: bool):
         if hasattr(self, "btn_party_sync"):
@@ -2226,6 +3318,13 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             "mix", "version", "full"
         }
 
+        STOP_WORDS = {
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "in", "on", "at", "to",
+            "for", "from", "of", "by", "with", "and", "or", "my", "your", "his", "her", "our",
+            "their", "its", "i", "me", "we", "us", "you", "he", "him", "she", "it", "they", "them",
+            "where", "what", "when", "why", "how", "who", "all", "this", "that", "so", "no", "not"
+        }
+
         def tokenize(s: str) -> set[str]:
             return {
                 w for w in re.findall(r"[a-z0-9]+", s.lower())
@@ -2270,6 +3369,36 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             cand_t_tokens = tokenize(c_title_clean)
             cand_a_tokens = tokenize(c_artist_clean)
             cand_core_tokens = cand_t_tokens | cand_a_tokens
+
+            # Mandatory Title Verification:
+            # If the candidate has an identifiable title, it MUST match the query's title.
+            # Matching the artist alone must NEVER match a different song by the same artist!
+            has_title_cand = bool(norm_c_title or cand_t_tokens)
+            if has_title_cand:
+                # Content tokens (keywords minus grammatical stopwords)
+                tt_content = {w for w in title_tokens if w not in STOP_WORDS}
+                ct_content = {w for w in cand_t_tokens if w not in STOP_WORDS}
+                q_content = {w for w in query_tokens if w not in STOP_WORDS}
+
+                # If both titles contain meaningful content keywords, they MUST share at least one keyword!
+                # E.g. 'where is my husband' (keyword: husband) must never match 'where is my mind' (keyword: mind)
+                if tt_content and ct_content and not (tt_content & ct_content):
+                    return 0
+                if ct_content and q_content and not (ct_content & q_content):
+                    return 0
+
+                exact_t = bool(norm_target_title and norm_c_title and norm_target_title == norm_c_title)
+                exact_yq = bool(norm_yt_query and norm_c_title and (norm_yt_query == norm_c_title or (len(norm_c_title) >= 5 and norm_c_title in norm_yt_query)))
+                sub_t = bool(norm_target_title and norm_c_title and len(norm_target_title) >= 5 and len(norm_c_title) >= 5 and (norm_target_title in norm_c_title or norm_c_title in norm_target_title))
+                token_t_equal = bool(title_tokens and cand_t_tokens and title_tokens == cand_t_tokens)
+                token_t_subset = bool(cand_t_tokens and (cand_t_tokens.issubset(title_tokens) or cand_t_tokens.issubset(query_tokens)))
+                token_t_ratio = False
+                if title_tokens and cand_t_tokens:
+                    comm_t = title_tokens & cand_t_tokens
+                    token_t_ratio = (len(comm_t) / max(len(title_tokens), len(cand_t_tokens))) >= 0.65
+
+                if not (exact_t or exact_yq or sub_t or token_t_equal or token_t_subset or token_t_ratio):
+                    return 0
 
             score = 0
 
@@ -2494,7 +3623,7 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             if target_idx == -1:
                 self.audio_engine.playlist.append(file_path)
                 target_idx = len(self.audio_engine.playlist) - 1
-                self.populate_playlist_ui()
+            self.populate_playlist_ui()
         elif self.audio_engine.playlist:
             target_idx = len(self.audio_engine.playlist) - 1
 
@@ -2630,3 +3759,114 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                 if hasattr(self, "settings_dialog") and hasattr(self.settings_dialog, "lbl_folder_path"):
                     self.settings_dialog.lbl_folder_path.setText(f"{target}")
                 self.save_settings()
+
+    def on_filter_results_changed(self, query: str, matched: int):
+        """Called by PlaylistPanelMixin.filter_tracks when search results change."""
+        if not hasattr(self, "yt_download_card"):
+            return
+        if query and matched == 0:
+            raw_q = self.search_input.text().strip()
+            self.lbl_yt_prompt.setText(f"No local song detected matching '{raw_q}'.")
+            self.lbl_yt_prompt.setStyleSheet("color: #fca5a5; font-size: 11px; font-weight: 500;")
+            self.btn_yt_download.setText(f"Download '{raw_q}' from YouTube")
+            self.btn_yt_download.setEnabled(True)
+            self.yt_download_card.show()
+        else:
+            if not getattr(self, "_is_downloading_yt_search", False):
+                self.yt_download_card.hide()
+
+    def on_search_return_pressed(self):
+        """Pressing Enter in search bar: plays first visible match, or downloads from YouTube if none."""
+        query = self.search_input.text().strip()
+        if not query:
+            return
+        first_visible = None
+        for i in range(self.list_tracks.count()):
+            item = self.list_tracks.item(i)
+            if item and not item.isHidden():
+                first_visible = item
+                break
+        if first_visible:
+            self.on_track_double_clicked(first_visible)
+        else:
+            self.on_yt_prompt_download_clicked()
+
+    def _on_yt_search_progress_safe(self, msg: str):
+        """Thread-safe UI updater for YouTube search download progress."""
+        if hasattr(self, "lbl_yt_prompt"):
+            self.lbl_yt_prompt.setText(msg)
+        if hasattr(self, "show_download_status"):
+            self.show_download_status(msg)
+
+    def on_yt_prompt_download_clicked(self):
+        """Downloads the searched song directly from YouTube into Downloaded Songs folder."""
+        query = self.search_input.text().strip()
+        if not query:
+            return
+        music_dir = self.audio_engine.folder_path or os.path.join(PROJECT_ROOT, "music")
+        target_dir = os.path.join(music_dir, "Downloaded Songs")
+        os.makedirs(target_dir, exist_ok=True)
+
+        self._is_downloading_yt_search = True
+        self.lbl_yt_prompt.setText(f"Searching and downloading '{query}' from YouTube...")
+        self.lbl_yt_prompt.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        self.btn_yt_download.setEnabled(False)
+        self.btn_yt_download.setText("Downloading...")
+        self.show_download_status(f"Downloading '{query}'...")
+
+        def _on_progress(msg: str):
+            self.yt_search_progress.emit(msg)
+
+        def _worker():
+            ok = False
+            final_p = ""
+            try:
+                if hasattr(self, "downloader") and self.downloader:
+                    ok, final_p = self.downloader.download_sync_query(
+                        query,
+                        target_dir,
+                        progress_cb=_on_progress,
+                        return_path=True,
+                    )
+            except Exception as e:
+                log.warning("[DOWNLOAD] Error during yt search download: %s", e)
+            finally:
+                self.yt_search_done.emit(ok, final_p, query)
+
+        threading.Thread(target=_worker, daemon=True, name="YtSearchWorker").start()
+
+    def _on_yt_search_download_done(self, ok: bool, file_path: str, query: str):
+        self._is_downloading_yt_search = False
+        if ok and file_path and os.path.exists(file_path):
+            fn = os.path.basename(file_path)
+            self.lbl_yt_prompt.setText(f"Downloaded '{fn}' to Downloaded Songs folder!")
+            self.lbl_yt_prompt.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: bold;")
+            self.btn_yt_download.setText("Downloaded!")
+            self.btn_yt_download.setEnabled(False)
+            self.show_download_status(f"Downloaded: {fn}", is_done=True)
+
+            # Clear search input so user sees the newly downloaded song in track list immediately
+            self.search_input.blockSignals(True)
+            self.search_input.clear()
+            self.search_input.blockSignals(False)
+
+            self.audio_engine.refresh_playlist()
+            self.refresh_tracklist()
+            self.populate_playlist_ui()
+
+            norm = os.path.normpath(file_path)
+            for r in range(self.list_tracks.count()):
+                it = self.list_tracks.item(r)
+                if it and os.path.normpath(it.data(Qt.ItemDataRole.UserRole + 1) or "") == norm:
+                    self.list_tracks.setCurrentRow(r)
+                    self.list_tracks.scrollToItem(it)
+                    break
+
+            # Auto-hide the download prompt card after 3.5s so the UI returns to normal
+            QTimer.singleShot(3500, lambda: self.yt_download_card.hide() if not getattr(self, "_is_downloading_yt_search", False) else None)
+        else:
+            self.lbl_yt_prompt.setText(f"Could not download '{query}' from YouTube.")
+            self.lbl_yt_prompt.setStyleSheet("color: #f87171; font-size: 11px;")
+            self.btn_yt_download.setEnabled(True)
+            self.btn_yt_download.setText("Retry Download")
+            self.show_download_status(f"Could not download '{query}'", is_error=True)

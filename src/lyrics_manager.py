@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional, Tuple
@@ -408,9 +409,13 @@ class LyricsManager:
         return False
 
     def check_file_auto_refresh(self):
-        """Checks if local .lrc was modified on disk and auto-refreshes if needed."""
+        """Checks if local .lrc was modified on disk and auto-refreshes if needed (throttled)."""
         if not self.current_track_path:
             return
+        now = time.monotonic()
+        if now - getattr(self, "_last_refresh_check", 0.0) < 0.5:
+            return
+        self._last_refresh_check = now
         local_lrc = os.path.splitext(self.current_track_path)[0] + ".lrc"
         if os.path.exists(local_lrc):
             try:

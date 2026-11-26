@@ -18,7 +18,7 @@ import time
 import urllib.request
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
 
 log = logging.getLogger("TaliaUpdater")
 
@@ -208,9 +208,9 @@ set "SRC_DIR=!EXTRACT_DIR!"
 if exist "!EXTRACT_DIR!\\Talia\\%EXE_NAME%" set "SRC_DIR=!EXTRACT_DIR!\\Talia"
 if exist "!EXTRACT_DIR!\\Talia\\Talia.exe" set "SRC_DIR=!EXTRACT_DIR!\\Talia"
 
-:: 4. Copy updated binary and asset files in place, safely preserving user music and settings
+:: 4. Copy updated binary and asset files in place, safely preserving user music, caches, and settings
 echo [*] Applying update to !TARGET_DIR!...
-robocopy "!SRC_DIR!" "!TARGET_DIR!" /E /XD "!TARGET_DIR!\\music" "!TARGET_DIR!\\assets\\lyrics_cache" "!TARGET_DIR!\\_talia_update" /XF "!TARGET_DIR!\\settings.json" /R:2 /W:1 >nul
+robocopy "!SRC_DIR!" "!TARGET_DIR!" /E /XD "!TARGET_DIR!\\music" "!TARGET_DIR!\\assets\\lyrics_cache" "!TARGET_DIR!\\assets\\radio_cache" "!TARGET_DIR!\\logs" "!TARGET_DIR!\\_talia_update" /XF "!TARGET_DIR!\\settings.json" /R:2 /W:1 >nul
 
 :: 5. Cleanup temporary extraction folder and downloaded archive
 echo [*] Cleaning up temporary files...

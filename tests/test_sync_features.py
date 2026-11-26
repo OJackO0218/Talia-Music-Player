@@ -408,6 +408,15 @@ def test_find_matching_party_track(qapp, tmp_path):
     }
     idx_false = panel.find_matching_party_track(false_data)
     assert idx_false == -1
+    # Test that same artist but different song is NEVER falsely matched
+    diff_data = {
+        "title": "Ruin My Life",
+        "artist": "Zara Larsson",
+        "filename": "Zara Larsson - Ruin My Life.opus",
+        "yt_query": "Zara Larsson - Ruin My Life",
+    }
+    idx_diff = panel.find_matching_party_track(diff_data)
+    assert idx_diff == -1
 
     panel.hide()
     lyrics.hide()
@@ -1016,7 +1025,7 @@ def test_normal_queue_ui_interactions(qapp, tmp_path):
     overlay.hide()
 
 
-def test_updater_batch_script_generation(tmp_path):
+def test_updater_batch_script_generation(qapp, tmp_path):
     """Verifies that the updater batch script properly configures PID timeout and safety fallbacks."""
     import os
     from updater import create_updater_batch_script

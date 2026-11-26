@@ -15,7 +15,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
-from typing import Any, Optional
+from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 

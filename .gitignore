@@ -32,8 +32,28 @@ _temp*
 # Scratch & unneeded raw extraction assets
 assets_eyes/
 assets/sounds/legacy/
+assets/sounds/cyberpunk_ui/*
+!assets/sounds/cyberpunk_ui/ui_menu_mouse_click.wav
+!assets/sounds/cyberpunk_ui/ui_menu_hover.wav
+!assets/sounds/cyberpunk_ui/ui_menu_onpress.wav
+!assets/sounds/cyberpunk_ui/ui_menu_value_up.wav
+!assets/sounds/cyberpunk_ui/ui_menu_value_down.wav
+!assets/sounds/cyberpunk_ui/ui_menu_open.wav
+!assets/sounds/cyberpunk_ui/ui_menu_close.wav
+!assets/sounds/cyberpunk_ui/ui_main_menu_open_tab.wav
+!assets/sounds/cyberpunk_ui/ui_main_menu_saves_delete_confirmation.wav
+!assets/sounds/cyberpunk_ui/ui_menu_perk_buy.wav
+!assets/sounds/cyberpunk_ui/ui_menu_perk_level_up.wav
+!assets/sounds/cyberpunk_ui/ui_menu_enter.wav
+!assets/sounds/cyberpunk_ui/ui_menu_exit.wav
+assets/ui_cyber/figma_*.svg
+assets/ui_cyber/export.png
+assets/ui_cyber/bg_texture.png
+assets/ui_cyber/controller_panel_bg@2x.png
+assets/ui_cyber/chassis_body.jpg
 assets/lyrics_cache/*.lrc
 !assets/lyrics_cache/click_button.lrc
+assets/radio_cache/
 build_stage/
 # Music tracking rule: Only track Cyberpunk Edgerunners and empty Downloaded Songs folder
 music/*

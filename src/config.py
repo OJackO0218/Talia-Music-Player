@@ -66,11 +66,11 @@ DEFAULT_OVERLAY_SIZE = 300
 MIN_CHAR_SIZE = 150
 MAX_CHAR_SIZE = 3840
 
-# Mouth bounding box coordinates in the 591x591 sprite space:
-MOUTH_BOX_X = 143
-MOUTH_BOX_Y = 228
-MOUTH_BOX_W = 300
-MOUTH_BOX_H = 217
+# Mouth bounding box coordinates in the 591x591 sprite space (covers transparent cavity with generous safety margin):
+MOUTH_BOX_X = 135
+MOUTH_BOX_Y = 220
+MOUTH_BOX_W = 320
+MOUTH_BOX_H = 232
 
 # Eye socket origins in the 591x591 sprite space:
 DEFAULT_ORIGIN_LX = 148
@@ -95,6 +95,7 @@ DEFAULT_SETTINGS = {
     "lyrics_color": "#00ffff",
     "lyrics_word_glow": True,
     "lyrics_dialogue_mode": True,
+    "show_subtitle_bg": True,
     "lyrics_font": "Rajdhani",
     "lyrics_font_size": 18,
     "lyrics_offsets": {},
@@ -107,11 +108,19 @@ DEFAULT_SETTINGS = {
     "download_folder": "",
     "discord_rpc": True,
     "queue": [],
+    "play_counts": {},
+    "favourite_tracks": [],
+    "custom_playlists": {},
+    "current_playlist": "All Tracks",
+    "current_sort": "Default",
+    "playtime_seconds": 0,
+    "level": 0,
+    "exp": 0,
 }
 
 
 SETTINGS_VERSION = 2
-APP_VERSION = "2.4.2"
+APP_VERSION = "2.6.0"
 
 
 def portable_path(path: str) -> str:
@@ -161,6 +170,40 @@ def load_settings(path: str | None = None) -> dict:
         settings["queue"] = []
     if not isinstance(settings.get("lyrics_offsets"), dict):
         settings["lyrics_offsets"] = {}
+    if not isinstance(settings.get("play_counts"), dict):
+        settings["play_counts"] = {}
+    else:
+        resolved_counts = {}
+        for p, count in settings["play_counts"].items():
+            if isinstance(p, str):
+                c = int(count)
+                resolved_counts[p] = c
+                resolved_p = resolve_path(p)
+                resolved_counts[resolved_p] = c
+                resolved_counts[os.path.normpath(resolved_p)] = c
+                resolved_counts[portable_path(p)] = c
+        settings["play_counts"] = resolved_counts
+    if not isinstance(settings.get("favourite_tracks"), list):
+        settings["favourite_tracks"] = []
+    else:
+        settings["favourite_tracks"] = [
+            resolve_path(p) for p in settings["favourite_tracks"]
+            if isinstance(p, str) and p.strip()
+        ]
+    if not isinstance(settings.get("custom_playlists"), dict):
+        settings["custom_playlists"] = {}
+    else:
+        resolved_pl = {}
+        for pl_name, p_list in settings["custom_playlists"].items():
+            if isinstance(p_list, list):
+                resolved_pl[pl_name] = [
+                    resolve_path(p) for p in p_list if isinstance(p, str) and p.strip()
+                ]
+        settings["custom_playlists"] = resolved_pl
+    if not isinstance(settings.get("current_playlist"), str):
+        settings["current_playlist"] = "All Tracks"
+    if not isinstance(settings.get("current_sort"), str):
+        settings["current_sort"] = "Default"
     try:
         val = int(settings.get("lyrics_font_size", 18))
         settings["lyrics_font_size"] = max(14, min(60, val))
@@ -175,6 +218,23 @@ def save_settings(data: dict, path: str | None = None) -> bool:
     settings_path = path or SETTINGS_FILE
     payload = dict(data)
     payload["_version"] = SETTINGS_VERSION
+
+    # Preserve level/XP when an unrelated component saves a settings dict that
+    # was loaded earlier (overlay position, download folder, guide, etc.).
+    # Without this, those write-backs silently reset all progress.
+    xp_keys = ("level", "exp", "playtime_seconds")
+    if any(key not in payload for key in xp_keys):
+        try:
+            if os.path.exists(settings_path):
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                if isinstance(existing, dict):
+                    for key in xp_keys:
+                        payload.setdefault(key, existing.get(key, 0))
+        except (OSError, json.JSONDecodeError):
+            pass
+    for key in xp_keys:
+        payload.setdefault(key, DEFAULT_SETTINGS.get(key, 0))
     for key in ("music_folder", "download_folder"):
         if payload.get(key):
             payload[key] = portable_path(payload[key])
@@ -183,6 +243,26 @@ def save_settings(data: dict, path: str | None = None) -> bool:
             portable_path(p) for p in payload["queue"]
             if isinstance(p, str) and p.strip()
         ]
+    if isinstance(payload.get("favourite_tracks"), list):
+        payload["favourite_tracks"] = [
+            portable_path(p) for p in payload["favourite_tracks"]
+            if isinstance(p, str) and p.strip()
+        ]
+    if isinstance(payload.get("custom_playlists"), dict):
+        portable_pl = {}
+        for pl_name, p_list in payload["custom_playlists"].items():
+            if isinstance(p_list, list):
+                portable_pl[pl_name] = [
+                    portable_path(p) for p in p_list if isinstance(p, str) and p.strip()
+                ]
+        payload["custom_playlists"] = portable_pl
+    if isinstance(payload.get("play_counts"), dict):
+        portable_counts = {}
+        for p, count in payload["play_counts"].items():
+            if isinstance(p, str):
+                port_key = portable_path(p)
+                portable_counts[port_key] = max(portable_counts.get(port_key, 0), int(count))
+        payload["play_counts"] = portable_counts
     directory = os.path.dirname(os.path.abspath(settings_path)) or "."
     tmp_path = None
     try:
@@ -219,8 +299,14 @@ def trim_process_memory(force_gc: bool = False):
         pass
 
 
-def init_app_fonts():
+_fonts_initialized = False
+
+
+def init_app_fonts(force: bool = False):
     """Pre-registers all bundled fonts in assets/fonts/ (including Rajdhani) with QFontDatabase."""
+    global _fonts_initialized
+    if _fonts_initialized and not force:
+        return []
     from PyQt6.QtGui import QFontDatabase
 
     registered = []
@@ -231,6 +317,7 @@ def init_app_fonts():
                 fid = QFontDatabase.addApplicationFont(p)
                 if fid != -1:
                     registered.extend(QFontDatabase.applicationFontFamilies(fid))
+    _fonts_initialized = True
     return registered
 
 
@@ -279,12 +366,6 @@ SWP_NOSIZE = 0x0001
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
 SWP_FRAMECHANGED = 0x0020
-
-VK_F7 = 0x76  # F7: Toggle Lyrics Overlay
-VK_F8 = 0x77  # F8: Toggle Move Talia mode
-VK_F9 = 0x78  # F9: Toggle Show/Hide overlay
-VK_F10 = 0x79  # F10: Toggle Audio Source Mode (Desktop vs Player)
-VK_F11 = 0x7A  # F11: Toggle Eco Mode (< 1% CPU)
 
 VK_CONTROL = 0x11
 VK_OEM_4 = 0xDB  # '[' key (Lyrics Sync Offset -0.25s)
@@ -343,3 +424,83 @@ COLOR_THEMES = {
         "wave_glow": QColor(160, 100, 255, 90),
     },
 }
+
+
+# Level pacing: 1 EXP per second of active playback.
+# Level 0 -> 1 needs 300 EXP (5 minutes); each later level costs 15% more.
+EXP_PER_SECOND = 1
+LEVEL_1_EXP = 300
+LEVEL_EXP_GROWTH = 1.15
+
+
+def get_exp_for_level(level: int) -> int:
+    """Calculates the EXP needed to advance from `level` to `level + 1`.
+
+    Level 0 -> 1 requires 300 EXP (5 minutes at 1 EXP/sec). Each subsequent
+    level costs 15% more than the previous one: 300 * (1.15 ** level).
+    Cumulative playtime is roughly 1.7 h to level 10 and 8.5 h to level 20.
+    """
+    level = max(0, int(level))
+    return int(round(LEVEL_1_EXP * (LEVEL_EXP_GROWTH**level)))
+
+
+def get_cumulative_exp_for_level(level: int) -> int:
+    """Calculates the cumulative EXP (in seconds) required to reach `level + 1`.
+
+    Level 0 -> 300s (5m) to reach Level 1.
+    Level 1 -> 300s + 345s = 645s (11m) to reach Level 2.
+    """
+    level = max(0, int(level))
+    return sum(get_exp_for_level(i) for i in range(level + 1))
+
+
+def apply_playtime_exp(
+    level: int, exp: int, playtime_seconds: int, seconds: int = 1
+) -> tuple[int, int, int, int, bool]:
+    """Advances XP in memory without touching settings.json.
+
+    Args:
+        level: Current level.
+        exp: EXP accumulated toward the next level.
+        playtime_seconds: Total lifetime playtime in seconds.
+        seconds: Seconds of playback to add (1 second = 1 EXP).
+
+    Returns:
+        (new_level, new_exp, new_playtime_seconds, exp_needed_for_next, leveled_up)
+    """
+    seconds = max(0, int(seconds))
+    level = max(0, int(level))
+    exp = max(0, int(exp)) + seconds
+    playtime_seconds = max(0, int(playtime_seconds)) + seconds
+
+    leveled_up = False
+    while exp >= get_exp_for_level(level):
+        exp -= get_exp_for_level(level)
+        level += 1
+        leveled_up = True
+
+    return level, exp, playtime_seconds, get_exp_for_level(level), leveled_up
+
+
+def add_playtime_exp(seconds: int = 1) -> tuple[int, int, int, bool]:
+    """Disk-backed XP helper (kept for scripts/tests).
+
+    The live UI uses :func:`apply_playtime_exp` and batches saves so it does not
+    rewrite settings.json every second.
+
+    Returns:
+        (current_level, current_exp, max_exp_for_level, did_level_up)
+    """
+    settings = load_settings()
+    level, exp, playtime_seconds, req, leveled_up = apply_playtime_exp(
+        settings.get("level", 0),
+        settings.get("exp", 0),
+        settings.get("playtime_seconds", 0),
+        seconds,
+    )
+    settings["playtime_seconds"] = playtime_seconds
+    settings["level"] = level
+    settings["exp"] = exp
+    save_settings(settings)
+    return level, exp, req, leveled_up
+

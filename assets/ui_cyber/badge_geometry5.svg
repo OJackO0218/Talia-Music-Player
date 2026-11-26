@@ -1,0 +1,15 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="25" height="16.195" viewBox="0 0 25 16.195" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="Forms/geometry5">
+<path id="Vector 2850" d="M0 6.96813V5.63303L5.62842 0H7.66849L8.06011 0.804719H16.9581L17.3679 0H19.4353L25 5.58731V6.9407L17.031 15.9664L16.5027 16.195L15.7377 14.677H9.30783L8.49727 16.195L7.9235 15.9664L0 6.96813Z" fill="#F80B30"/>
+<g id="Vector 2851">
+<use xlink:href="#stroke0_0_664" fill="#C5102C"/>
+<mask id="stroke1_0_664" fill="white">
+<use xlink:href="#stroke0_0_664"/>
+</mask>
+<path d="M1.10063 5.65354V6.80717L7.84703 14.7396L8.3811 14.9371L9.13559 13.6254H16.064L16.7761 14.9371L17.2678 14.7396L24.0566 6.78347V5.61403L19.5058 1.10063H17.5815L17.2 1.79597H7.81696L7.45243 1.10063H5.55349L1.10063 5.65354Z" stroke-width="0.628931" stroke="black" mask="url(#stroke1_0_664)"/>
+</g>
+</g>
+<defs>
+<path id="stroke0_0_664" d="M1.10063 6.80717V5.65354L5.55349 1.10063H7.45243L7.81696 1.79597H17.2L17.5815 1.10063H19.5058L24.0566 5.61403V6.78347L17.2678 14.7396L16.7761 14.9371L16.064 13.6254H9.13559L8.3811 14.9371L7.84703 14.7396L1.10063 6.80717Z"/>
+</defs>
+</svg>

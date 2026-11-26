@@ -2,31 +2,47 @@
 High-performance audio streaming engine with vectorized FFT spectral analysis.
 """
 
-import ctypes
-import heapq
-import math
 import logging
 import os
 import random
 import re
 import threading
 import time
+import weakref
 
 import numpy as np
-import sounddevice as sd
 import soundfile as sf
 
 from audio_feeder import AudioFeeder
-from config import (
-    SUPPORTED_AUDIO_EXTS,
-    VK_MEDIA_NEXT_TRACK,
-    VK_MEDIA_PLAY_PAUSE,
-    VK_MEDIA_PREV_TRACK,
-    trim_process_memory,
-    user32,
-)
+from config import SUPPORTED_AUDIO_EXTS, trim_process_memory
 
 log = logging.getLogger(__name__)
+
+_active_engines: weakref.WeakSet["CyberAudioEngine"] = weakref.WeakSet()
+
+
+def _cleanup_audio_engines() -> None:
+    """Shut down any active CyberAudioEngine instances (e.g. between tests)."""
+    for eng in list(_active_engines):
+        try:
+            eng.shutdown()
+        except Exception:
+            pass
+
+sd = None
+_sd_lock = threading.Lock()
+
+
+def _get_sd():
+    """Lazily imports sounddevice (PortAudio) so GUI launch is never blocked on audio probing."""
+    global sd
+    if sd is None:
+        with _sd_lock:
+            if sd is None:
+                import sounddevice as _sounddevice
+
+                sd = _sounddevice
+    return sd
 
 
 class CyberAudioEngine:
@@ -35,6 +51,7 @@ class CyberAudioEngine:
     def __init__(self, num_bars: int = 28):
         self.stream = None
         self._stream_lock = threading.Lock()
+        _active_engines.add(self)
         self._last_device_recovery_time = 0.0
         self.data = None
         self.active_sf = None
@@ -99,6 +116,7 @@ class CyberAudioEngine:
         self._shuffle_history: list[int] = []
         self.track_finished = False
         self.queue = []
+        self.track_started_hook = None
 
         # Real-time BPM & Bass Onset Tracking (Musical Grooving & Head-Bobbing)
         self.estimated_bpm = 120.0
@@ -145,6 +163,10 @@ class CyberAudioEngine:
             self._shuffle_history.clear()
             self._trigger_preload_next()
 
+    def set_shuffle(self, enabled: bool):
+        """Helper to toggle or set shuffle state programmatically."""
+        self.shuffle = bool(enabled)
+
     def reset_bpm_tracking(self):
         """Resets BPM detection state when a new song loads or user seeks."""
         self.last_beat_time = 0.0
@@ -158,57 +180,9 @@ class CyberAudioEngine:
         self.eco_mode = enabled
         self._cached_eco_spectrum = None
 
-    def set_audio_mode(self, mode: str):
-        """Switches between 'player' (local playlist files) and 'desktop' (Windows audio loopback)."""
-        if mode == self.audio_mode:
-            return
-        self.audio_mode = mode
-        if mode == "desktop":
-            # Pause local file playback
-            if self.is_playing:
-                self.pause()
-            self._start_desktop_capture()
-            log.info(
-                "[AUDIO SOURCE] Switched to DESKTOP AUDIO (Listening to osu!, Spotify, Games)."
-            )
-        else:
-            self._stop_desktop_capture()
-            log.info("[AUDIO SOURCE] Switched to BUILT-IN MUSIC PLAYER.")
-
-    def _start_desktop_capture(self):
-        """Spawns background audio loopback capture thread."""
-        self._stop_desktop_capture()
-        self.desktop_running = True
-        self.desktop_thread = threading.Thread(target=self._desktop_capture_worker, daemon=True)
-        self.desktop_thread.start()
-
-    def _stop_desktop_capture(self):
-        """Stops background loopback capture thread."""
-        self.desktop_running = False
-        if self.desktop_thread and self.desktop_thread.is_alive():
-            self.desktop_thread.join(timeout=0.25)
-        self.desktop_thread = None
-
-    def _desktop_capture_worker(self):
-        """Real-time WASAPI loopback capture worker thread."""
-        ctypes.windll.ole32.CoInitialize(None)
-        try:
-            import soundcard as sc
-
-            spk = sc.default_speaker()
-            mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
-            with mic.recorder(samplerate=48000, blocksize=1024) as recorder:
-                while self.desktop_running:
-                    data = recorder.record(numframes=1024)
-                    if not self.desktop_running:
-                        break
-                    # Convert stereo to mono and scale with volume sensitivity
-                    mono = np.mean(data, axis=1) * (self.volume / 0.85)
-                    self.latest_buffer = mono.astype(np.float32)
-        except Exception as e:
-            log.error(f"[DESKTOP AUDIO ERROR] {e}")
-        finally:
-            ctypes.windll.ole32.CoUninitialize()
+    def set_audio_mode(self, mode: str = "player"):
+        """Player mode only (desktop audio mode removed)."""
+        self.audio_mode = "player"
 
     def set_lyrics_manager(self, mgr):
         self.lyrics_manager = mgr
@@ -257,8 +231,16 @@ class CyberAudioEngine:
         self.track_finished = False
         self.reset_bpm_tracking()
 
+    def prewarm_audio_backend(self) -> None:
+        """Initializes sounddevice/PortAudio asynchronously after window creation."""
+        try:
+            _get_sd()
+        except Exception as exc:
+            log.debug("Audio backend prewarm skipped: %s", exc)
+
     def recreate_stream(self, force_reinit_device: bool = False) -> bool:
         """Safely creates or replaces the PortAudio output stream, refreshing hardware endpoints if requested."""
+        sd_mod = _get_sd()
         with self._stream_lock:
             if self.stream is not None:
                 try:
@@ -274,8 +256,8 @@ class CyberAudioEngine:
             if force_reinit_device:
                 try:
                     log.info("[AUDIO ENGINE] Re-initializing PortAudio hardware devices...")
-                    sd._terminate()
-                    sd._initialize()
+                    sd_mod._terminate()
+                    sd_mod._initialize()
                 except Exception as exc:
                     log.warning("[AUDIO ENGINE] PortAudio re-initialization warning: %s", exc)
 
@@ -283,7 +265,7 @@ class CyberAudioEngine:
                 return False
 
             try:
-                self.stream = sd.OutputStream(
+                self.stream = sd_mod.OutputStream(
                     samplerate=self.sr,
                     channels=self.channels,
                     callback=self._audio_callback,
@@ -294,9 +276,9 @@ class CyberAudioEngine:
                 log.warning("[AUDIO ENGINE] OutputStream creation failed: %s", exc)
                 if not force_reinit_device:
                     try:
-                        sd._terminate()
-                        sd._initialize()
-                        self.stream = sd.OutputStream(
+                        sd_mod._terminate()
+                        sd_mod._initialize()
+                        self.stream = sd_mod.OutputStream(
                             samplerate=self.sr,
                             channels=self.channels,
                             callback=self._audio_callback,
@@ -315,6 +297,7 @@ class CyberAudioEngine:
         if now - getattr(self, "_last_device_recovery_time", 0.0) < 0.4:
             return False
         self._last_device_recovery_time = now
+        sd_mod = _get_sd()
 
         with self._stream_lock:
             was_playing = self.is_playing if resume_playback is None else resume_playback
@@ -333,11 +316,11 @@ class CyberAudioEngine:
                 self.stream = None
 
             try:
-                sd._terminate()
-                sd._initialize()
+                sd_mod._terminate()
+                sd_mod._initialize()
                 log.info(
                     "[AUDIO ENGINE] PortAudio refreshed. Active default device: %s",
-                    getattr(sd.default, "device", None),
+                    getattr(sd_mod.default, "device", None),
                 )
             except Exception as exc:
                 log.warning("[AUDIO ENGINE] PortAudio re-init warning: %s", exc)
@@ -355,7 +338,7 @@ class CyberAudioEngine:
                 and cur_frame < total
             ):
                 try:
-                    self.stream = sd.OutputStream(
+                    self.stream = sd_mod.OutputStream(
                         samplerate=self.sr,
                         channels=self.channels,
                         callback=self._audio_callback,
@@ -446,13 +429,8 @@ class CyberAudioEngine:
 
     def rebuild_shuffle_order(self, starting_index: int = -1):
         """
-        Builds a balanced shuffle by interleaving artist/folder clusters.
-
-        The most represented cluster is always scheduled next unless that would
-        repeat the current artist, which is the classic greedy solution to the
-        "rearrange a string so no two adjacent characters are equal" problem.
-        Same-artist runs only remain when one cluster genuinely dominates the
-        playlist and no better ordering exists.
+        Builds a true random shuffle permutation without cluster or playlist interleaving.
+        Ensures songs are played in a completely random order without repeating.
         """
         if not self.playlist:
             self._shuffle_order = []
@@ -464,50 +442,13 @@ class CyberAudioEngine:
             self._shuffle_pos = 0
             return
 
-        # 1. Group track indices by artist/folder and randomise within each cluster.
-        clusters: dict[str, list[int]] = {}
-        for idx, path in enumerate(self.playlist):
-            clusters.setdefault(self._extract_cluster_key(path), []).append(idx)
-        for indices in clusters.values():
-            random.shuffle(indices)
-
-        # 2. If a start track was requested, play it first and remove it from its cluster.
-        order: list[int] = []
-        last_key: str | None = None
+        order = list(range(n))
         if 0 <= starting_index < n:
-            last_key = self._extract_cluster_key(self.playlist[starting_index])
-            if starting_index in clusters.get(last_key, []):
-                clusters[last_key].remove(starting_index)
-                if not clusters[last_key]:
-                    del clusters[last_key]
-            order.append(starting_index)
-
-        # 3. Dynamic anti-clustering with weighted random reach:
-        #    Prevents starvation of smaller artists by sampling proportionally from all
-        #    eligible clusters, while prioritizing critical clusters to eliminate adjacent repeats.
-        while clusters:
-            rem_total = sum(len(indices) for indices in clusters.values())
-            critical_key = None
-            for k, v in clusters.items():
-                if len(v) >= math.ceil(rem_total / 2.0):
-                    critical_key = k
-                    break
-
-            eligible = [k for k in clusters.keys() if k != last_key]
-            if not eligible:
-                eligible = list(clusters.keys())
-
-            if critical_key and critical_key in eligible:
-                chosen_key = critical_key
-            else:
-                weights = [len(clusters[k]) for k in eligible]
-                chosen_key = random.choices(eligible, weights=weights, k=1)[0]
-
-            chosen_idx = clusters[chosen_key].pop()
-            order.append(chosen_idx)
-            last_key = chosen_key
-            if not clusters[chosen_key]:
-                del clusters[chosen_key]
+            order.remove(starting_index)
+            random.shuffle(order)
+            order.insert(0, starting_index)
+        else:
+            random.shuffle(order)
 
         self._shuffle_order = order
         self._shuffle_pos = 0
@@ -700,18 +641,25 @@ class CyberAudioEngine:
                     )
                     feeder.start()
                     self.feeder = feeder
-            needs_new_stream = (
-                self.stream is None
-                or getattr(self.stream, "samplerate", None) != self.sr
-                or getattr(self.stream, "channels", None) != self.channels
-            )
-            if needs_new_stream:
-                if not self.recreate_stream(force_reinit_device=False):
-                    self.recreate_stream(force_reinit_device=True)
+            if auto_play or self.stream is not None:
+                needs_new_stream = (
+                    self.stream is None
+                    or getattr(self.stream, "samplerate", None) != self.sr
+                    or getattr(self.stream, "channels", None) != self.channels
+                )
+                if needs_new_stream:
+                    if not self.recreate_stream(force_reinit_device=False):
+                        self.recreate_stream(force_reinit_device=True)
             if self.lyrics_manager:
                 self.lyrics_manager.load_track(file_path)
+            self._active_file_path = file_path
             if auto_play:
                 self.play()
+                if hasattr(self, "track_started_hook") and callable(self.track_started_hook):
+                    try:
+                        self.track_started_hook(file_path)
+                    except Exception as e:
+                        log.debug("track_started_hook error: %s", e)
             else:
                 self.is_playing = False
                 self.is_paused = True
@@ -817,7 +765,8 @@ class CyberAudioEngine:
     def play(self):
         if self.stream is None:
             if self.active_sf is not None:
-                self.recreate_stream(force_reinit_device=True)
+                if not self.recreate_stream(force_reinit_device=False):
+                    self.recreate_stream(force_reinit_device=True)
             if self.stream is None:
                 self.is_playing = False
                 return
@@ -856,7 +805,8 @@ class CyberAudioEngine:
         self.is_paused = False
         self._leftover = None
         self._invalidate_preload_cache()
-        self._stop_desktop_capture()
+        if hasattr(self, "_stop_desktop_capture"):
+            self._stop_desktop_capture()
         with self._audio_lock:
             self._stop_feeder_locked()
             if self.active_sf is not None:
@@ -874,12 +824,6 @@ class CyberAudioEngine:
             pass
 
     def toggle_play_pause(self):
-        if self.audio_mode == "desktop":
-            user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
-            user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
-            self.desktop_playing = not getattr(self, "desktop_playing", True)
-            log.info("[DESKTOP AUDIO] Sent Play/Pause command to system.")
-            return
         if self.stream is None:
             if self.playlist:
                 if self._shuffle:
@@ -900,18 +844,10 @@ class CyberAudioEngine:
 
     @property
     def is_active(self):
-        """Returns True if local player or desktop audio is active."""
-        if self.audio_mode == "desktop":
-            return getattr(self, "desktop_playing", True)
-        return self.is_playing
+        """Returns True if local player is active."""
+        return bool(self.is_playing)
 
     def next_track(self, crossfade: bool = False):
-        if self.audio_mode == "desktop":
-            user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 0, 0)
-            user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 2, 0)
-            log.info("[DESKTOP AUDIO] Sent Next Track command to system.")
-            return
-
         if getattr(self, "play_next_hook", None) and not getattr(self, "_in_custom_advance", False):
             self._in_custom_advance = True
             try:
@@ -969,10 +905,6 @@ class CyberAudioEngine:
         self.play_index(idx, crossfade=crossfade)
 
     def prev_track(self):
-        if self.audio_mode == "desktop":
-            user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 0, 0)
-            user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 2, 0)
-            return
         if not self.playlist:
             return
         if self.get_position() > 3.0:
@@ -1033,8 +965,9 @@ class CyberAudioEngine:
         self.effective_gain = float(self.volume**2.2) if self.volume > 0.0 else 0.0
 
     def get_current_track_title(self) -> str:
-        if self.audio_mode == "desktop":
-            return "Desktop Audio"
+        active_p = getattr(self, "_active_file_path", "")
+        if active_p:
+            return os.path.basename(active_p)
         if 0 <= self.current_index < len(self.playlist):
             return os.path.basename(self.playlist[self.current_index])
         return "No Track Loaded"
@@ -1153,9 +1086,8 @@ class CyberAudioEngine:
         bass_mag = float(np.mean(fft[1:8]))
         target_beat = min(1.0, bass_mag / 28.0)
         self.beat_energy = max(target_beat, self.beat_energy * 0.82)
-        import time as _time
 
-        now = _time.time()
+        now = time.time()
         diff = target_beat - self._prev_bass_energy
         self.is_beat_kick = False
 
@@ -1199,10 +1131,7 @@ class CyberAudioEngine:
             new_peaks, self.smoothed_bars, np.maximum(0.0, self.peak_bars - self.peak_decay)
         )
         self.peak_decay = np.where(new_peaks, 0.005, self.peak_decay + 0.008)
-        res = (self.smoothed_bars, self.peak_bars, self.beat_energy)
-        if getattr(self, "eco_mode", False):
-            self._cached_eco_spectrum = res
-        return res
+        return (self.smoothed_bars, self.peak_bars, self.beat_energy)
 
     def get_waveform(self, sample_count: int = 80) -> np.ndarray:
         # Sampled oscilloscope points

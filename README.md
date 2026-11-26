@@ -1,8 +1,8 @@
-# Talia Music Player & Visualizer
+# Talia Music Player & Visualizer (v2.6.0)
 
 <img width="317" height="315" alt="Talia Character" src="https://github.com/user-attachments/assets/f19277f1-6acb-4f5e-8b62-ed3fafcd33d5" />
 
-A lightweight transparent desktop character and audio visualizer with eye tracking, synchronized lyrics overlay, YouTube song search & auto-downloader, and low-latency audio reactivity for local files and desktop audio.
+A lightweight transparent desktop character and audio visualizer with eye tracking, synchronized lyrics overlay, endless ★ Random Mix discovery, integrated Lyrics & Calibration Studio, Spotify playlist importing, Listen Together party sync, and low-latency audio reactivity for local files and desktop audio.
 
 ---
 
@@ -43,10 +43,12 @@ Yes it's safe, I even submitted it to Microsoft for further analysis.
 ## Controls
 
 ### Interactive Mouse Controls on Talia
-* **Single Click**: Play / Pause.
+* **Single Click**: Play / Pause (or start **★ Random Mix** when active).
 * **Double Click (Right Side)**: Skip to next track.
 * **Double Click (Left Side)**: Rewind / previous track.
-* **Triple Click**: Open Minimal Player window.
+* **Triple Click**: Open Player Control Panel.
+* **Middle Click**: Save current **★ Random Mix** song permanently to `music/Downloaded Songs/`.
+* **Middle / Right Click & Drag**: Reposition Talia anywhere on screen.
 * **Hold for 0.7s**: Toggle Move Mode (unlocks dragging and resizing).
 * **Hold for 2s**: Exit application.
 
@@ -72,21 +74,15 @@ Yes it's safe, I even submitted it to Microsoft for further analysis.
 
 ## Interface: Player & Settings
 
-### Minimal Player Window (3 Clicks on Talia)
-A compact (380x560) floating window designed for clean day-to-day playback:
-* **Playback & Volume**: Track title, timeline scrub slider, Rewind, Play/Pause, Next, Shuffle, and volume slider.
-* **Song Selection**: Real-time song search with instant filtering, clean track list, and queue management (`+ Queue`, `Queue (N)`, `Clear`).
-* **Download Songs**: Built-in YouTube search, match selection, and one-click library download.
-* **Top Bar**: Fast mode toggles (`Lock Window`, `Player Mode`, `Lyrics`, `Eco Mode`) and the **`⚙ Settings`** button.
+### Main Panel & Tabs (3 Clicks on Talia)
+A compact (380x460) cyberpunk sliding panel beside Talia:
+* **Playback & Transport**: Track title, seek scrubber, Rewind, Play/Pause, Next, Shuffle, and smooth volume slider.
+* **Playlists & `★ Random Mix`**: Switch between `All Tracks`, `Queue`, `★ Favourites`, folders, custom playlists, or **`★ Random Mix`** (taste-based track discovery with a customizable **Exclude ▾** checklist, 2-ahead buffer, 2-previous retention, and instant permanent saving).
+* **Spotify Playlist Sync & Listen Together**: Import public Spotify playlists into Opus 160kbps + `.lrc`, or host/join synchronized listening rooms over Cloud Relay or LAN.
 
-### Full Settings Center (Click `⚙ Settings`)
-A comprehensive customization hub containing:
-* **Playback Modes**: Quick toggles for window lock, audio source, lyrics visibility, and Eco Mode.
-* **Music Folder**: Active directory display, folder picker, explorer shortcut, and library re-scan.
-* **Lyrics Customization**: Font selector dropdown, custom color picker, word highlight glow animation toggle, and manual/auto-sync offset tools.
-* **Visualizer Engine**: Visualizer styles (`Cyber Bars`, `Neon Wave`, `Radial Core`, `Dual Mirror`) and color palette themes.
-* **Character & Display**: Eye sensitivity, character scale, opacity, bass pop reaction, and widescreen mode.
-* **System Actions**: Save settings, controls guide, asset reloader, and clean application exit.
+### Settings & Integrated Tools
+* **Clean Settings Window**: Tabbed configuration (`General`, `Lyrics & Fonts`, `Visualizer`, `Updates & App`) with live X/Y placement, font customization, subtitle shadow box toggle, Eco Mode, and one-click GitHub auto-updates.
+* **Lyrics & Calibration Studio**: Built right into Talia (`Settings > Lyrics & Fonts` or right-click any song -> *Calibrate this song lyric*) — live playback scrubber, double-click cue preview, **`[Space]` beat snap**, background vocal auto-alignment, online candidate search, and folder batch sync.
 
 ---
 

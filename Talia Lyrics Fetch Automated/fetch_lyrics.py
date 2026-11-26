@@ -33,9 +33,12 @@ SUPPORTED_AUDIO_EXTS = (
     ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav", ".wma", ".aac", ".aiff"
 )
 
-SETTINGS_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json"
+_APP_BASE_DIR = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
+SETTINGS_PATH = os.path.join(_APP_BASE_DIR, "settings.json")
 
 
 def get_default_music_dir() -> str:
@@ -50,8 +53,7 @@ def get_default_music_dir() -> str:
         except Exception:
             pass
 
-    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    local_music = os.path.join(parent_dir, "music")
+    local_music = os.path.join(_APP_BASE_DIR, "music")
     if os.path.exists(local_music):
         return os.path.normpath(local_music)
 
@@ -338,25 +340,13 @@ def fetch_synced_lyrics(title: str, artist: str = "", duration: float = 0.0) -> 
 
         for q in fast_queries:
             try:
-                res = syncedlyrics.search(q, synced_only=True, providers=["NetEase", "Lrclib"])
+                res = syncedlyrics.search(q, synced_only=True, providers=["Lrclib", "NetEase"])
                 if res:
                     cleaned = clean_unwanted_lrc_headers(res)
                     if validate_lyrics_match(cleaned, duration):
                         return cleaned
             except Exception:
                 continue
-
-    # 3. Comprehensive fallback with remaining providers
-    if syncedlyrics is not None:
-        fallback_query = f"{primary} {clean_t}".strip() if primary else (title or "")
-        try:
-            res = syncedlyrics.search(fallback_query, synced_only=True, providers=["Megalobiz", "Musixmatch"])
-            if res:
-                cleaned = clean_unwanted_lrc_headers(res)
-                if validate_lyrics_match(cleaned, duration):
-                    return cleaned
-        except Exception:
-            pass
 
     return None
 
@@ -497,37 +487,42 @@ def search_all_lrc_candidates(title: str, artist: str = "", target_duration: flo
     Searches online providers (LRCLIB) and returns all candidate synced lyrics,
     scored and sorted by track duration proximity.
     """
-    query = f"{title} {artist}".strip()
-    url = f"https://lrclib.net/api/search?q={urllib.parse.quote(query)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
-    results = []
-    try:
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        if isinstance(data, list):
-            for item in data:
-                synced = item.get("syncedLyrics")
-                if not synced:
-                    continue
-                cand_dur = float(item.get("duration") or 0.0)
-                lines = [l for l in synced.splitlines() if l.strip()]
-                dur_diff = abs(cand_dur - target_duration) if target_duration > 0 else 0.0
-                is_match = (dur_diff < 3.0) if target_duration > 0 else True
-                results.append({
-                    "id": item.get("id"),
-                    "track": item.get("trackName") or title,
-                    "artist": item.get("artistName") or artist,
-                    "album": item.get("albumName") or "",
-                    "duration": cand_dur,
-                    "duration_diff": round(dur_diff, 1),
-                    "line_count": len(lines),
-                    "is_match": is_match,
-                    "synced": synced
-                })
-        # Sort so exact duration matches are on top, then by smallest duration diff
-        results.sort(key=lambda x: (0 if x["is_match"] else 1, x["duration_diff"]))
-    except Exception:
-        pass
+    def _query_lrclib(query_str: str) -> List[dict]:
+        url = f"https://lrclib.net/api/search?q={urllib.parse.quote(query_str)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "TaliaLyricsFetcher/2.0"})
+        found: List[dict] = []
+        try:
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list):
+                for item in data:
+                    synced = item.get("syncedLyrics")
+                    if not synced:
+                        continue
+                    cand_dur = float(item.get("duration") or 0.0)
+                    lines = [l for l in synced.splitlines() if l.strip()]
+                    dur_diff = abs(cand_dur - target_duration) if target_duration > 0 else 0.0
+                    is_match = (dur_diff < 3.0) if target_duration > 0 else True
+                    found.append({
+                        "id": item.get("id"),
+                        "track": item.get("trackName") or title,
+                        "artist": item.get("artistName") or artist,
+                        "album": item.get("albumName") or "",
+                        "duration": cand_dur,
+                        "duration_diff": round(dur_diff, 1),
+                        "line_count": len(lines),
+                        "is_match": is_match,
+                        "synced": synced,
+                    })
+        except Exception:
+            pass
+        return found
+
+    primary_query = f"{title} {artist}".strip()
+    results = _query_lrclib(primary_query) if primary_query else []
+    if not results and artist and title:
+        results = _query_lrclib(title.strip())
+    results.sort(key=lambda x: (0 if x["is_match"] else 1, x["duration_diff"]))
     return results
 
 

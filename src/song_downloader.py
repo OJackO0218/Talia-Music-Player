@@ -75,10 +75,20 @@ FETCHER_DIR = os.path.join(PROJECT_ROOT, "Talia Lyrics Fetch Automated")
 if FETCHER_DIR not in sys.path:
     sys.path.append(FETCHER_DIR)
 
-try:
-    from fetch_lyrics import fetch_lyrics_for_file
-except ImportError:
-    fetch_lyrics_for_file = None
+fetch_lyrics_for_file = None
+
+
+def _get_fetch_lyrics_fn():
+    """Lazily import fetch_lyrics (syncedlyrics/rapidfuzz) on first download request."""
+    global fetch_lyrics_for_file
+    if fetch_lyrics_for_file is None:
+        try:
+            from fetch_lyrics import fetch_lyrics_for_file as _fn
+
+            fetch_lyrics_for_file = _fn
+        except ImportError:
+            return None
+    return fetch_lyrics_for_file
 
 try:
     from config import trim_process_memory
@@ -360,21 +370,30 @@ def download_and_sync_lrc(
     except Exception as tag_err:
         log.debug("Could not write opus tags: %s", tag_err)
 
-    # Auto-fetch synced lyrics (runs in < 1s with direct LRCLIB & NetEase)
+    # Auto-fetch synced lyrics (runs in < 1s with direct LRCLIB & NetEase, 4s max timeout)
     if progress_cb:
         progress_cb("Auto-fetching verified synced lyrics (.lrc)...")
     lrc_synced = False
-    if fetch_lyrics_for_file:
-        try:
-            lrc_ok, lrc_msg = fetch_lyrics_for_file(final_opus, force_overwrite=True)
-            lrc_synced = lrc_ok
-        except Exception as le:
-            log.info(f"[LYRICS AUTO-FETCH ERROR] {le}")
+    lyrics_fn = _get_fetch_lyrics_fn()
+    if lyrics_fn:
+        def _fetch_worker():
+            nonlocal lrc_synced
+            try:
+                lrc_ok, lrc_msg = lyrics_fn(final_opus, force_overwrite=True)
+                lrc_synced = lrc_ok
+            except Exception as le:
+                log.info(f"[LYRICS AUTO-FETCH ERROR] {le}")
+
+        th = threading.Thread(target=_fetch_worker, daemon=True, name="LyricsFetchWorker")
+        th.start()
+        th.join(timeout=4.0)
     status_msg = f"Saved: {os.path.basename(final_opus)}"
     if lrc_synced:
         status_msg += " (Lyrics synced)"
     else:
         status_msg += " (Audio ready, no lyrics match)"
+    if progress_cb:
+        progress_cb(status_msg)
     return True, final_opus, status_msg
 
 
@@ -480,8 +499,16 @@ class SongDownloaderService(QObject):
                     else:
                         if progress_cb:
                             progress_cb(f"Audio exists, fetching lyrics: {t_stem}")
-                        if fetch_lyrics_for_file:
-                            fetch_lyrics_for_file(exist_opus, force_overwrite=True)
+                        lyrics_fn = _get_fetch_lyrics_fn()
+                        if lyrics_fn:
+                            def _fetch_worker_exist():
+                                try:
+                                    lyrics_fn(exist_opus, force_overwrite=True)
+                                except Exception as le:
+                                    log.info(f"[LYRICS AUTO-FETCH ERROR] {le}")
+                            th_exist = threading.Thread(target=_fetch_worker_exist, daemon=True, name="LyricsFetchWorker")
+                            th_exist.start()
+                            th_exist.join(timeout=4.0)
                         return (True, exist_opus) if return_path else True
             elif t_title:
                 # Check for existing download matching title

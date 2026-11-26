@@ -60,17 +60,56 @@ def build_executable() -> None:
         sys.exit(result.returncode)
 
 
+_USED_CYBER_SFX = {
+    "ui_menu_mouse_click.wav",
+    "ui_menu_hover.wav",
+    "ui_menu_onpress.wav",
+    "ui_menu_value_up.wav",
+    "ui_menu_value_down.wav",
+    "ui_menu_open.wav",
+    "ui_menu_close.wav",
+    "ui_main_menu_open_tab.wav",
+    "ui_main_menu_saves_delete_confirmation.wav",
+    "ui_menu_perk_buy.wav",
+    "ui_menu_perk_level_up.wav",
+    "ui_menu_enter.wav",
+    "ui_menu_exit.wav",
+}
+
+
+def _ignore_assets(directory: str, names: list[str]) -> set[str]:
+    """Skip runtime caches, unused SFX packs, and raw Figma design exports."""
+    ignored = {
+        n
+        for n in names
+        if n in ("radio_cache", "lyrics_cache", "legacy", "__pycache__")
+        or n.endswith((".pyc", ".log"))
+        or (n.startswith("figma_") and n.endswith(".svg"))
+        or n in ("export.png", "bg_texture.png", "controller_panel_bg@2x.png", "chassis_body.jpg")
+    }
+    if os.path.basename(directory) == "cyberpunk_ui":
+        ignored.update(n for n in names if n not in _USED_CYBER_SFX)
+    return ignored
+
+
 def copy_assets() -> None:
     print("[*] Copying assets to release folder...")
     dest_assets = os.path.join(APP_STAGE, "assets")
     if os.path.exists(ASSETS_DIR):
-        shutil.copytree(ASSETS_DIR, dest_assets, dirs_exist_ok=True)
+        shutil.copytree(
+            ASSETS_DIR,
+            dest_assets,
+            dirs_exist_ok=True,
+            ignore=_ignore_assets,
+        )
+        os.makedirs(os.path.join(dest_assets, "lyrics_cache"), exist_ok=True)
+        os.makedirs(os.path.join(dest_assets, "radio_cache"), exist_ok=True)
         # Direct root fallbacks keep legacy asset lookups working.
         for sub in ("eye_parts", "icons", "sounds", "fonts"):
             sub_src = os.path.join(ASSETS_DIR, sub)
             sub_dest = os.path.join(APP_STAGE, sub)
             if os.path.exists(sub_src):
-                shutil.copytree(sub_src, sub_dest, dirs_exist_ok=True)
+                shutil.copytree(sub_src, sub_dest, dirs_exist_ok=True, ignore=_ignore_assets)
 
 
 def copy_music(with_music: bool) -> None:
@@ -147,10 +186,13 @@ def write_release_settings() -> None:
         "queue": [],
         "lyrics_dialogue_mode": True,
         "lyrics_word_glow": True,
+        "lyrics_subtitle_bg": True,
         "lyrics_font": "Rajdhani",
         "download_folder": "",
         "discord_rpc": True,
         "head_bop": False,
+        "current_playlist": "All Tracks",
+        "current_sort": "Default",
         "_version": 2,
     }
     with open(os.path.join(APP_STAGE, "settings.json"), "w", encoding="utf-8") as handle:
@@ -159,7 +201,7 @@ def write_release_settings() -> None:
 
 def write_readme() -> None:
     readme = """=======================================================
-  TALIA CYBERPUNK MUSIC PLAYER & DESKTOP VISUALIZER
+  TALIA CYBERPUNK MUSIC PLAYER & DESKTOP VISUALIZER (v2.6.0)
 =======================================================
 
 HOW TO RUN:
@@ -170,20 +212,22 @@ No installation, Python, or configuration required.
 
 ADD YOUR MUSIC:
 Copy your audio files into the "music" folder (subfolders are supported),
-then use Settings -> Music Folder -> Re-scan in the app.
+then use Settings -> Music Library -> Refresh Library in the app.
 
 CONTROLS:
-- 1 Click on Talia: Play / Pause.
+- 1 Click on Talia: Play / Pause (starts ★ Random Mix when selected).
 - 2 Clicks on Talia: Double tap right side to skip, double tap left side to rewind.
-- 3 Clicks on Talia: Open Minimal Player Window (Playback, Library, Song Search & Settings).
+- 3 Clicks on Talia: Open / close Player Control Panel.
+- Middle-Click on Talia: Save current ★ Random Mix song permanently to Downloaded Songs.
+- Middle / Right-Click & Drag: Reposition Talia anywhere on screen.
 - Hold until SFX plays (0.7s): Initiates Move Mode (Drag Talia and lyrics, scroll to resize).
 - Hold for 2s: Sinking power-down sequence and exit.
 - Scroll Wheel on Talia: Adjusts volume (or scales Talia when Move Mode is active).
 - [F7]: Toggle Synced Lyrics Overlay on / off.
 - [F8]: Toggle Move Mode (reposition Talia and lyrics).
 - [F9]: Hide / Show Talia and lyrics.
-- [F10]: Switch Desktop Audio Mode vs Local Player.
-- [F11]: Toggle Eco Mode (30 FPS, ultra-low CPU).
+- [F10]: Switch Audio Mode (Local Player vs Desktop Audio).
+- [F11]: Toggle Eco Mode (reduced CPU/FPS).
 
 Enjoy!
 """

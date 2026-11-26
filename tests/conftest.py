@@ -23,6 +23,59 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path, monkeypatch):
+    """Keep every test away from the real settings.json.
+
+    Constructing ControlPanel/OverlayWindow triggers save paths, so without
+    this the suite overwrites the user's live settings with test defaults.
+    """
+    import config
+
+    monkeypatch.setattr(config, "SETTINGS_FILE", str(tmp_path / "settings.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def cleanup_after_test():
+    yield
+    try:
+        from audio_engine import _cleanup_audio_engines
+        _cleanup_audio_engines()
+    except Exception:
+        pass
+    try:
+        from party_sync import _cleanup_party_services
+        _cleanup_party_services()
+    except Exception:
+        pass
+    try:
+        from discord_service import _cleanup_discord_services
+        _cleanup_discord_services()
+    except Exception:
+        pass
+    try:
+        from audio_feeder import _cleanup_audio_feeders
+        _cleanup_audio_feeders()
+    except Exception:
+        pass
+    try:
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            for w in list(app.topLevelWidgets()):
+                for attr in ("anim_timer", "topmost_timer", "timeline_timer", "hotkey_timer", "multi_click_timer", "hold_timer", "restore_timer"):
+                    t = getattr(w, attr, None)
+                    if t is not None:
+                        try:
+                            t.stop()
+                        except Exception:
+                            pass
+            app.processEvents()
+    except Exception:
+        pass
+
+
 @pytest.fixture()
 def sample_wav(tmp_path):
     import numpy as np
@@ -37,3 +90,11 @@ def sample_wav(tmp_path):
     path = tmp_path / "sample.wav"
     sf.write(path, data, sr, subtype="FLOAT")
     return path, data, sr
+
+
+def pytest_sessionfinish(session, exitstatus):
+    import os
+    import sys
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exitstatus)

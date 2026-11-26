@@ -109,19 +109,20 @@ class GuideDialog(DraggableClampedDialogMixin, QDialog):
             (
                 "Click & Mouse Controls",
                 [
-                    "1 Click: Play / Pause with white tactile flash.",
+                    "1 Click: Play / Pause (starts ★ Random Mix when selected).",
                     "2 Clicks: Double-tap right side to skip track, left side to rewind (shows symbols in mouth).",
-                    "3 Clicks: Open Minimal Player (playback, queue, search downloader, and settings).",
-                    "Scroll Wheel: Adjust volume smoothly (whisper-quiet logarithmic curve down to 1%).",
-                    "Right-Click Drag: Quickly drag Talia anywhere without entering Move Mode.",
+                    "3 Clicks: Open / close Player Control Panel (library, queue, Random Mix, and tools).",
+                    "Middle-Click: Save currently playing ★ Random Mix song permanently to Downloaded Songs.",
+                    "Middle / Right-Click Drag: Quickly reposition Talia anywhere on screen.",
+                    "Scroll Wheel: Adjust volume smoothly (logarithmic curve down to 1%).",
                 ],
             ),
             (
                 "Move Mode & Resizing",
                 [
-                    "Hold Talia for 0.7s until SFX plays to toggle Move Mode (or press F8).",
+                    "Hold Talia for 0.7s until SFX plays to toggle Move Mode.",
                     "In Move Mode: Drag Talia and lyrics freely; scroll mouse wheel to resize scale.",
-                    "Hold Talia again or press F8 to lock positions.",
+                    "Hold Talia again or click to lock positions.",
                 ],
             ),
             (
@@ -129,14 +130,11 @@ class GuideDialog(DraggableClampedDialogMixin, QDialog):
                 ["Hold Talia for 2 seconds to initiate power-down and close the app."],
             ),
             (
-                "Global Keyboard Shortcuts",
+                "Controls & Shortcuts",
                 [
-                    "F7 : Toggle Synced Lyrics Overlay on / off",
-                    "F8 : Toggle Move Mode (reposition Talia & lyrics)",
-                    "F9 : Hide / Show Talia and lyrics overlay",
-                    "F10: Switch Local Player Mode vs Desktop Audio Mode",
-                    "F11: Toggle Eco Mode (< 1% CPU, 30 FPS)",
-                    "Ctrl+[ / Ctrl+] : Nudge lyric sync offset by -0.25s / +0.25s in real time",
+                    "System Tray: Left-click tray icon in hidden icons to show/hide Talia.",
+                    "System Tray: Right-click tray icon for playback controls, panel & exit.",
+                    "Ctrl+[ / Ctrl+] : Nudge lyric sync offset by -0.25s / +0.25s in real time.",
                 ],
             ),
             (
@@ -174,11 +172,11 @@ class GuideDialog(DraggableClampedDialogMixin, QDialog):
         note_layout.setContentsMargins(12, 10, 12, 10)
         note_layout.setSpacing(8)
         note_txt = QLabel(
-            "<b>Playback Modes & Features:</b><br>"
-            "• <b>Player Mode:</b> Plays your local audio files (.opus, .mp3, .flac) with continuous title marquee in mouth and synced lyrics.<br>"
-            "• <b>Desktop Audio:</b> Connects to PC audio output (browser, Spotify, games, osu!) for live reactive visuals.<br>"
-            "• <b>Automated Lyrics Fetcher:</b> Open Settings &gt; Lyrics and click <i>'Launch Automated Lyric Fetcher'</i> to batch download synced lyrics.<br><br>"
-            "<i>Tip: You can re-open this guide anytime from the Settings dialog under 'Controls Guide'.</i>"
+            "<b>What's New in v2.6:</b><br>"
+            "• <b>★ Random Mix:</b> Endless taste-based track discovery with Exclusion Checklist (<i>EXCLUDE</i>), 5-song sliding buffer, and Middle-Click to save.<br>"
+            "• <b>Lyrics & Calibration Studio:</b> Integrated visual timeline + <i>[Space]</i> beat alignment inside Settings &gt; Lyrics &amp; Fonts.<br>"
+            "• <b>Listen Together &amp; Spotify Sync:</b> Shared party rooms and direct playlist importing.<br><br>"
+            "<i>Tip: Re-open this guide anytime from Settings &gt; Updates &amp; App &gt; Controls &amp; Hotkeys Guide.</i>"
         )
         note_txt.setWordWrap(True)
         note_txt.setStyleSheet("color: #d4d4d8; font-size: 12px; line-height: 1.4;")

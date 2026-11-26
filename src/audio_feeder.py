@@ -16,6 +16,17 @@ import soundfile as sf
 
 log = logging.getLogger(__name__)
 
+_active_feeders: set["AudioFeeder"] = set()
+
+
+def _cleanup_audio_feeders():
+    for f in list(_active_feeders):
+        try:
+            f.stop(timeout=0.1)
+        except Exception:
+            pass
+    _active_feeders.clear()
+
 
 class AudioFeeder:
     """Streams decoded chunks from a SoundFile to the audio callback via a queue."""
@@ -63,12 +74,14 @@ class AudioFeeder:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
+        _active_feeders.add(self)
         self._thread = threading.Thread(target=self._run, name="TaliaAudioFeeder", daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float = 1.0) -> None:
         """Stops the reader thread. The SoundFile itself stays owned by the engine."""
         self._stop_event.set()
+        _active_feeders.discard(self)
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=timeout)

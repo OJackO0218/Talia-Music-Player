@@ -8,8 +8,8 @@ import os
 import re
 import time
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPen
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
+from PyQt6.QtGui import QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QPainter, QPen
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from audio_engine import CyberAudioEngine
@@ -66,6 +66,11 @@ class LyricsOverlayWindow(QWidget):
         self.is_enabled = True
         self.move_mode = False
         self.dialogue_mode = True  # Cyberpunk 2077 dialogue subtitle mode
+        self.show_subtitle_bg = True  # Cyberpunk 2077 shadow box behind subtitles (default on)
+        self.subtitle_bg_opacity = 0.40  # Subtle dark background box
+        self.subtitle_rect = QRectF()
+        self.is_hovered = False
+        self.hover_dim = 1.0  # Dims by 60% (down to 0.40) only when cursor is directly over subtitle box
 
         # Color customization (defaults to Electric Blue / Cyan)
         self.color_hex = "#00ffff"
@@ -107,7 +112,7 @@ class LyricsOverlayWindow(QWidget):
         self._update_window_dimensions(keep_center=False)
         self.init_position()
 
-        # By default, lyrics are 100% click-through so they never block games or apps
+        # Subtitles are interactive: click-through by default; interactive and dims only when hovering directly over the text
         self.set_click_through(True)
         self.eco_mode = False
 
@@ -129,8 +134,12 @@ class LyricsOverlayWindow(QWidget):
         self.topmost_timer.timeout.connect(self.enforce_topmost)
         self.topmost_timer.start(1000)
 
+    _cached_font_families: list[str] | None = None
+
     def get_available_fonts(self) -> list:
         """Scans assets/fonts for any user-supplied .ttf or .otf files and returns list of family names."""
+        if LyricsOverlayWindow._cached_font_families is not None:
+            return list(LyricsOverlayWindow._cached_font_families)
         families_list = ["Default (Segoe UI / Inter)"]
         if os.path.exists(FONTS_DIR):
             for f in sorted(os.listdir(FONTS_DIR)):
@@ -142,6 +151,7 @@ class LyricsOverlayWindow(QWidget):
                         for name in fam:
                             if name not in families_list:
                                 families_list.append(name)
+        LyricsOverlayWindow._cached_font_families = list(families_list)
         return families_list
 
     def set_custom_font(self, family_name: str):
@@ -186,6 +196,7 @@ class LyricsOverlayWindow(QWidget):
 
     def set_click_through(self, click_through: bool):
         """Toggles Win32 WS_EX_TRANSPARENT style so cursor clicks pass straight through."""
+        self._is_click_through = bool(click_through)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, click_through)
         try:
             hwnd = int(self.winId())
@@ -194,7 +205,8 @@ class LyricsOverlayWindow(QWidget):
                 new_style = ex_style | WS_EX_TRANSPARENT
             else:
                 new_style = ex_style & ~WS_EX_TRANSPARENT
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+            if new_style != ex_style:
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
         except Exception:
             pass
 
@@ -240,7 +252,8 @@ class LyricsOverlayWindow(QWidget):
 
     def init_position(self):
         """Centers horizontally in the middle-bottom of the screen (180px above taskbar)."""
-        screen = QApplication.primaryScreen().geometry()
+        screen_obj = QApplication.primaryScreen()
+        screen = screen_obj.geometry() if screen_obj else QRect(0, 0, 1920, 1080)
         x = (screen.width() - self.width()) // 2
         y = max(50, screen.height() - 200)
         self.move(x, y)
@@ -253,6 +266,12 @@ class LyricsOverlayWindow(QWidget):
             return
         try:
             hwnd = int(self.winId())
+            fg_hwnd = int(user32.GetForegroundWindow())
+            ex_style = int(user32.GetWindowLongW(hwnd, -20))
+            is_already_topmost = bool(ex_style & 0x00000008)
+            if is_already_topmost and fg_hwnd == getattr(self, "_last_topmost_fg", 0):
+                return
+            self._last_topmost_fg = fg_hwnd
             user32.SetWindowPos(
                 hwnd,
                 HWND_TOPMOST,
@@ -305,8 +324,8 @@ class LyricsOverlayWindow(QWidget):
     def set_move_mode(self, enabled: bool):
         """Toggles Move/Repositioning mode. When enabled, displays '(lyrics subtitle is here)' and allows dragging."""
         self.move_mode = enabled
-        # When Move Mode is active, disable click-through so user can drag the subtitle box
         self.set_click_through(not enabled)
+        self.hover_dim = 1.0
         if enabled:
             self.setCursor(Qt.CursorShape.SizeAllCursor)
             self.displayed_text = f"(lyrics subtitle is here - {self.base_font_size} pt)"
@@ -321,6 +340,38 @@ class LyricsOverlayWindow(QWidget):
                 self.line_opacity = 0.0
         self.update()
 
+    def set_subtitle_bg_enabled(self, enabled: bool):
+        """Enables or disables subtle Cyberpunk 2077 shadow box behind subtitles."""
+        self.show_subtitle_bg = bool(enabled)
+        self.update()
+
+    def set_subtitle_bg_opacity(self, opacity: float):
+        """Sets the opacity (0.0 to 1.0) of the subtitle shadow box."""
+        self.subtitle_bg_opacity = max(0.0, min(1.0, float(opacity)))
+        self.update()
+
+    def _draw_subtitle_background_box(
+        self, painter: QPainter, start_x: float, baseline_y: float, total_w: float, metrics, eff_opacity: float
+    ):
+        """Draws a sleek, subtle semi-transparent shadow box behind subtitles (Cyberpunk 2077 style)."""
+        if not getattr(self, "show_subtitle_bg", False):
+            return
+        alpha = int(255 * getattr(self, "subtitle_bg_opacity", 0.40) * eff_opacity)
+        if alpha <= 0:
+            return
+        pad_x = 14.0
+        pad_y = 6.0
+        box_x = start_x - pad_x
+        box_y = baseline_y - metrics.ascent() - pad_y
+        box_w = total_w + pad_x * 2.0
+        box_h = metrics.height() + pad_y * 2.0
+
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(8, 10, 16, alpha))
+        painter.drawRoundedRect(QRectF(box_x, box_y, box_w, box_h), 4.0, 4.0)
+        painter.restore()
+
     def reset_lyrics_display(self) -> None:
         """Immediately clears displayed lyrics and resets animation states."""
         self.displayed_text = ""
@@ -331,6 +382,11 @@ class LyricsOverlayWindow(QWidget):
         self.glow_flash = 0.0
         self.pause_start_time = None
         self._pause_timed_out = False
+        self.subtitle_rect = QRectF()
+        self.is_hovered = False
+        self.hover_dim = 1.0
+        if not self.move_mode and not getattr(self, "_is_click_through", False):
+            self.set_click_through(True)
         self.update()
 
     def _sync_and_animate_tick(self):
@@ -384,6 +440,7 @@ class LyricsOverlayWindow(QWidget):
                     if self.displayed_text:
                         self.pop_progress = 0.0
                         self.glow_flash = 0.40
+                        self.line_opacity = 1.0
                 if singing_dur > 0.0:
                     self.line_progress = min(1.0, max(0.0, time_into_line / singing_dur))
                 else:
@@ -413,13 +470,6 @@ class LyricsOverlayWindow(QWidget):
                     self.pause_start_time = time.time()
                 elif (time.time() - self.pause_start_time) >= 10.0:
                     self._pause_timed_out = True
-            elif self.audio_engine.audio_mode == "desktop":
-                self.displayed_text = ""
-                self.current_line_idx = -1
-                self.line_progress = 0.0
-                self.pause_start_time = None
-                self._pause_timed_out = False
-                self._last_paused_pos = None
 
         # Advance pop-up progress (0.0 -> 1.0 over ~200ms)
         if self.pop_progress < 1.0:
@@ -439,6 +489,9 @@ class LyricsOverlayWindow(QWidget):
         if opacity_diff < 0.005:
             self.line_opacity = target_opacity
 
+        # Check cursor position relative to the subtitle box (hover dimming & click-through)
+        self.update_hover_state()
+
         # Dynamic sleep dirty-check: do NOT call self.update() when nothing is visible or changing
         is_fading = opacity_diff > 0.005
         is_animating = (self.pop_progress < 1.0) or (self.glow_flash > 0.005) or is_fading
@@ -455,11 +508,18 @@ class LyricsOverlayWindow(QWidget):
             or (has_text and self.line_opacity > 0.01 and is_fading)
         )
         if needs_update:
+            target_int = 33 if self.eco_mode else 16
+            if self.anim_timer.interval() != target_int:
+                self.anim_timer.setInterval(target_int)
             self.update()
             self._was_rendering = True
-        elif getattr(self, "_was_rendering", False):
-            self.update()  # One final settle update
-            self._was_rendering = False
+        else:
+            # Idle/paused power saving: drop timer from 16ms to 120ms when lyrics are quiescent
+            if not self.audio_engine.is_playing and not self.move_mode and self.anim_timer.interval() != 120:
+                self.anim_timer.setInterval(120)
+            if getattr(self, "_was_rendering", False):
+                self.update()  # One final settle update
+                self._was_rendering = False
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -482,13 +542,14 @@ class LyricsOverlayWindow(QWidget):
             painter.drawText(
                 QRect(0, 3, self.width(), 16),
                 Qt.AlignmentFlag.AlignCenter,
-                "DRAG TO REPOSITION | SCROLL WHEEL TO RESIZE [F8 TO LOCK]",
+                "DRAG TO REPOSITION | SCROLL WHEEL TO RESIZE [CLICK TALIA TO LOCK]",
             )
             painter.restore()
 
         # 2. Render Synchronized Lyrics
         text_to_draw = self.displayed_text
         if not text_to_draw or self.line_opacity < 0.01:
+            self.subtitle_rect = QRectF()
             return
         painter.save()
 
@@ -545,8 +606,8 @@ class LyricsOverlayWindow(QWidget):
             metrics = QFontMetrics(font)
         painter.setFont(font)
 
-        # Effective opacity
-        eff_opacity = min(1.0, max(0.0, self.line_opacity))
+        # Effective opacity (dims by 60% when hovered)
+        eff_opacity = min(1.0, max(0.0, self.line_opacity * getattr(self, "hover_dim", 1.0)))
         painter.setOpacity(eff_opacity)
 
         # Render Spotify-style progressive word-by-word lighting OR full-line mode
@@ -593,6 +654,18 @@ class LyricsOverlayWindow(QWidget):
                         weights,
                         total_weight,
                     ) = self._cached_layout_data
+
+                pad_x = 16.0
+                pad_y = 6.0
+                box_x = start_x - pad_x
+                box_y = baseline_y - metrics.ascent() - pad_y
+                box_w = total_w + pad_x * 2.0
+                box_h = metrics.height() + pad_y * 2.0
+                self.subtitle_rect = QRectF(box_x, box_y, box_w, box_h)
+
+                # Subtle Cyberpunk 2077 shadow box behind subtitles
+                if getattr(self, "show_subtitle_bg", False):
+                    self._draw_subtitle_background_box(painter, start_x, baseline_y, total_w, metrics, eff_opacity)
 
                 # Draw Cyberpunk 2077 Speaker Artist with multi-layer soft holographic neon glow
                 if speaker_text:
@@ -665,21 +738,20 @@ class LyricsOverlayWindow(QWidget):
 
                     # Layer 3: Vibrant Foreground Text
                     if p_word <= 0.0:
-                        # Upcoming unreached word: soft, elegant ambient translucent slate
-                        fg_color = QColor(165, 175, 195, min(255, max(0, int(115 * eff_opacity))))
+                        # Upcoming unreached word: bright, crisp theme color (never dimmed)
+                        fg_color = QColor(
+                            self.main_color.red(),
+                            self.main_color.green(),
+                            self.main_color.blue(),
+                            min(255, max(0, int(220 * eff_opacity))),
+                        )
                     elif p_word < 1.0:
                         # Active word transition flare
                         flare = int(70 * math.sin(p_word * math.pi))
-                        r = min(
-                            255, max(0, int(165 + (self.main_color.red() - 165) * p_word + flare))
-                        )
-                        g = min(
-                            255, max(0, int(175 + (self.main_color.green() - 175) * p_word + flare))
-                        )
-                        b = min(
-                            255, max(0, int(195 + (self.main_color.blue() - 195) * p_word + flare))
-                        )
-                        alpha = min(255, max(0, int((115 + (255 - 115) * p_word) * eff_opacity)))
+                        r = min(255, max(0, int(self.main_color.red() + flare)))
+                        g = min(255, max(0, int(self.main_color.green() + flare)))
+                        b = min(255, max(0, int(self.main_color.blue() + flare)))
+                        alpha = min(255, max(0, int((220 + (255 - 220) * p_word) * eff_opacity)))
                         fg_color = QColor(r, g, b, alpha)
                     else:
                         # Fully sung word: rich vibrant active theme color
@@ -767,6 +839,18 @@ class LyricsOverlayWindow(QWidget):
         start_x = max(16.0, (self.width() - total_w) / 2.0)
         baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
 
+        pad_x = 16.0
+        pad_y = 6.0
+        box_x = start_x - pad_x
+        box_y = baseline_y - metrics.ascent() - pad_y
+        box_w = total_w + pad_x * 2.0
+        box_h = metrics.height() + pad_y * 2.0
+        self.subtitle_rect = QRectF(box_x, box_y, box_w, box_h)
+
+        # Subtle Cyberpunk 2077 shadow box behind subtitles
+        if getattr(self, "show_subtitle_bg", False):
+            self._draw_subtitle_background_box(painter, start_x, baseline_y, total_w, metrics, eff_opacity)
+
         if speaker_text:
             pos_speaker = QPointF(float(start_x), float(baseline_y))
             self._draw_cyberpunk_speaker(painter, pos_speaker, speaker_text, eff_opacity)
@@ -826,8 +910,87 @@ class LyricsOverlayWindow(QWidget):
         else:
             event.ignore()
 
+    def update_hover_state(self):
+        """Checks if the global mouse cursor is physically inside the subtitle box."""
+        if not self.isVisible() or not bool(self.displayed_text):
+            if self.hover_dim != 1.0 or self.is_hovered:
+                self.is_hovered = False
+                self.hover_dim = 1.0
+                if not self.move_mode and not getattr(self, "_is_click_through", False):
+                    self.set_click_through(True)
+                self.update()
+            return
+
+        cursor_global = QCursor.pos()
+        cursor_local = self.mapFromGlobal(cursor_global)
+
+        is_over = False
+        if hasattr(self, "subtitle_rect") and not self.subtitle_rect.isEmpty():
+            comfort_rect = self.subtitle_rect.adjusted(-4, -4, 4, 4)
+            is_over = comfort_rect.contains(QPointF(cursor_local))
+
+        new_hover_dim = 0.40 if is_over else 1.0
+        changed = False
+
+        if is_over != self.is_hovered or abs(new_hover_dim - self.hover_dim) > 0.001:
+            self.is_hovered = is_over
+            self.hover_dim = new_hover_dim
+            changed = True
+
+        # When cursor is hovering directly over subtitle box, enable dragging (click_through=False)
+        # Otherwise, pass clicks through to background games/apps
+        if not self.move_mode and not self.is_dragging:
+            should_click_through = not is_over
+            if getattr(self, "_is_click_through", None) != should_click_through:
+                self.set_click_through(should_click_through)
+
+        if changed:
+            self.update()
+
+    def enterEvent(self, event):
+        """Cursor entered overlay area: check if actually hovering subtitle box."""
+        self.update_hover_state()
+        try:
+            super().enterEvent(event)
+        except Exception:
+            pass
+
+    def leaveEvent(self, event):
+        """Leaving overlay restores full brightness."""
+        self.is_hovered = False
+        self.hover_dim = 1.0
+        if not self.move_mode and not getattr(self, "_is_click_through", False):
+            self.set_click_through(True)
+        self.update()
+        try:
+            super().leaveEvent(event)
+        except Exception:
+            pass
+
     def mousePressEvent(self, event):
-        if self.move_mode and event.button() in (
+        """Subtitles are draggable anytime when clicked on or near the subtitle box."""
+        pos = None
+        if hasattr(event, "position"):
+            try:
+                pos = event.position()
+            except Exception:
+                pass
+        if pos is None and hasattr(event, "pos"):
+            try:
+                pos = event.pos()
+            except Exception:
+                pass
+        if pos is None and hasattr(event, "globalPosition"):
+            try:
+                pos = self.mapFromGlobal(event.globalPosition().toPoint())
+            except Exception:
+                pass
+
+        is_in_box = False
+        if pos is not None and hasattr(self, "subtitle_rect") and not self.subtitle_rect.isEmpty():
+            is_in_box = self.subtitle_rect.adjusted(-6, -6, 6, 6).contains(QPointF(pos))
+
+        if (self.move_mode or is_in_box) and event.button() in (
             Qt.MouseButton.LeftButton,
             Qt.MouseButton.RightButton,
             Qt.MouseButton.MiddleButton,
@@ -835,18 +998,24 @@ class LyricsOverlayWindow(QWidget):
             self.is_dragging = True
             self.drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
+        else:
+            if hasattr(event, "ignore"):
+                event.ignore()
 
     def mouseMoveEvent(self, event):
+        """Subtitles are draggable anytime."""
         if (
-            self.move_mode
-            and self.is_dragging
+            self.is_dragging
             and (event.buttons() & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton | Qt.MouseButton.MiddleButton))
         ):
             self.move(event.globalPosition().toPoint() - self.drag_start_pos)
             event.accept()
+        else:
+            self.update_hover_state()
 
     def mouseReleaseEvent(self, event):
-        if self.move_mode and self.is_dragging:
+        """Subtitles are draggable anytime."""
+        if self.is_dragging:
             self.is_dragging = False
             # Save new position to settings.json
             if self.panel:
@@ -858,4 +1027,5 @@ class LyricsOverlayWindow(QWidget):
                     save_settings(cfg)
                 except Exception:
                     pass
+            self.update_hover_state()
             event.accept()

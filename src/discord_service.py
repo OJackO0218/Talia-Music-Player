@@ -14,17 +14,28 @@ import threading
 import time
 from typing import Optional
 
+from config import APP_VERSION
+
 log = logging.getLogger("DiscordRPC")
 
 DEFAULT_CLIENT_ID = "1566836776113275070"
 
-try:
-    from pypresence import ActivityType
-    LISTENING_TYPE = ActivityType.LISTENING
-except Exception:
-    class _FallbackActivityType:
-        value = 2
-    LISTENING_TYPE = _FallbackActivityType()
+class _FallbackActivityType:
+    value = 2
+
+
+LISTENING_TYPE = _FallbackActivityType()
+
+_active_discord_services: set["DiscordRpcService"] = set()
+
+
+def _cleanup_discord_services():
+    for s in list(_active_discord_services):
+        try:
+            s.stop()
+        except Exception:
+            pass
+    _active_discord_services.clear()
 
 
 def parse_track_info(raw_title: str) -> tuple[str, str]:
@@ -57,6 +68,7 @@ class DiscordRpcService:
 
         # Playback tracking
         self._last_track = ""
+        self._last_mode_hint = ""
         self._is_playing = False
         self._current_pos = 0.0
         self._current_dur = 0.0
@@ -69,9 +81,12 @@ class DiscordRpcService:
 
     def start(self):
         """Starts the background worker thread."""
+        if os.environ.get("TALIA_DISABLE_DISCORD_RPC") == "1":
+            return
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
+        _active_discord_services.add(self)
         self._thread = threading.Thread(target=self._worker, daemon=True, name="DiscordRpcWorker")
         self._thread.start()
 
@@ -79,6 +94,7 @@ class DiscordRpcService:
         """Signals worker to close presence and exit."""
         self._stop_event.set()
         self._queue.put({"action": "stop"})
+        _active_discord_services.discard(self)
 
     def set_enabled(self, enabled: bool):
         self.enabled = bool(enabled)
@@ -88,13 +104,21 @@ class DiscordRpcService:
         else:
             self._queue.put({"action": "clear"})
 
-    def update_playback(self, raw_title: str, is_playing: bool, position: float, duration: float):
-        """Pushes playback update to background worker only when state or position changes significantly."""
+    def update_playback(
+        self,
+        raw_title: str,
+        is_playing: bool,
+        position: float,
+        duration: float,
+        mode_hint: str = "",
+    ):
+        """Pushes playback update to background worker only when state or position changes."""
         if not self.enabled:
             return
 
-        track_changed = (raw_title != self._last_track)
-        play_changed = (is_playing != self._is_playing)
+        track_changed = raw_title != self._last_track
+        play_changed = is_playing != self._is_playing
+        mode_changed = mode_hint != getattr(self, "_last_mode_hint", "")
 
         # Detect manual seeks (scrubbing): check if audio position jumped by > 2.0s from expected time
         seeked = False
@@ -104,11 +128,12 @@ class DiscordRpcService:
             if abs(position - expected_pos) > 2.0:
                 seeked = True
 
-        # If track, play state, and position have not changed, let Discord's local timer run smoothly
-        if not track_changed and not play_changed and not seeked:
+        # If track, play state, mode, and position have not changed, let Discord's timer run
+        if not track_changed and not play_changed and not mode_changed and not seeked:
             return
 
         self._last_track = raw_title
+        self._last_mode_hint = mode_hint
         self._is_playing = is_playing
         self._current_pos = position
         self._current_dur = duration
@@ -124,44 +149,72 @@ class DiscordRpcService:
             self._start_epoch = 0
             self._end_epoch = 0
 
-        self._queue.put({
-            "action": "update",
-            "title": raw_title,
-            "is_playing": is_playing,
-            "start": start_ts,
-            "end": end_ts,
-            "duration": duration,
-        })
+        self._queue.put(
+            {
+                "action": "update",
+                "title": raw_title,
+                "is_playing": is_playing,
+                "start": start_ts,
+                "end": end_ts,
+                "duration": duration,
+                "mode_hint": mode_hint,
+            }
+        )
 
-    def _build_payload(self, title: str, is_playing: bool, start: Optional[int], end: Optional[int]) -> dict:
+    def _build_payload(
+        self,
+        title: str,
+        is_playing: bool,
+        start: Optional[int],
+        end: Optional[int],
+        mode_hint: str = "",
+    ) -> dict:
+        buttons = [
+            {
+                "label": f"Talia v{APP_VERSION} on GitHub",
+                "url": "https://github.com/OJackO0218/Talia-Music-Player/releases/latest",
+            }
+        ]
+        if mode_hint == "Desktop Audio":
+            return {
+                "activity_type": LISTENING_TYPE,
+                "details": "Desktop Audio Loopback",
+                "state": "Reactive Visualizer Active" if is_playing else "Desktop Visualizer (Idle)",
+                "large_image": "talia_logo",
+                "large_text": f"Talia Music Player v{APP_VERSION}",
+                "small_image": "play" if is_playing else "pause",
+                "small_text": f"Desktop Mode • v{APP_VERSION}",
+                "buttons": buttons,
+            }
+
         if not title or title == "No Track Loaded":
             return {
                 "activity_type": LISTENING_TYPE,
                 "details": "Talia Music Player",
                 "state": "Selecting a track",
                 "large_image": "talia_logo",
-                "large_text": "Talia Music Player v2.3.0",
-                "buttons": [
-                    {"label": "Listen Together", "url": "https://github.com/OJackO0218/Talia-Music-Player/releases"},
-                ],
+                "large_text": f"Talia Music Player v{APP_VERSION}",
+                "buttons": buttons,
             }
 
         track_title, artist = parse_track_info(title)
         display_artist = artist if artist else "Talia"
         details_str = track_title[:127]
         state_str = (display_artist if is_playing else f"{display_artist} (Paused)")[:127]
+        if mode_hint:
+            small_text = f"{mode_hint} • {'Playing' if is_playing else 'Paused'}"
+        else:
+            small_text = f"{'Playing' if is_playing else 'Paused'} • v{APP_VERSION}"
 
         payload = {
             "activity_type": LISTENING_TYPE,
             "details": details_str,
             "state": state_str,
             "large_image": "talia_logo",
-            "large_text": "Talia Music Player v2.3.0",
+            "large_text": f"Talia Music Player v{APP_VERSION}",
             "small_image": "play" if is_playing else "pause",
-            "small_text": "Playing" if is_playing else "Paused",
-            "buttons": [
-                {"label": "Listen Together", "url": "https://github.com/OJackO0218/Talia-Music-Player/releases"},
-            ],
+            "small_text": small_text[:127],
+            "buttons": buttons,
         }
         if is_playing and start is not None and end is not None:
             payload["start"] = start
@@ -170,10 +223,13 @@ class DiscordRpcService:
 
     def _try_connect(self) -> bool:
         """Attempts to connect to local Discord IPC."""
+        global LISTENING_TYPE
         if self._connected and self._rpc:
             return True
         try:
-            from pypresence import Presence
+            from pypresence import ActivityType, Presence
+
+            LISTENING_TYPE = ActivityType.LISTENING
             self._rpc = Presence(self.client_id)
             self._rpc.connect()
             self._connected = True
@@ -249,6 +305,7 @@ class DiscordRpcService:
                         item["is_playing"],
                         item.get("start"),
                         item.get("end"),
+                        item.get("mode_hint", ""),
                     )
                     self._send_payload(payload)
                 elif just_connected or (item and item.get("action") == "refresh"):
@@ -258,6 +315,7 @@ class DiscordRpcService:
                         self._is_playing,
                         self._start_epoch if self._is_playing else None,
                         self._end_epoch if self._is_playing else None,
+                        getattr(self, "_last_mode_hint", ""),
                     )
                     self._send_payload(payload)
 

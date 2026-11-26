@@ -32,3 +32,24 @@ def test_discord_service_lifecycle_without_discord():
     # Disable cleanly
     service.set_enabled(False)
     service.stop()
+
+
+def test_discord_payload_uses_current_app_version():
+    """Ensures Discord RPC payload text stays synchronized with config.APP_VERSION."""
+    from config import APP_VERSION
+
+    service = DiscordRpcService(enabled=False)
+    payload_idle = service._build_payload("", False, None, None)
+    assert payload_idle["large_text"] == f"Talia Music Player v{APP_VERSION}"
+
+    payload_playing = service._build_payload("Artist - Song.opus", True, 0, 180)
+    assert payload_playing["large_text"] == f"Talia Music Player v{APP_VERSION}"
+    assert f"v{APP_VERSION}" in payload_playing["small_text"]
+    assert payload_playing["buttons"][0]["label"] == f"Talia v{APP_VERSION} on GitHub"
+
+    payload_radio = service._build_payload("Artist - Song.opus", True, 0, 180, mode_hint="Random Mix")
+    assert payload_radio["small_text"] == "Random Mix • Playing"
+
+    payload_desktop = service._build_payload("Desktop Audio", True, 0, 0, mode_hint="Desktop Audio")
+    assert payload_desktop["details"] == "Desktop Audio Loopback"
+    assert f"v{APP_VERSION}" in payload_desktop["small_text"]

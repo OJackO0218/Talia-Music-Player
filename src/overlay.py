@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import random
+import threading
 import time
 
 import numpy as np
@@ -17,11 +18,11 @@ from PyQt6.QtGui import (
     QCursor,
     QFont,
     QFontMetrics,
+    QIcon,
     QImage,
     QPainter,
     QPen,
     QPixmap,
-    QPolygonF,
     QRadialGradient,
 )
 from PyQt6.QtMultimedia import QSoundEffect
@@ -44,17 +45,16 @@ from config import (
     MOUTH_BOX_X,
     MOUTH_BOX_Y,
     PNGS_DIR,
+    PROJECT_ROOT,
     SOUNDS_DIR,
     SWP_NOACTIVATE,
     SWP_NOMOVE,
     SWP_NOSIZE,
     SWP_SHOWWINDOW,
-    VK_VOLUME_DOWN,
-    VK_VOLUME_UP,
     save_settings,
-    trim_process_memory,
     user32,
 )
+from cyber_sfx import compute_sfx_volume_multiplier, set_cyber_sfx_talia_volume
 from visualizer import CyberVisualizer
 
 
@@ -70,11 +70,14 @@ def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
 
 log = logging.getLogger(__name__)
 
+USER_SPRITES_DIR = os.path.join(PROJECT_ROOT, "assets", "user_sprites")
+BUTTON_STRIP_H = 0
+
 
 class OverlayWindow(QWidget):
     """Transparent desktop overlay featuring Talia with interactive eye tracking and music visualizer."""
 
-    def __init__(self, audio_engine: CyberAudioEngine):
+    def __init__(self, audio_engine: CyberAudioEngine, initial_volume: float | None = None):
         super().__init__(None)
         self.audio_engine = audio_engine
         self.visualizer = CyberVisualizer()
@@ -123,10 +126,16 @@ class OverlayWindow(QWidget):
         self.restore_timer.timeout.connect(self._on_restore_tick)
 
         # Volume & Eye-Saturation Indicator State
-        self.current_volume = getattr(self.audio_engine, "volume", 0.85)
+        start_vol = (
+            getattr(self.audio_engine, "volume", 0.85)
+            if initial_volume is None
+            else initial_volume
+        )
+        self.current_volume = max(0.0, min(1.0, float(start_vol)))
         self.raw_pupil_l_pil = None
         self.raw_pupil_r_pil = None
         self._last_scaled_volume = -1.0
+        self._last_pupil_state = None
 
         # Feedback Satisfaction: Hover, Hold Rumbler, Tactile Button Punch, and Color Flashes
         self.is_hovered = False
@@ -149,6 +158,9 @@ class OverlayWindow(QWidget):
         self.drag_ready_triggered = False
         self.has_dragged = False
         self.is_holding = False
+        self.is_scrubbing_overlay = False
+        self.scrub_ratio = 0.0
+        self.scrub_target_time = 0.0
 
         # Click Color Flashes (1x White, 2x Red, 3x Yellow) with 0.1s duration
         self.flash_color = QColor(255, 255, 255)
@@ -197,47 +209,26 @@ class OverlayWindow(QWidget):
         self.startup_offset_y = 110
         self.startup_duration = 0.20
 
-        # Sound effects (50% louder)
-        self.sound_pop = QSoundEffect(self)
-        pop_path = os.path.join(SOUNDS_DIR, "hover_pop.wav")
-        if os.path.exists(pop_path):
-            self.sound_pop.setSource(QUrl.fromLocalFile(pop_path))
-            self.sound_pop.setVolume(0.24)
-        self.sound_btn = QSoundEffect(self)
-        btn_path = os.path.join(SOUNDS_DIR, "click_button.wav")
-        if os.path.exists(btn_path):
-            self.sound_btn.setSource(QUrl.fromLocalFile(btn_path))
-            self.sound_btn.setVolume(0.20)
-        self.sound_hold = QSoundEffect(self)
-        hold_path = os.path.join(SOUNDS_DIR, "hold_ramp.wav")
-        if os.path.exists(hold_path):
-            self.sound_hold.setSource(QUrl.fromLocalFile(hold_path))
-            self.sound_hold.setVolume(0.20)
-        self.sound_shutdown = QSoundEffect(self)
-        shutdown_path = os.path.join(SOUNDS_DIR, "shutdown_heavy.wav")
-        if os.path.exists(shutdown_path):
-            self.sound_shutdown.setSource(QUrl.fromLocalFile(shutdown_path))
-            self.sound_shutdown.setVolume(0.25)
-        self.sound_skip_next = QSoundEffect(self)
-        sn_path = os.path.join(SOUNDS_DIR, "skip_next.wav")
-        if os.path.exists(sn_path):
-            self.sound_skip_next.setSource(QUrl.fromLocalFile(sn_path))
-            self.sound_skip_next.setVolume(0.30)
-        self.sound_skip_prev = QSoundEffect(self)
-        sp_path = os.path.join(SOUNDS_DIR, "skip_prev.wav")
-        if os.path.exists(sp_path):
-            self.sound_skip_prev.setSource(QUrl.fromLocalFile(sp_path))
-            self.sound_skip_prev.setVolume(0.30)
-        self.sound_menu_open = QSoundEffect(self)
-        mo_path = os.path.join(SOUNDS_DIR, "menu_open.wav")
-        if os.path.exists(mo_path):
-            self.sound_menu_open.setSource(QUrl.fromLocalFile(mo_path))
-            self.sound_menu_open.setVolume(0.25)
-        self.sound_menu_close = QSoundEffect(self)
-        mc_path = os.path.join(SOUNDS_DIR, "menu_close.wav")
-        if os.path.exists(mc_path):
-            self.sound_menu_close.setSource(QUrl.fromLocalFile(mc_path))
-            self.sound_menu_close.setVolume(0.25)
+        # Talia SFX (base volumes dynamically scaled by Talia volume)
+        self._sfx_effects: list[tuple[QSoundEffect, float]] = []
+        sfx_specs = [
+            ("sound_pop", "hover_pop.wav", 0.24),
+            ("sound_btn", "click_button.wav", 0.20),
+            ("sound_hold", "hold_ramp.wav", 0.20),
+            ("sound_shutdown", "shutdown_heavy.wav", 0.25),
+            ("sound_skip_next", "skip_next.wav", 0.30),
+            ("sound_skip_prev", "skip_prev.wav", 0.30),
+            ("sound_menu_open", "menu_open.wav", 0.25),
+            ("sound_menu_close", "menu_close.wav", 0.25),
+        ]
+        for attr_name, fname, base_vol in sfx_specs:
+            effect = QSoundEffect(self)
+            fpath = os.path.join(SOUNDS_DIR, fname)
+            if os.path.exists(fpath):
+                effect.setSource(QUrl.fromLocalFile(fpath))
+            setattr(self, attr_name, effect)
+            self._sfx_effects.append((effect, base_vol))
+        self._update_sfx_volumes()
 
         # Track title and skip OSD indicators
         self.icon_forward = QPixmap(os.path.join(PNGS_DIR, "icon_forward.png"))
@@ -305,7 +296,9 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setWindowTitle("Talia")
         self.load_assets()
+        self._init_transport_buttons()
         self.init_position()
         self._last_fg_hwnd = 0
 
@@ -318,6 +311,54 @@ class OverlayWindow(QWidget):
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self.on_anim_tick)
         self.anim_timer.start(16)
+
+    def _init_transport_buttons(self):
+        """Transport controls removed from Talia box per user request (kept in menu panel)."""
+        self.transport_bar = None
+        self.btn_pet_prev = None
+        self.btn_pet_play = None
+        self.btn_pet_next = None
+        self.icon_pet_prev = QIcon()
+        self.icon_pet_play = QIcon()
+        self.icon_pet_pause = QIcon()
+        self.icon_pet_next = QIcon()
+
+    def update_transport_state(self):
+        """Transport controls removed from Talia box (handled in menu panel)."""
+        pass
+
+    def _on_pet_prev_clicked(self):
+        if hasattr(self, "sound_skip_prev") and self.sound_skip_prev.isLoaded():
+            self.sound_skip_prev.play()
+        if self.panel and hasattr(self.panel, "on_prev_clicked"):
+            self.panel.on_prev_clicked()
+        else:
+            self.audio_engine.prev_track()
+            self.trigger_skip_feedback("backward")
+        self.update_transport_state()
+
+    def _on_pet_play_clicked(self):
+        self._trigger_single_click()
+        self.update_transport_state()
+        if self.panel and hasattr(self.panel, "sync_play_state"):
+            self.panel.sync_play_state()
+
+    def _on_pet_next_clicked(self):
+        if hasattr(self, "sound_skip_next") and self.sound_skip_next.isLoaded():
+            self.sound_skip_next.play()
+        if self.panel and hasattr(self.panel, "on_next_clicked"):
+            self.panel.on_next_clicked()
+        else:
+            self.audio_engine.next_track()
+            self.trigger_skip_feedback("forward")
+        self.update_transport_state()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_transport_bar_geometry()
+
+    def _update_transport_bar_geometry(self):
+        pass
 
     def load_assets(self):
         """Loads and auto-slices the 3-layer eye rig from PNG files."""
@@ -389,11 +430,20 @@ class OverlayWindow(QWidget):
             self.origin_rx, self.origin_ry = DEFAULT_ORIGIN_RX, DEFAULT_ORIGIN_RY
             self.raw_pupil_l_pil = None
             self.raw_pupil_r_pil = None
+        self._last_pupil_state = None
         self._apply_pupil_saturation()
+
+        # Layer 4.5: Cyberpunk Square Border (Disabled to keep Talia clean with zero border)
+        self.show_cyber_border = False
+        self.show_hover_outline = False
+        self.cyber_border_pixmap = QPixmap()
+        if self.show_cyber_border:
+            frame_path = os.path.join(PROJECT_ROOT, "assets", "ui_cyber", "talia_frame_transparent.png")
+            if os.path.exists(frame_path):
+                self.cyber_border_pixmap.load(frame_path)
 
         # Invalidate scaled pixmap cache
         self._last_scaled_size = -1
-        trim_process_memory()
         self.update()
 
     def _ensure_talia_gray(self):
@@ -401,12 +451,10 @@ class OverlayWindow(QWidget):
         if self.talia_sprite_gray is None or self.talia_sprite_gray.isNull():
             p3_path = os.path.join(EYE_PARTS_DIR, "part3_talia_main_sprite.png")
             talia_pil = Image.open(p3_path).convert("RGBA")
-            r, g, b, a = talia_pil.split()
+            _, _, _, a = talia_pil.split()
             gray_rgb = ImageOps.grayscale(talia_pil.convert("RGB"))
             gray_rgba = Image.merge("RGBA", (gray_rgb, gray_rgb, gray_rgb, a))
-            gray_np = np.array(gray_rgba)
-            qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
-            self.talia_sprite_gray = QPixmap.fromImage(qimg_gray.copy())
+            self.talia_sprite_gray = pil_to_qpixmap(gray_rgba)
         return self.talia_sprite_gray
 
     def _ensure_talia_closed_gray(self):
@@ -415,12 +463,10 @@ class OverlayWindow(QWidget):
             p3_closed_path = os.path.join(EYE_PARTS_DIR, "part3_talia_closed.png")
             if os.path.exists(p3_closed_path):
                 talia_pil = Image.open(p3_closed_path).convert("RGBA")
-                r, g, b, a = talia_pil.split()
+                _, _, _, a = talia_pil.split()
                 gray_rgb = ImageOps.grayscale(talia_pil.convert("RGB"))
                 gray_rgba = Image.merge("RGBA", (gray_rgb, gray_rgb, gray_rgb, a))
-                gray_np = np.array(gray_rgba)
-                qimg_gray = QImage(gray_np.data, 591, 591, 591 * 4, QImage.Format.Format_RGBA8888)
-                self.talia_closed_gray = QPixmap.fromImage(qimg_gray.copy())
+                self.talia_closed_gray = pil_to_qpixmap(gray_rgba)
             else:
                 self.talia_closed_gray = QPixmap()
         return self.talia_closed_gray
@@ -451,6 +497,13 @@ class OverlayWindow(QWidget):
             self.pupil_r = QPixmap()
             return
         vol = min(1.0, max(0.0, self.current_volume))
+        state_key = (round(vol, 4), round(self.hold_saturation, 4))
+        if (
+            getattr(self, "_last_pupil_state", None) == state_key
+            and not getattr(self, "pupil_l", QPixmap()).isNull()
+        ):
+            return
+        self._last_pupil_state = state_key
         if vol <= 0.5:
             ratio = vol / 0.5
             sat_factor = ratio * self.hold_saturation
@@ -477,32 +530,21 @@ class OverlayWindow(QWidget):
         self._last_scaled_size = -1
 
     def _on_hold_tick(self):
-        """Ticks while holding mouse button. After 1s enables drag mode; after 3.0s initiates 0.6s sinking shutdown."""
+        """Ticks while holding mouse button. At 0.7s toggles drag mode; after 2.0s initiates sinking shutdown."""
         if self.is_shutting_down:
             return
-        if not self.is_holding or self.has_dragged:
+        if not self.is_holding:
             self.hold_timer.stop()
             return
+        # If user swiped for playback or is actively dragging Talia window across desktop, halt hold timer
+        if getattr(self, "playback_swipe_done", False) or getattr(self, "has_dragged_window", False):
+            self.hold_timer.stop()
+            return
+
         elapsed = time.time() - self.press_time
+
         if elapsed >= 2.0:
-            # If move_talia_mode is currently ON: do NOT shut down! Instead, exit Move Mode!
-            if self.move_talia_mode:
-                self.set_move_talia_mode(False)
-                self.hold_saturation = 1.0
-                self._apply_pupil_saturation()
-                self.update()
-                self.hold_timer.stop()
-                if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
-                    self.sound_hold.stop()
-                if self.panel:
-                    try:
-                        cfg = self.panel.get_current_settings_dict()
-                        save_settings(cfg)
-                    except Exception:
-                        pass
-                log.info("[ACTION] Held while in Move Mode: Talia locked and position saved!")
-                return
-            # Full 2.0 seconds held in locked mode: Initiate 0.6s dramatic sinking power-down sequence!
+            # Full 2.0 seconds held: Sinking power-down shutdown sequence!
             self.is_shutting_down = True
             self.shutdown_start_time = time.time()
             self.shutdown_start_pos = self.pos()
@@ -512,24 +554,60 @@ class OverlayWindow(QWidget):
                 self.sound_hold.stop()
             if hasattr(self, "sound_shutdown") and self.sound_shutdown.isLoaded():
                 self.sound_shutdown.play()
+            # Immediately hide lyrics when sinking begins
+            if hasattr(self, "lyrics_overlay") and self.lyrics_overlay:
+                self.lyrics_overlay.hide()
+            if self.panel and hasattr(self.panel, "lyrics_overlay") and self.panel.lyrics_overlay:
+                self.panel.lyrics_overlay.hide()
             return
+
         elif elapsed >= 0.7:
-            # At 0.7s mark: Trigger tactile button-press compression (0.885 scale + delay)!
+            # At 0.7s mark: Trigger tactile button-press compression AND toggle Move Mode!
             if not self.drag_ready_triggered:
                 self.drag_ready_triggered = True
                 self.button_press_scale = 0.885
                 self.button_press_delay = 0.08  # ~80ms bottom-out delay before spring release
                 if hasattr(self, "sound_btn") and self.sound_btn.isLoaded():
                     self.sound_btn.play()
+                if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
+                    self.sound_hold.stop()
 
-            # Between 0.7s and 2.0s: Desaturate the entire character towards grayscale
-            # If user releases anytime between 0.7s and 2.0s, Move Talia (Drag Mode) is toggled!
-            progress = (
-                elapsed - 0.7
-            ) / 1.3  # 0.0 to 1.0 across the 1.3-second transition (from 0.7s to 2.0s)
-            self.hold_saturation = max(0.0, 1.0 - progress)
-            self._apply_pupil_saturation()
-            self.update()
+                # Toggle Move Mode:
+                # If was locked -> turn ON so dragging works immediately without releasing!
+                # If was in move mode -> turn OFF (lock back)!
+                new_mode = not getattr(self, "press_was_in_move_mode", False)
+                self.set_move_talia_mode(new_mode)
+                self.hold_saturation = 1.0
+                self._apply_pupil_saturation()
+                self.update()
+
+                if new_mode:
+                    self.drag_position = QCursor.pos() - self.frameGeometry().topLeft()
+                    self.is_dragging = True
+                    # has_dragged_window remains False until user actually moves mouse
+                else:
+                    self.is_dragging = False
+                    self.hold_timer.stop()  # Locked back; done!
+
+                if self.panel:
+                    try:
+                        cfg = self.panel.get_current_settings_dict()
+                        save_settings(cfg)
+                    except Exception as e:
+                        log.info(f"[ERROR] Could not auto-save: {e}")
+                status = (
+                    "ON (Drag to Move / Scroll to Resize)"
+                    if new_mode
+                    else "OFF (Locked & Clickable)"
+                )
+                log.info(f"[ACTION] Held for 0.7s click: Move Talia Mode is now {status}!")
+
+            # Between 0.7s and 2.0s (if still holding from locked mode): Desaturate towards grayscale
+            if not getattr(self, "press_was_in_move_mode", False):
+                progress = (elapsed - 0.7) / 1.3
+                self.hold_saturation = max(0.0, 1.0 - progress)
+                self._apply_pupil_saturation()
+                self.update()
         else:
             self.hold_saturation = 1.0
 
@@ -580,25 +658,62 @@ class OverlayWindow(QWidget):
             self.restore_timer.stop()
 
     def close_application(self):
-        """Powers down Talia, auto-saves persistent settings, and terminates application instantly."""
+        """Powers down Talia, hides all windows, stops all processes and terminates immediately."""
         log.info(
-            "[SHUTDOWN] Talia powered down after 2.0s hold. Saving settings and exiting instantly..."
+            "[SHUTDOWN] Talia powered down. Stopping all processes and exiting immediately..."
         )
-        if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
-            self.sound_hold.stop()
+        try:
+            self.hide()
+            if hasattr(self, "lyrics_overlay") and self.lyrics_overlay:
+                self.lyrics_overlay.hide()
+                self.lyrics_overlay.close()
+            if hasattr(self, "panel") and self.panel:
+                if hasattr(self.panel, "lyrics_overlay") and self.panel.lyrics_overlay:
+                    self.panel.lyrics_overlay.hide()
+                    self.panel.lyrics_overlay.close()
+                if hasattr(self.panel, "controls_bar") and self.panel.controls_bar:
+                    self.panel.controls_bar.hide()
+                    self.panel.controls_bar.close()
+                self.panel.hide()
+                self.panel.close()
+        except Exception as e:
+            log.debug("[SHUTDOWN] Window hide error: %s", e)
+
+        try:
+            if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
+                self.sound_hold.stop()
+            if hasattr(self, "sound_shutdown") and self.sound_shutdown.isPlaying():
+                self.sound_shutdown.stop()
+            self.anim_timer.stop()
+            self.topmost_timer.stop()
+            self.hold_timer.stop()
+        except Exception:
+            pass
+
         try:
             if self.panel:
                 cfg = self.panel.get_current_settings_dict()
                 save_settings(cfg)
         except Exception:
             pass
-        self.audio_engine.shutdown()
-        self.anim_timer.stop()
-        self.topmost_timer.stop()
-        self.hold_timer.stop()
-        self.hide()
-        QApplication.quit()
-        import os
+
+        try:
+            def _stop_audio():
+                try:
+                    self.audio_engine.shutdown()
+                except Exception:
+                    pass
+            t = threading.Thread(target=_stop_audio, daemon=True)
+            t.start()
+            t.join(timeout=0.3)
+        except Exception:
+            pass
+
+        try:
+            QApplication.closeAllWindows()
+            QApplication.quit()
+        except Exception:
+            pass
 
         os._exit(0)
 
@@ -617,17 +732,29 @@ class OverlayWindow(QWidget):
             self.anim_timer.setInterval(16)  # 60 FPS in Standard Mode
         self.update()
 
+    def _update_sfx_volumes(self):
+        """Scale Talia's SFX volumes dynamically from Talia's current volume."""
+        mult = compute_sfx_volume_multiplier(self.current_volume)
+        for effect, base_vol in getattr(self, "_sfx_effects", ()):
+            try:
+                effect.setVolume(max(0.0, min(1.0, base_vol * mult)))
+            except Exception:
+                pass
+        set_cyber_sfx_talia_volume(self.current_volume)
+
     def set_volume(self, vol: float):
         # Update volume and UI
         self.current_volume = max(0.0, min(1.0, float(vol)))
         self.audio_engine.set_volume(self.current_volume)
+        self._update_sfx_volumes()
         self._apply_pupil_saturation()
         if self.panel:
             self.panel.sync_volume(self.current_volume)
         self.update()
 
     def init_position(self):
-        screen = QApplication.primaryScreen().geometry()
+        screen_obj = QApplication.primaryScreen()
+        screen = screen_obj.geometry() if screen_obj else QRect(0, 0, 1920, 1080)
         init_size = min(DEFAULT_OVERLAY_SIZE, 300)
         self.resize(init_size, init_size)
         self.move(screen.width() - init_size - 40, screen.height() - init_size - 80)
@@ -637,11 +764,16 @@ class OverlayWindow(QWidget):
     def enforce_topmost(self):
         if not self.isVisible():
             return
-        # If Controller window is active/focused or being hovered, avoid fighting Z-order over it
         if self.panel and (self.panel.isActiveWindow() or self.panel.underMouse()):
             return
         try:
             hwnd = int(self.winId())
+            fg_hwnd = int(user32.GetForegroundWindow())
+            ex_style = int(user32.GetWindowLongW(hwnd, -20))
+            is_already_topmost = bool(ex_style & 0x00000008)
+            if is_already_topmost and fg_hwnd == getattr(self, "_last_topmost_fg", 0):
+                return
+            self._last_topmost_fg = fg_hwnd
             user32.SetWindowPos(
                 hwnd,
                 HWND_TOPMOST,
@@ -711,6 +843,10 @@ class OverlayWindow(QWidget):
 
         # Sinking Power-Down Shutdown Sequence (3.0s to 3.6s)
         if self.is_shutting_down:
+            if hasattr(self, "lyrics_overlay") and self.lyrics_overlay:
+                self.lyrics_overlay.hide()
+            if self.panel and hasattr(self.panel, "lyrics_overlay") and self.panel.lyrics_overlay:
+                self.panel.lyrics_overlay.hide()
             p = min(1.0, (time.time() - self.shutdown_start_time) / 0.60)
             p_ease = p * p  # Accelerating gravity sink
             sink_offset = int((self.height() + 120) * p_ease)
@@ -738,7 +874,7 @@ class OverlayWindow(QWidget):
             self._cached_win_pos = self.mapToGlobal(QPoint(0, 0))
         win_pos = self._cached_win_pos
         MARGIN = 16
-        char_size = min(self.width(), self.height()) - 2 * MARGIN
+        char_size = min(self.width() - 2 * MARGIN, self.height() - 2 * MARGIN)
         char_offset_x = (self.width() - char_size) // 2
         char_offset_y = (self.height() - char_size) // 2
         scale = char_size / float(CANVAS_BASE_SIZE)
@@ -842,12 +978,7 @@ class OverlayWindow(QWidget):
             self.button_press_scale = 1.0
 
         # Check audio active state
-        is_audio_active = self.audio_engine.audio_mode == "player" and self.audio_engine.is_playing
-        if self.audio_engine.audio_mode == "desktop":
-            bars = getattr(self.audio_engine, "smoothed_bars", None)
-            is_audio_active = (getattr(self.audio_engine, "beat_energy", 0.0) > 0.002) or (
-                bars is not None and len(bars) > 0 and bars.max() > 0.002
-            )
+        is_audio_active = bool(self.audio_engine.is_playing)
 
         # 3.5. Beat Pop effect (Talia pulses with the music bass kick)
         if not self.eco_mode and self.enable_bass_pop and is_audio_active:
@@ -929,7 +1060,6 @@ class OverlayWindow(QWidget):
                 if self.blink_timer >= self.next_blink_interval:
                     self.is_blinking = True
                     self.blink_timer = 0.0
-                    import random
 
                     if random.random() < 0.18:
                         self.next_blink_interval = random.uniform(0.25, 0.45)
@@ -1064,6 +1194,11 @@ class OverlayWindow(QWidget):
         blink_active = self.is_blinking or (self.blink_progress > 0.005)
         drowsy_changing = self.drowsy_level > 0.005 and self.drowsy_level < 0.995
         is_sleeping = self.drowsy_level > 0.35
+        panel_open = bool(self.panel and self.panel.isVisible())
+        if is_sleeping != getattr(self, "_last_was_sleeping", None) or panel_open != getattr(self, "_last_was_panel_open", None):
+            self._last_was_sleeping = is_sleeping
+            self._last_was_panel_open = panel_open
+            self.update_transport_state()
         bop_active = (abs(self.head_bop_y) > 0.05) or (abs(self.head_bop_tilt) > 0.02)
 
         # OSD skip timer and track text scroll
@@ -1075,66 +1210,65 @@ class OverlayWindow(QWidget):
                 self.osd_symbol = None
 
         # Instant auto-advance / 2-second DJ crossfade when song finishes
-        if self.audio_engine.audio_mode != "desktop":
-            dur = self.audio_engine.get_duration()
-            pos = self.audio_engine.get_position()
-            crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 2.0)
-            is_downloading_party = bool(
-                self.panel and getattr(self.panel, "_party_downloading_track", None)
-            )
-            is_party_guest = bool(
-                self.panel
-                and hasattr(self.panel, "party_sync")
-                and self.panel.party_sync
-                and self.panel.party_sync.is_connected
-                and not self.panel.party_sync.is_host
-            )
-            party_queue_has_items = bool(
-                self.panel
-                and hasattr(self.panel, "party_sync")
-                and self.panel.party_sync
-                and self.panel.party_sync.is_connected
-                and self.panel.party_sync.is_host
-                and self.panel.party_sync.party_queue
-            )
-            has_more_tracks = len(self.audio_engine.playlist) > 1 or party_queue_has_items
+        dur = self.audio_engine.get_duration()
+        pos = self.audio_engine.get_position()
+        crossfade_dur = getattr(self.audio_engine, "_crossfade_duration", 2.0)
+        is_downloading_party = bool(
+            self.panel and getattr(self.panel, "_party_downloading_track", None)
+        )
+        is_party_guest = bool(
+            self.panel
+            and hasattr(self.panel, "party_sync")
+            and self.panel.party_sync
+            and self.panel.party_sync.is_connected
+            and not self.panel.party_sync.is_host
+        )
+        party_queue_has_items = bool(
+            self.panel
+            and hasattr(self.panel, "party_sync")
+            and self.panel.party_sync
+            and self.panel.party_sync.is_connected
+            and self.panel.party_sync.is_host
+            and self.panel.party_sync.party_queue
+        )
+        has_more_tracks = len(self.audio_engine.playlist) > 1 or party_queue_has_items
 
-            if is_party_guest:
-                # Guests must never auto-advance their personal playlist; hold and wait for host
-                if self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.05):
-                    self.audio_engine.track_finished = False
-                    if self.audio_engine.is_playing:
-                        self.audio_engine.pause()
-                    if self.panel:
-                        self.panel.sync_play_state()
-            elif is_downloading_party:
-                # Holding playback while downloading the next party track
-                pass
-            elif (
-                dur > (crossfade_dur * 2.0)
-                and pos >= (dur - crossfade_dur)
-                and not getattr(self.audio_engine, "_in_crossfade", False)
-                and self.audio_engine.is_playing
-                and has_more_tracks
-            ):
-                if self.panel and hasattr(self.panel, "play_next_track"):
-                    self.panel.play_next_track(crossfade=True)
-                else:
-                    self.audio_engine.next_track(crossfade=True)
-                if self.panel:
-                    self.panel.sync_play_state()
-                    self.panel.update_timeline()
-            elif self.audio_engine.track_finished or (
-                dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)
-            ):
+        if is_party_guest:
+            # Guests must never auto-advance their personal playlist; hold and wait for host
+            if self.audio_engine.track_finished or (dur > 0 and pos >= dur - 0.05):
                 self.audio_engine.track_finished = False
-                if self.panel and hasattr(self.panel, "play_next_track"):
-                    self.panel.play_next_track(crossfade=False)
-                else:
-                    self.audio_engine.next_track(crossfade=False)
+                if self.audio_engine.is_playing:
+                    self.audio_engine.pause()
                 if self.panel:
                     self.panel.sync_play_state()
-                    self.panel.update_timeline()
+        elif is_downloading_party:
+            # Holding playback while downloading the next party track
+            pass
+        elif (
+            dur > (crossfade_dur * 2.0)
+            and pos >= (dur - crossfade_dur)
+            and not getattr(self.audio_engine, "_in_crossfade", False)
+            and self.audio_engine.is_playing
+            and has_more_tracks
+        ):
+            if self.panel and hasattr(self.panel, "play_next_track"):
+                self.panel.play_next_track(crossfade=True)
+            else:
+                self.audio_engine.next_track(crossfade=True)
+            if self.panel:
+                self.panel.sync_play_state()
+                self.panel.update_timeline()
+        elif self.audio_engine.track_finished or (
+            dur > 0 and pos >= dur - 0.08 and (self.audio_engine.is_playing or pos > 0.5)
+        ):
+            self.audio_engine.track_finished = False
+            if self.panel and hasattr(self.panel, "play_next_track"):
+                self.panel.play_next_track(crossfade=False)
+            else:
+                self.audio_engine.next_track(crossfade=False)
+            if self.panel:
+                self.panel.sync_play_state()
+                self.panel.update_timeline()
         if is_audio_active:
             self.track_scroll_x += 0.55
         sleep_frame_changed = False
@@ -1300,7 +1434,7 @@ class OverlayWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.setOpacity(self.opacity_val)
         MARGIN = 16
-        char_size = min(self.width(), self.height()) - 2 * MARGIN
+        char_size = min(self.width() - 2 * MARGIN, self.height() - 2 * MARGIN)
         char_x = (self.width() - char_size) // 2
         char_y = (self.height() - char_size) // 2
         scale = char_size / float(CANVAS_BASE_SIZE)
@@ -1351,6 +1485,13 @@ class OverlayWindow(QWidget):
         mouth_w = int(MOUTH_BOX_W * scale)
         mouth_h = int(MOUTH_BOX_H * scale)
         mouth_rect = QRect(mouth_x, mouth_y, mouth_w, mouth_h)
+
+        # Solid black backing for mouth cavity: ensures zero transparency/holes to desktop
+        painter.save()
+        painter.setOpacity(self.opacity_val)
+        painter.fillRect(mouth_rect, QColor(10, 10, 14, 255))
+        painter.restore()
+
         if self.hold_saturation > 0.05:
             vis_opacity = self.opacity_val * self.hold_saturation
             painter.setOpacity(vis_opacity)
@@ -1389,13 +1530,19 @@ class OverlayWindow(QWidget):
                     tx = mouth_x + (mouth_w - self._cached_zzz_text_w) / 2.0
                     ty = mouth_y + self._cached_zzz_baseline + bob_y
                     painter.setFont(self._cached_zzz_font)
-                    # Soft dark drop shadow
-                    painter.setPen(self._zzz_shadow_color)
-                    painter.drawText(QPointF(tx + 1, ty + 1), zzz_text)
+                    sleep_alpha = int(240 * min(1.0, (self.drowsy_level - 0.35) / 0.65))
 
-                    # Soft cyan-moonlight glow
-                    sleep_alpha = int(230 * min(1.0, (self.drowsy_level - 0.35) / 0.65))
-                    painter.setPen(QColor(165, 230, 255, sleep_alpha))
+                    # Deep subtitle drop shadow
+                    painter.setPen(QColor(10, 15, 25, int(sleep_alpha * 0.9)))
+                    painter.drawText(QPointF(tx + 1.2, ty + 1.2), zzz_text)
+
+                    # Soft electric blue ambient bloom
+                    painter.setPen(QColor(100, 240, 248, int(sleep_alpha * 0.45)))
+                    painter.drawText(QPointF(tx - 0.5, ty), zzz_text)
+                    painter.drawText(QPointF(tx + 0.5, ty), zzz_text)
+
+                    # Pure Rajdhani Electric Blue (#00ffff) matching default subtitle
+                    painter.setPen(QColor(0, 255, 255, sleep_alpha))
                     painter.drawText(QPointF(tx, ty), zzz_text)
                 # 2. Skip feedback symbol in full mouth cavity
                 elif self.osd_timer > 0.0 and self.osd_symbol in ("forward", "backward"):
@@ -1442,6 +1589,37 @@ class OverlayWindow(QWidget):
                         painter.setOpacity(vis_opacity * alpha_ratio)
                         painter.drawPixmap(ix, iy, iw, ih, icon)
                         painter.setOpacity(vis_opacity)
+                elif self.osd_timer > 0.0 and self.osd_symbol == "saved":
+                    self.visualizer.draw_background(painter, mouth_rect)
+                    alpha_ratio = min(1.0, self.osd_timer / 0.30)
+                    cx = float(mouth_x + mouth_w / 2.0)
+                    cy = float(mouth_y + mouth_h / 2.0)
+                    rad = float(min(mouth_w, mouth_h) * 0.45)
+                    glow = QRadialGradient(cx, cy, rad)
+                    glow.setColorAt(0.0, QColor(74, 222, 128, int(115 * alpha_ratio)))
+                    glow.setColorAt(0.65, QColor(16, 185, 129, int(35 * alpha_ratio)))
+                    glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+                    painter.setBrush(glow)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(QPointF(cx, cy), rad, rad)
+
+                    # Crisp checkmark + "SAVED" label in mouth
+                    painter.setOpacity(vis_opacity * alpha_ratio)
+                    check_pen = QPen(QColor(134, 239, 172), max(2.5, mouth_h * 0.045))
+                    check_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                    check_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                    painter.setPen(check_pen)
+                    ck_y = cy - mouth_h * 0.08
+                    s = min(mouth_w, mouth_h) * 0.16
+                    painter.drawLine(QPointF(cx - s * 0.8, ck_y), QPointF(cx - s * 0.15, ck_y + s * 0.65))
+                    painter.drawLine(QPointF(cx - s * 0.15, ck_y + s * 0.65), QPointF(cx + s * 0.95, ck_y - s * 0.55))
+
+                    save_font = QFont("Rajdhani", max(10, int(mouth_h * 0.20)), QFont.Weight.Bold)
+                    painter.setFont(save_font)
+                    painter.setPen(QColor(220, 252, 231))
+                    txt_rect = QRectF(mouth_x, cy + mouth_h * 0.08, mouth_w, mouth_h * 0.34)
+                    painter.drawText(txt_rect, Qt.AlignmentFlag.AlignCenter, "SAVED TO LIBRARY")
+                    painter.setOpacity(vis_opacity)
                 else:
                     # Visualizer
                     self.visualizer.draw(painter, mouth_rect, self.audio_engine)
@@ -1713,8 +1891,29 @@ class OverlayWindow(QWidget):
             painter.fillRect(char_rect, QColor(0, 0, 0, dim_alpha))
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
-        # 5px White Outline Outside Talia on Hover (crisp outer perimeter, zero outline on mouth)
-        if self.hover_outline_alpha > 0.005:
+        # Layer 4.5: Cyberpunk Square Border
+        if getattr(self, "show_cyber_border", False) and hasattr(self, "cyber_border_pixmap") and not self.cyber_border_pixmap.isNull():
+            if (
+                not hasattr(self, "_cached_scaled_cyber_border")
+                or getattr(self, "_cached_scaled_cyber_border_size", -1) != char_size
+            ):
+                self._cached_scaled_cyber_border_size = char_size
+                frame_w = int((618.0 / 591.0) * char_size)
+                frame_h = int((618.0 / 591.0) * char_size)
+                self._cached_scaled_cyber_border = self.cyber_border_pixmap.scaled(
+                    frame_w,
+                    frame_h,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+
+            if hasattr(self, "_cached_scaled_cyber_border") and not self._cached_scaled_cyber_border.isNull():
+                bx = char_x - int((10.0 / 591.0) * char_size)
+                by = char_y - int((15.0 / 591.0) * char_size)
+                painter.drawPixmap(bx, by, self._cached_scaled_cyber_border)
+
+        # 5px White Outline Outside Talia on Hover (Disabled to ensure zero border around Talia)
+        if getattr(self, "show_hover_outline", False) and self.hover_outline_alpha > 0.005:
             painter.save()
             painter.setOpacity(self.opacity_val * self.hover_outline_alpha * 0.90)
             pen = QPen(QColor(255, 255, 255, 255), 5.0)
@@ -1737,6 +1936,94 @@ class OverlayWindow(QWidget):
             painter.setPen(border_pen)
             painter.drawRect(char_x - 1, char_y - 1, char_size + 2, char_size + 2)
 
+        # ==========================================================
+        # POP-UP TIMELINE SCRUBBER HUD (Hold Left-Click & Drag Horizontal)
+        # ==========================================================
+        if getattr(self, "is_scrubbing_overlay", False):
+            self._draw_scrubber_hud(painter, char_x, char_y, char_size)
+
+    def _draw_scrubber_hud(self, painter: QPainter, char_x: int, char_y: int, char_size: int):
+        """Draws a sleek Cyberpunk timeline slider popup over Talia matching Master Volume style."""
+        hud_w = min(260, int(char_size * 0.92))
+        hud_h = 56
+        hud_x = char_x + (char_size - hud_w) // 2
+        hud_y = char_y + int(char_size * 0.38)
+
+        # 1. Dark cyberpunk translucent card matching Master Volume HUD panel
+        painter.setPen(QPen(QColor(247, 80, 73, 140), 1.2))
+        painter.setBrush(QBrush(QColor(10, 12, 18, 235)))
+        painter.drawRoundedRect(hud_x, hud_y, hud_w, hud_h, 3, 3)
+
+        # Corner notches
+        corner_len = 6
+        painter.setPen(QPen(QColor(247, 80, 73, 220), 1.8))
+        painter.drawLine(hud_x, hud_y, hud_x + corner_len, hud_y)
+        painter.drawLine(hud_x, hud_y, hud_x, hud_y + corner_len)
+        painter.drawLine(hud_x + hud_w, hud_y + hud_h, hud_x + hud_w - corner_len, hud_y + hud_h)
+        painter.drawLine(hud_x + hud_w, hud_y + hud_h, hud_x + hud_w, hud_y + hud_h - corner_len)
+
+        # 2. Timestamp Readout in Rajdhani Electric Blue (#5EF6FF)
+        dur = self.audio_engine.get_duration()
+        target_s = getattr(self, "scrub_target_time", 0.0)
+        m_tar, s_tar = int(target_s // 60), int(target_s % 60)
+        m_dur, s_dur = int(dur // 60), int(dur % 60)
+        time_str = f"{m_tar:02d}:{s_tar:02d} / {m_dur:02d}:{s_dur:02d}"
+
+        font = QFont("Rajdhani")
+        font.setPointSizeF(7.8)  # Reduced by 35% from 12pt
+        font.setWeight(QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
+        painter.setFont(font)
+        # Drop shadow for time text
+        painter.setPen(QColor(0, 0, 0, 180))
+        painter.drawText(
+            QRectF(hud_x + 10 + 1, hud_y + 5 + 1, hud_w - 20, 16),
+            Qt.AlignmentFlag.AlignCenter,
+            time_str,
+        )
+        # Electric blue (#5EF6FF) text
+        painter.setPen(QColor(94, 246, 255))
+        painter.drawText(
+            QRectF(hud_x + 10, hud_y + 5, hud_w - 20, 16),
+            Qt.AlignmentFlag.AlignCenter,
+            time_str,
+        )
+
+        # 3. Master Volume style horizontal slider rail
+        rail_x = hud_x + 16
+        rail_y = hud_y + 36.0
+        rail_w = hud_w - 32
+        ratio = max(0.0, min(1.0, float(getattr(self, "scrub_ratio", 0.0))))
+
+        # Ticks marks at 0%, 25%, 50%, 75%, 100%
+        painter.setPen(QPen(QColor(255, 138, 132, 160), 1.0))
+        for tick_pct in (0.0, 0.25, 0.50, 0.75, 1.0):
+            tx = rail_x + (tick_pct * rail_w)
+            painter.drawLine(QPointF(tx, rail_y - 4.0), QPointF(tx, rail_y - 1.0))
+
+        # Full red track line
+        painter.setPen(QPen(QColor(247, 80, 73, 110), 1.5))
+        painter.drawLine(QPointF(rail_x, rail_y), QPointF(rail_x + rail_w, rail_y))
+
+        # Active rail line (left to handle) in bright red
+        handle_x = rail_x + (ratio * rail_w)
+        painter.setPen(QPen(QColor(247, 80, 73, 255), 2.0))
+        painter.drawLine(QPointF(rail_x, rail_y), QPointF(handle_x, rail_y))
+
+        # Handle: Vertical pip bar matching Master Volume slider handle geometry
+        pip_w = 6.0
+        pip_h = 16.0
+        # Soft outer glow
+        painter.setBrush(QBrush(QColor(247, 80, 73, 70)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRect(QRectF(handle_x - (pip_w / 2.0) - 3.0, rail_y - (pip_h / 2.0) - 3.0, pip_w + 6.0, pip_h + 6.0))
+
+        # Solid handle bar with white outline
+        pip_rect = QRectF(handle_x - (pip_w / 2.0), rail_y - (pip_h / 2.0), pip_w, pip_h)
+        painter.setBrush(QBrush(QColor(255, 138, 132)))
+        painter.setPen(QPen(QColor(255, 255, 255, 220), 0.8))
+        painter.drawRect(pip_rect)
+
     def mousePressEvent(self, event):
         self.last_user_activity = time.time()
         self.last_music_active_time = time.time()
@@ -1746,14 +2033,20 @@ class OverlayWindow(QWidget):
         if event.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
             self.right_drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self.is_right_dragging = True
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._middle_press_pos = event.globalPosition().toPoint()
+                self._middle_did_drag = False
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton:
             self.press_pos = event.globalPosition().toPoint()
             self.press_time = time.time()
+            self.press_was_in_move_mode = self.move_talia_mode
             self.is_holding = True
             self.has_dragged = False
+            self.has_dragged_window = False
             self.drag_ready_triggered = False
+            self.playback_swipe_done = False
             self.button_press_delay = 0.0
             self.restore_timer.stop()
             self.hold_timer.start(25)
@@ -1770,23 +2063,79 @@ class OverlayWindow(QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event):
+        self.last_user_activity = time.time()
+        self.last_music_active_time = time.time()
         if self.is_shutting_down:
             event.accept()
             return
         if (event.buttons() & (Qt.MouseButton.RightButton | Qt.MouseButton.MiddleButton)) and getattr(
             self, "is_right_dragging", False
         ):
+            if event.buttons() & Qt.MouseButton.MiddleButton:
+                press_pos = getattr(self, "_middle_press_pos", None)
+                if press_pos is not None and not getattr(self, "_middle_did_drag", False):
+                    if (event.globalPosition().toPoint() - press_pos).manhattanLength() < 6:
+                        event.accept()
+                        return
+                    self._middle_did_drag = True
             self.move(event.globalPosition().toPoint() - self.right_drag_pos)
+            if self.panel and hasattr(self.panel, "update_sliding_panel_position"):
+                self.panel.update_sliding_panel_position()
             event.accept()
             return
         if event.buttons() & Qt.MouseButton.LeftButton:
-            dist = (event.globalPosition().toPoint() - self.press_pos).manhattanLength()
-            if dist > 6:
-                self.has_dragged = True
-                if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
-                    self.sound_hold.stop()
+            delta = event.globalPosition().toPoint() - self.press_pos
+            dx = delta.x()
+            dy = delta.y()
+            dist = delta.manhattanLength()
+
             if self.move_talia_mode:
+                if not getattr(self, "is_dragging", False):
+                    self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                    self.is_dragging = True
                 self.move(event.globalPosition().toPoint() - self.drag_position)
+                if self.panel and hasattr(self.panel, "update_sliding_panel_position"):
+                    self.panel.update_sliding_panel_position()
+                if dist > 6:
+                    self.has_dragged_window = True
+                    self.has_dragged = True
+                    if self.hold_timer.isActive():
+                        self.hold_timer.stop()
+                    if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
+                        self.sound_hold.stop()
+            else:
+                # In Locked Mode:
+                # Horizontal drag triggers pop-up timeline slider to scrub/seek into parts of the song
+                if not self.drag_ready_triggered:
+                    if not getattr(self, "is_scrubbing_overlay", False):
+                        if abs(dx) >= 12 and abs(dx) > abs(dy) * 0.8:
+                            self.is_scrubbing_overlay = True
+                            self.has_dragged = True
+                            if self.hold_timer.isActive():
+                                self.hold_timer.stop()
+                            if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
+                                self.sound_hold.stop()
+
+                    if getattr(self, "is_scrubbing_overlay", False):
+                        dur = self.audio_engine.get_duration()
+                        if dur <= 0:
+                            dur = 180.0
+
+                        MARGIN = 16
+                        char_size = min(self.width() - 2 * MARGIN, self.height() - 2 * MARGIN)
+                        char_x = (self.width() - char_size) // 2
+                        hud_w = min(260, int(char_size * 0.92))
+                        hud_x = char_x + (char_size - hud_w) // 2
+                        rail_x = hud_x + 16
+                        rail_w = max(10, hud_w - 32)
+                        pos_x = event.position().x() if hasattr(event, "position") else float(event.pos().x())
+                        ratio = max(0.0, min(1.0, (pos_x - rail_x) / float(rail_w)))
+                        self.scrub_ratio = ratio
+                        self.scrub_target_time = ratio * dur
+                        self.update()
+
+                if dist > 25 and not self.drag_ready_triggered and not getattr(self, "is_scrubbing_overlay", False):
+                    self.has_dragged = True
             event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -1796,6 +2145,21 @@ class OverlayWindow(QWidget):
         if event.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
             if getattr(self, "is_right_dragging", False):
                 self.is_right_dragging = False
+                if (
+                    event.button() == Qt.MouseButton.MiddleButton
+                    and not getattr(self, "_middle_did_drag", False)
+                ):
+                    if (
+                        self.panel
+                        and hasattr(self.panel, "radio_mix")
+                        and self.panel.radio_mix
+                        and hasattr(self.panel, "save_radio_track_permanently")
+                    ):
+                        active_p = getattr(self.audio_engine, "_active_file_path", "")
+                        if active_p and self.panel.radio_mix.is_radio_cached_track(active_p):
+                            self.panel.save_radio_track_permanently(active_p)
+                    event.accept()
+                    return
                 # Auto-save new position immediately after right-click or middle-click drag!
                 if self.panel:
                     try:
@@ -1811,38 +2175,35 @@ class OverlayWindow(QWidget):
             self.hold_timer.stop()
             if hasattr(self, "sound_hold") and self.sound_hold.isPlaying():
                 self.sound_hold.stop()
-            if self.has_dragged:
-                # User dragged Talia in Move Mode
+
+            # If user was scrubbing audio timeline with the pop-up slider
+            if getattr(self, "is_scrubbing_overlay", False):
+                self.is_scrubbing_overlay = False
+                self.has_dragged = True
                 self.is_dragging = False
-                # Auto-save new position immediately after left-click drag!
-                if self.panel:
-                    try:
-                        cfg = self.panel.get_current_settings_dict()
-                        save_settings(cfg)
-                    except Exception as e:
-                        log.info(f"[ERROR] Could not auto-save: {e}")
+                target_s = getattr(self, "scrub_target_time", 0.0)
+                if self.audio_engine:
+                    self.audio_engine.seek(target_s)
+                    if self.panel and hasattr(self.panel, "sync_play_state"):
+                        self.panel.sync_play_state()
+                self.update()
                 event.accept()
                 return
-            if 0.7 <= elapsed < 2.0:
-                # User held for 0.7+ seconds and let go: TOGGLE DRAG MODE!
-                self.hold_saturation = 1.0
-                self._apply_pupil_saturation()
-                self.update()
-                new_mode = not self.move_talia_mode
-                self.set_move_talia_mode(new_mode)
+
+            if self.drag_ready_triggered or getattr(self, "has_dragged_window", False) or self.has_dragged:
+                # User toggled Move Mode or dragged Talia
+                self.is_dragging = False
                 if self.panel:
                     try:
                         cfg = self.panel.get_current_settings_dict()
                         save_settings(cfg)
                     except Exception as e:
                         log.info(f"[ERROR] Could not auto-save: {e}")
-                status = (
-                    "ON (Drag to Move / Scroll to Resize)"
-                    if new_mode
-                    else "OFF (Locked & Clickable)"
-                )
-                log.info(f"[ACTION] Held for 0.7s: Move Talia Mode is now {status}!")
-            elif elapsed < 0.38:
+                if self.hold_saturation < 1.0:
+                    self._start_restore_color_animation()
+                event.accept()
+                return
+            if elapsed < 0.38:
                 # Short tap/click: count for 1x, 2x, 3x multi-click
                 if self.hold_saturation < 1.0:
                     self._start_restore_color_animation()
@@ -1884,8 +2245,10 @@ class OverlayWindow(QWidget):
 
     def _trigger_single_click(self):
         """1 Click on Talia: Toggle Play / Pause."""
-        if self.audio_engine.audio_mode == "desktop":
-            self.audio_engine.toggle_play_pause()
+        if self.panel and hasattr(self.panel, "on_play_pause_clicked"):
+            self.panel.on_play_pause_clicked()
+            self.update_transport_state()
+            log.info("[ACTION] 1 Click on Talia: Play/Pause toggled.")
             return
         if not self.audio_engine.playlist:
             return
@@ -1897,6 +2260,7 @@ class OverlayWindow(QWidget):
             self.audio_engine.play_index(start_idx)
         else:
             self.audio_engine.toggle_play_pause()
+        self.update_transport_state()
         if self.panel:
             self.panel.sync_play_state()
         log.info("[ACTION] 1 Click on Talia: Play/Pause toggled.")
@@ -1921,10 +2285,6 @@ class OverlayWindow(QWidget):
         click_x = getattr(self, "last_click_pos", QPoint(self.width() // 2, 0)).x()
         is_right = click_x >= self.width() / 2.0
         if is_right:
-            if self.audio_engine.audio_mode == "desktop":
-                self.audio_engine.next_track()
-                self.trigger_skip_feedback("forward")
-                return
             if not self.audio_engine.playlist:
                 return
             if self.panel and hasattr(self.panel, "play_next_track"):
@@ -1932,33 +2292,34 @@ class OverlayWindow(QWidget):
             else:
                 self.audio_engine.next_track()
             self.trigger_skip_feedback("forward")
+            self.update_transport_state()
             if self.panel:
                 self.panel.sync_play_state()
             log.info("[ACTION] Double Click RIGHT on Talia: Next Track.")
         else:
-            if self.audio_engine.audio_mode == "desktop":
-                self.audio_engine.prev_track()
-                self.trigger_skip_feedback("backward")
-                return
             if not self.audio_engine.playlist:
                 return
             self.audio_engine.prev_track()
             self.trigger_skip_feedback("backward")
+            self.update_transport_state()
             if self.panel:
                 self.panel.sync_play_state()
             log.info("[ACTION] Double Click LEFT on Talia: Previous Track.")
 
     def _trigger_triple_click(self):
-        """3 Clicks on Talia: Open / Show Controller Panel."""
+        """3 Clicks on Talia: Smoothly toggle slide-out settings panel and popped-out controls."""
         if hasattr(self, "sound_menu_open") and self.sound_menu_open.isLoaded():
             self.sound_menu_open.play()
         if self.panel:
-            if self.panel.isMinimized():
-                self.panel.setWindowState(self.panel.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
-            self.panel.show()
-            self.panel.raise_()
-            self.panel.activateWindow()
-            log.info("[ACTION] 3 Clicks on Talia: Controller Panel Opened.")
+            if hasattr(self.panel, "toggle_slide_panel"):
+                self.panel.toggle_slide_panel()
+            else:
+                if self.panel.isVisible():
+                    self.panel.hide()
+                else:
+                    self.panel.show()
+                    self.panel.raise_()
+            log.info("[ACTION] 3 Clicks on Talia: Slide-out panel toggled.")
 
     def wheelEvent(self, event):
         self.last_user_activity = time.time()
@@ -1970,7 +2331,7 @@ class OverlayWindow(QWidget):
         if self.move_talia_mode:
             step = 50 if delta > 0 else -50
             new_w = max(MIN_CHAR_SIZE, min(self.width() + step, MAX_CHAR_SIZE))
-            new_h = max(MIN_CHAR_SIZE, min(self.height() + step, MAX_CHAR_SIZE))
+            new_h = new_w + BUTTON_STRIP_H
             self.resize(new_w, new_h)
             if self.panel:
                 self.panel.slider_size.blockSignals(True)
@@ -1978,29 +2339,9 @@ class OverlayWindow(QWidget):
                 self.panel.slider_size.blockSignals(False)
             event.accept()
         else:
-            if self.audio_engine.audio_mode == "desktop":
-                # Global / Live mode: scroll wheel changes laptop master audio!
-                vk = VK_VOLUME_UP if delta > 0 else VK_VOLUME_DOWN
-                user32.keybd_event(vk, 0, 0, 0)
-                user32.keybd_event(vk, 0, 2, 0)
-
-                # Step volume tracker for Talia pupil saturation & Controller panel UI
-                step = 0.04 if delta > 0 else -0.04
-                new_vol = max(0.0, min(1.0, round(self.current_volume + step, 2)))
-                self.current_volume = new_vol
-                self._apply_pupil_saturation()
-                if self.panel:
-                    self.panel.sync_volume(self.current_volume)
-                self.update()
-                dir_str = "UP (+)" if delta > 0 else "DOWN (-)"
-                log.info(
-                    f"[ACTION] Global Mode: Laptop audio {dir_str} (Talia eyes synced to {int(self.current_volume * 100)}%)"
-                )
-                event.accept()
-            else:
-                # Scroll wheel changes local music volume with 1% fine-tuning at low volume
-                step = 0.01 if self.current_volume <= 0.10 else 0.03
-                step = step if delta > 0 else -step
-                new_vol = max(0.0, min(1.0, round(self.current_volume + step, 2)))
-                self.set_volume(new_vol)
-                event.accept()
+            # Scroll wheel changes local music volume with 1% fine-tuning at low volume
+            step = 0.01 if self.current_volume <= 0.10 else 0.03
+            step = step if delta > 0 else -step
+            new_vol = max(0.0, min(1.0, round(self.current_volume + step, 2)))
+            self.set_volume(new_vol)
+            event.accept()

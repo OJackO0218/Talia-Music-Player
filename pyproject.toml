@@ -1,6 +1,6 @@
 [project]
 name = "talia"
-version = "2.4.2"
+version = "2.6.0"
 description = "Transparent desktop music player, character overlay, and audio visualizer."
 requires-python = ">=3.11"
 

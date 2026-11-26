@@ -56,6 +56,23 @@ class CyberVisualizer:
         self._inactive_color = QColor(255, 255, 255, 8)
         self._segment_color_cache = {}
         self._guide_pen_cache = {}
+        self._pen_cache = {}
+
+    def _get_cached_pen(
+        self,
+        key: tuple,
+        color: QColor,
+        width: float = 1.0,
+        style: Qt.PenStyle = Qt.PenStyle.SolidLine,
+        cap: Qt.PenCapStyle = Qt.PenCapStyle.FlatCap,
+        join: Qt.PenJoinStyle = Qt.PenJoinStyle.MiterJoin,
+    ) -> QPen:
+        cached = self._pen_cache.get(key)
+        if cached is not None:
+            return cached
+        pen = QPen(color, width, style, cap, join)
+        self._pen_cache[key] = pen
+        return pen
 
     def _get_segment_colors(self, theme_name: str, num_segments: int):
         key = (theme_name, num_segments)
@@ -148,17 +165,10 @@ class CyberVisualizer:
             if getattr(self, "eco_mode", False):
                 is_active = False
                 if engine is not None:
-                    if getattr(engine, "audio_mode", "player") == "desktop":
-                        bars = getattr(engine, "smoothed_bars", None)
-                        is_active = bool(
-                            getattr(engine, "beat_energy", 0.0) > 0.002
-                            or (bars is not None and len(bars) > 0 and bars.max() > 0.002)
-                        )
-                    else:
-                        is_active = bool(
-                            getattr(engine, "is_playing", False)
-                            and not getattr(engine, "is_paused", False)
-                        )
+                    is_active = bool(
+                        getattr(engine, "is_playing", False)
+                        and not getattr(engine, "is_paused", False)
+                    )
                 self._draw_eco_mode(
                     painter,
                     rect,
@@ -265,12 +275,16 @@ class CyberVisualizer:
         elif not self.music_note_icon.isNull():
             active_pixmap = self.music_note_icon
         if active_pixmap is not None:
-            scaled = active_pixmap.scaled(
-                icon_dim,
-                icon_dim,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            cache_key = (id(active_pixmap), icon_dim)
+            if getattr(self, "_cached_scaled_note_key", None) != cache_key:
+                self._cached_scaled_note_key = cache_key
+                self._cached_scaled_note = active_pixmap.scaled(
+                    icon_dim,
+                    icon_dim,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            scaled = self._cached_scaled_note
             ix = cx - scaled.width() // 2
             iy = cy - scaled.height() // 2
             painter.drawPixmap(ix, iy, scaled)
@@ -302,8 +316,6 @@ class CyberVisualizer:
         )
         # Beam
         beam_h = max(3, int(dim * 0.12))
-        from PyQt6.QtGui import QPolygonF
-
         beam_poly = QPolygonF(
             [
                 QPointF(cx - dx + r - stem_w, stem_top + int(dim * 0.08)),
@@ -380,7 +392,8 @@ class CyberVisualizer:
         # Translucent glow envelope
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(
-            QPen(
+            self._get_cached_pen(
+                ("wave_glow", self.current_theme_name),
                 theme["wave_glow"],
                 6,
                 Qt.PenStyle.SolidLine,
@@ -392,7 +405,8 @@ class CyberVisualizer:
 
         # Sharp bright core line
         painter.setPen(
-            QPen(
+            self._get_cached_pen(
+                ("wave", self.current_theme_name),
                 theme["wave"],
                 2,
                 Qt.PenStyle.SolidLine,
@@ -423,6 +437,8 @@ class CyberVisualizer:
         painter.drawEllipse(QRectF(cx - core_r, cy - core_r, core_r * 2, core_r * 2))
 
         # Outer frequency radiating spikes
+        pen_spike_a = self._get_cached_pen(("radial_a", self.current_theme_name), theme["bar_bottom"], 2)
+        pen_spike_b = self._get_cached_pen(("radial_b", self.current_theme_name), theme["bar_mid"], 2)
         num_spikes = min(32, len(bars))
         for i in range(num_spikes):
             angle = (i / float(num_spikes)) * 2 * math.pi + math.radians(self.rotation_angle)
@@ -433,12 +449,18 @@ class CyberVisualizer:
             y1 = cy + math.sin(angle) * r_inner
             x2 = cx + math.cos(angle) * r_outer
             y2 = cy + math.sin(angle) * r_outer
-            pen_col = theme["bar_bottom"] if (i % 2 == 0) else theme["bar_mid"]
-            painter.setPen(QPen(pen_col, 2))
+            painter.setPen(pen_spike_a if (i % 2 == 0) else pen_spike_b)
             painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
 
         # Outer tech bracket ring
-        painter.setPen(QPen(theme["bar_bottom"], 1, Qt.PenStyle.DashLine))
+        painter.setPen(
+            self._get_cached_pen(
+                ("radial_ring", self.current_theme_name),
+                theme["bar_bottom"],
+                1,
+                Qt.PenStyle.DashLine,
+            )
+        )
         bracket_r = float(base_r * 1.35)
         painter.drawEllipse(QRectF(cx - bracket_r, cy - bracket_r, bracket_r * 2, bracket_r * 2))
 
@@ -448,7 +470,9 @@ class CyberVisualizer:
         """Symmetrical dual-sided equalizer extending outward from the center."""
         cx = rect.center().x()
         # Center divider line (drawn in all states for HUD aesthetic)
-        painter.setPen(QPen(theme["bar_top"], 1))
+        painter.setPen(
+            self._get_cached_pen(("mirror_div", self.current_theme_name), theme["bar_top"], 1)
+        )
         painter.drawLine(cx, rect.top() + 8, cx, rect.bottom() - 8)
         if (len(bars) > 0 and bars.max() < 0.002) and (len(peaks) > 0 and peaks.max() < 0.002):
             return
