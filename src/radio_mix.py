@@ -116,6 +116,7 @@ class RadioMixManager(QObject):
         self.prefetch_queue: List[str] = []
         self.played_history: List[str] = []
         self._pending_deletes: List[str] = []
+        self._saved_cache_map: Dict[str, str] = {}
         self.last_seed_label: str = "Library Taste"
         self._busy_lock = threading.Lock()
         self._is_fetching: bool = False
@@ -312,8 +313,44 @@ class RadioMixManager(QObject):
                 for q in self.prefetch_queue
             ):
                 continue
+            self._migrate_evicted_saved_refs(evicted)
             if not self._delete_audio_and_lrc(evicted):
                 self._pending_deletes.append(evicted)
+
+    def get_next_played_track(self, current_path: Optional[str]) -> Optional[str]:
+        """If playback was rewound to an earlier track in played_history, return the next one."""
+        if not current_path:
+            return None
+        existing = [p for p in self.played_history if os.path.exists(p)]
+        if len(existing) < 2:
+            return None
+        norm_cur = os.path.normcase(os.path.abspath(current_path))
+        for i in range(len(existing) - 1):
+            if os.path.normcase(os.path.abspath(existing[i])) == norm_cur:
+                return existing[i + 1]
+        return None
+
+    def select_radio_track(self, path: str) -> None:
+        """Handle manual user selection of a track in ★ Random Mix and top up the 2-ahead buffer."""
+        if not path or not self.is_radio_cached_track(path):
+            return
+        self._prune_prefetch_queue()
+        norm_target = os.path.normcase(os.path.abspath(path))
+        pref_norms = [os.path.normcase(os.path.abspath(p)) for p in self.prefetch_queue]
+
+        if norm_target in pref_norms:
+            target_idx = pref_norms.index(norm_target)
+            promoted = self.prefetch_queue[: target_idx + 1]
+            self.prefetch_queue = self.prefetch_queue[target_idx + 1 :]
+            for p in promoted:
+                self.record_played_radio_track(p)
+        else:
+            # Selected an already-played or unindexed track; adopt if missing from played_history
+            hist_norms = {os.path.normcase(os.path.abspath(p)) for p in self.played_history}
+            if norm_target not in hist_norms:
+                self.record_played_radio_track(path)
+
+        self.prefetch_next()
 
     def get_previous_track(self, current_path: Optional[str]) -> Optional[str]:
         """Step back through the kept played_history without triggering eviction."""
@@ -349,8 +386,48 @@ class RadioMixManager(QObject):
             norm_stale = os.path.normcase(os.path.abspath(stale))
             if norm_stale in protected:
                 continue
+            self._migrate_evicted_saved_refs(stale)
             if not self._delete_audio_and_lrc(stale):
                 self._pending_deletes.append(stale)
+
+    def _migrate_evicted_saved_refs(self, evicted_path: str):
+        """When an older radio cache copy leaves the 5-song window, remap any stale favourite ref."""
+        if not evicted_path:
+            return
+        evicted_norm = os.path.normcase(os.path.abspath(evicted_path))
+        perm_dest = self._saved_cache_map.pop(evicted_norm, None)
+        if not perm_dest or not os.path.exists(perm_dest):
+            return
+        favs = getattr(self.panel, "favourite_tracks", None) if self.panel else None
+        if isinstance(favs, set):
+            ev_os_norm = os.path.normpath(evicted_path)
+            if ev_os_norm in favs:
+                favs.discard(ev_os_norm)
+                favs.add(os.path.normpath(perm_dest))
+
+    def get_saved_library_path(self, cache_path: Optional[str]) -> Optional[str]:
+        """Return the permanent library copy path if this Random Mix track has already been saved."""
+        if not cache_path or not self.is_radio_cached_track(cache_path):
+            return None
+        norm_c = os.path.normcase(os.path.abspath(cache_path))
+        dest = self._saved_cache_map.get(norm_c)
+        if dest and os.path.exists(dest):
+            return dest
+        # Also detect an existing permanent copy in <music_folder>/Downloaded Songs (e.g. across restart)
+        music_root = (
+            getattr(self.panel.audio_engine, "folder_path", "")
+            if self.panel and getattr(self.panel, "audio_engine", None)
+            else ""
+        ) or DEFAULT_MUSIC_DIR
+        cand_dest = os.path.join(music_root, "Downloaded Songs", os.path.basename(cache_path))
+        if os.path.exists(cand_dest):
+            self._saved_cache_map[norm_c] = cand_dest
+            return cand_dest
+        return None
+
+    def is_track_saved(self, path: Optional[str]) -> bool:
+        """True if this cached Random Mix track has already been saved permanently to the library."""
+        return self.get_saved_library_path(path) is not None
 
     @staticmethod
     def _delete_audio_and_lrc(audio_path: str) -> bool:
@@ -366,20 +443,32 @@ class RadioMixManager(QObject):
         return all_removed
 
     def save_track_permanently(self, cache_path: str) -> Tuple[bool, str]:
-        """Copy/move a cached radio track + .lrc into <music_folder>/Downloaded Songs/.
+        """Copy a cached radio track + .lrc into <music_folder>/Downloaded Songs/.
 
-        Uses copy-then-delete so saving never fails with WinError 32 while the
-        audio file is open for live playback in SoundFile.
+        Keeps the cached entry in the ★ Random Mix 5-song sliding window (so it
+        stays visible and highlights green until naturally evicted 2 songs later),
+        while persisting a permanent copy in Downloaded Songs immediately.
         """
         if not cache_path or not os.path.exists(cache_path):
             return False, "No cached radio track to save."
         if not self.is_radio_cached_track(cache_path):
             return False, "Track is already in your permanent library."
 
+        engine = getattr(self.panel, "audio_engine", None)
+        existing_dest = self.get_saved_library_path(cache_path)
+        if existing_dest and os.path.exists(existing_dest):
+            if engine:
+                norm_dest = os.path.normcase(os.path.abspath(existing_dest))
+                if not any(
+                    os.path.normcase(os.path.abspath(p)) == norm_dest
+                    for p in (engine.playlist or [])
+                ):
+                    engine.playlist.append(existing_dest)
+            self.track_saved_permanently.emit(existing_dest)
+            return True, f"Already saved: {os.path.basename(existing_dest)}"
+
         music_root = (
-            getattr(self.panel.audio_engine, "folder_path", "")
-            if self.panel and getattr(self.panel, "audio_engine", None)
-            else ""
+            getattr(engine, "folder_path", "") if engine else ""
         ) or DEFAULT_MUSIC_DIR
         target_dir = os.path.join(music_root, "Downloaded Songs")
         os.makedirs(target_dir, exist_ok=True)
@@ -401,32 +490,15 @@ class RadioMixManager(QObject):
         except Exception as exc:
             return False, f"Failed to save track: {exc}"
 
-        if not self._delete_audio_and_lrc(cache_path):
-            self._pending_deletes.append(cache_path)
+        self._saved_cache_map[os.path.normcase(os.path.abspath(cache_path))] = dest_audio
 
-        # Keep audio_engine pointing cleanly at the saved file if it was active
-        engine = getattr(self.panel, "audio_engine", None)
         if engine:
-            norm_old = os.path.normcase(os.path.abspath(cache_path))
-            active_p = getattr(engine, "_active_file_path", "")
-            if active_p and os.path.normcase(os.path.abspath(active_p)) == norm_old:
-                engine._active_file_path = dest_audio
-            replaced = False
-            for i, p in enumerate(engine.playlist):
-                if os.path.normcase(os.path.abspath(p)) == norm_old:
-                    engine.playlist[i] = dest_audio
-                    replaced = True
-                    break
-            if not replaced:
+            norm_dest = os.path.normcase(os.path.abspath(dest_audio))
+            if not any(
+                os.path.normcase(os.path.abspath(p)) == norm_dest
+                for p in (engine.playlist or [])
+            ):
                 engine.playlist.append(dest_audio)
-
-        norm_saved = os.path.normcase(os.path.abspath(cache_path))
-        self.prefetch_queue = [
-            p for p in self.prefetch_queue if os.path.normcase(os.path.abspath(p)) != norm_saved
-        ]
-        self.played_history = [
-            p for p in self.played_history if os.path.normcase(os.path.abspath(p)) != norm_saved
-        ]
 
         self.track_saved_permanently.emit(dest_audio)
         return True, f"Saved to {os.path.basename(target_dir)}/{os.path.basename(dest_audio)}"
@@ -580,11 +652,22 @@ class RadioMixManager(QObject):
     def request_next_track(self, auto_play: bool = True):
         """Play next buffered track immediately if ready, and top up 2-ahead buffer."""
         self._prune_prefetch_queue()
-        if auto_play and self.prefetch_queue:
-            ready_path = self.prefetch_queue.pop(0)
-            self.track_ready.emit(ready_path, True)
-            self.prefetch_next()
-            return
+        if auto_play:
+            cur_active = (
+                getattr(self.panel.audio_engine, "_active_file_path", "")
+                if self.panel and getattr(self.panel, "audio_engine", None)
+                else ""
+            )
+            step_forward = self.get_next_played_track(cur_active)
+            if step_forward and os.path.exists(step_forward):
+                self.track_ready.emit(step_forward, True)
+                self.prefetch_next()
+                return
+            if self.prefetch_queue:
+                ready_path = self.prefetch_queue.pop(0)
+                self.track_ready.emit(ready_path, True)
+                self.prefetch_next()
+                return
 
         with self._busy_lock:
             if self._is_fetching:
@@ -647,7 +730,17 @@ class RadioMixManager(QObject):
                     self.track_ready.emit(saved_path, True)
                     self.prefetch_next()
                 else:
-                    self.prefetch_queue.append(saved_path)
+                    norm_s = os.path.normcase(os.path.abspath(saved_path))
+                    if not any(
+                        os.path.normcase(os.path.abspath(p)) == norm_s
+                        for p in self.prefetch_queue
+                    ):
+                        self.prefetch_queue.append(saved_path)
+                    self.status_changed.emit(
+                        f"Seed: {self.last_seed_label} · {len(self.prefetch_queue)}/{MAX_PREFETCH_AHEAD} queued"
+                    )
+                    self.prefetch_ready.emit(saved_path)
+                    self.prefetch_next()
                     queued_n = len(self.prefetch_queue)
                     self.status_changed.emit(
                         f"Seed: {self.last_seed_label} · {queued_n}/{MAX_PREFETCH_AHEAD} queued"

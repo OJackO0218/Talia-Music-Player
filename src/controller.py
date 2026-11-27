@@ -1346,6 +1346,9 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             if not self.radio_mix.is_radio_cached_track(cur_path):
                 self.radio_mix.request_next_track(auto_play=True)
                 return
+            self.audio_engine.toggle_play_pause()
+            self.sync_play_state()
+            return
         if not self.audio_engine.playlist:
             return
         if self.audio_engine.current_index < 0:
@@ -1395,11 +1398,27 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                             self.party_sync.broadcast_pause(cur_pos)
 
         cur_idx = self.audio_engine.current_index
+        active_p = getattr(self.audio_engine, "_active_file_path", "")
+        cur_path = (
+            active_p
+            if active_p
+            else (
+                self.audio_engine.playlist[cur_idx]
+                if 0 <= cur_idx < len(self.audio_engine.playlist)
+                else ""
+            )
+        )
+        cur_norm = os.path.normcase(os.path.abspath(cur_path)) if cur_path else ""
         for r in range(self.list_tracks.count()):
             it = self.list_tracks.item(r)
             if not it:
                 continue
-            is_cur = (it.data(Qt.ItemDataRole.UserRole) == cur_idx)
+            row_path = it.data(Qt.ItemDataRole.UserRole + 1) or ""
+            orig_i = it.data(Qt.ItemDataRole.UserRole)
+            if cur_norm and row_path:
+                is_cur = os.path.normcase(os.path.abspath(row_path)) == cur_norm
+            else:
+                is_cur = (orig_i == cur_idx and orig_i >= 0)
             w = self.list_tracks.itemWidget(it)
             if w and hasattr(w, "set_current"):
                 w.set_current(is_cur)
@@ -1733,7 +1752,21 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
     def _on_radio_saved_permanently(self, new_path: str):
         if hasattr(self, "lbl_radio_status") and self.lbl_radio_status:
             self.lbl_radio_status.setText(f"Saved: {os.path.basename(new_path)}")
-        self.populate_playlist_ui()
+        if (
+            getattr(self, "current_playlist", "") == "★ Random Mix"
+            and hasattr(self, "list_tracks")
+            and hasattr(self, "radio_mix")
+            and self.radio_mix
+        ):
+            for r in range(self.list_tracks.count()):
+                it = self.list_tracks.item(r)
+                p_row = it.data(Qt.ItemDataRole.UserRole + 1) if it else ""
+                if p_row and self.radio_mix.is_track_saved(p_row):
+                    w = self.list_tracks.itemWidget(it)
+                    if w is not None and hasattr(w, "set_saved"):
+                        w.set_saved(True)
+        elif hasattr(self, "populate_playlist_ui"):
+            self.populate_playlist_ui()
         if hasattr(self, "save_settings"):
             self.save_settings()
 
@@ -1936,7 +1969,21 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
             self.audio_engine.queue.remove(path)
             if hasattr(self, "save_settings"):
                 self.save_settings()
-        if orig_idx is not None and 0 <= orig_idx < len(self.audio_engine.playlist):
+        in_radio = (
+            path
+            and hasattr(self, "radio_mix")
+            and self.radio_mix
+            and (
+                getattr(self, "current_playlist", "") == "★ Random Mix"
+                or self.radio_mix.is_radio_cached_track(path)
+            )
+        )
+        if in_radio and path and os.path.exists(path):
+            self.radio_mix.select_radio_track(path)
+            self.audio_engine.load_file(path, auto_play=True)
+            if getattr(self, "current_playlist", "") == "★ Random Mix":
+                self.populate_playlist_ui()
+        elif orig_idx is not None and 0 <= orig_idx < len(self.audio_engine.playlist):
             self.audio_engine.play_index(orig_idx)
         elif path and os.path.exists(path):
             if path in self.audio_engine.playlist:
@@ -2148,6 +2195,12 @@ class ControlPanel(PlaylistPanelMixin, DownloadPanelMixin, QWidget):
                     len(self.audio_engine.playlist) > 1
                     or bool(getattr(self.audio_engine, "queue", None))
                     or (hasattr(self, "party_sync") and self.party_sync.is_connected and self.party_sync.party_queue)
+                    or (
+                        getattr(self, "current_playlist", "") == "★ Random Mix"
+                        and hasattr(self, "radio_mix")
+                        and self.radio_mix
+                        and bool(self.radio_mix.prefetch_queue or self.radio_mix.get_next_played_track(getattr(self.audio_engine, "_active_file_path", "")))
+                    )
                 )
             ):
                 self.play_next_track(crossfade=True)

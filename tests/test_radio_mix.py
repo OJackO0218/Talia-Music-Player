@@ -93,7 +93,9 @@ def test_cache_auto_cleanup_and_permanent_save(radio_env, tmp_path):
     dest_lrc = music_dir / "Downloaded Songs" / (os.path.splitext(os.path.basename(target))[0] + ".lrc")
     assert dest_op.exists()
     assert dest_lrc.exists()
-    assert not os.path.exists(target)
+    # Remains in ★ Random Mix until evicted by 2 subsequent tracks
+    assert os.path.exists(target)
+    assert mgr.is_track_saved(target) is True
     assert str(dest_op) in engine.playlist
 
 
@@ -233,7 +235,9 @@ def test_middle_click_talia_saves_current_radio_song(radio_env, tmp_path):
 
     saved_dest = music_dir / "Downloaded Songs" / "Middle Click Test Song.opus"
     assert saved_dest.exists()
-    assert not os.path.exists(cached_song)
+    # Remains cached in Random Mix until naturally evicted after 2 songs
+    assert os.path.exists(cached_song)
+    assert panel.radio_mix.is_track_saved(cached_song) is True
     assert panel.overlay.osd_symbol == "saved"
     assert panel.overlay.osd_timer > 0.0
 
@@ -304,9 +308,153 @@ def test_save_track_succeeds_even_when_source_file_is_locked(radio_env, tmp_path
     dest_lrc = music_dir / "Downloaded Songs" / "Locked Playing Song.lrc"
     assert dest_op.exists()
     assert dest_lrc.exists()
-    assert engine._active_file_path == str(dest_op)
-    # Hidden from cached list immediately, then flushed once unlocked
-    assert str(locked_song) not in mgr.get_cached_tracks()
+    assert mgr.is_track_saved(str(locked_song)) is True
+    assert str(locked_song) in mgr.get_cached_tracks()
+
+    # Evicting after 3 more tracks retries locked delete gracefully without touching dest_op
+    later = []
+    for i in range(3):
+        p = cache_dir / f"Later {i}.opus"
+        p.write_bytes(b"later")
+        later.append(str(p))
+    mgr.record_played_radio_track(str(locked_song))
+    with patch.object(mgr, "_delete_audio_and_lrc", return_value=False):
+        for lp in later:
+            mgr.record_played_radio_track(lp)
+    assert not os.path.exists(locked_song) or str(locked_song) in mgr._pending_deletes
     mgr._flush_pending_deletes()
     assert not locked_song.exists()
+    assert dest_op.exists()
     engine._active_file_path = ""
+
+
+def test_favourite_in_random_mix_saves_highlights_green_and_evicts_after_two_songs(radio_env, tmp_path):
+    """Loving a Random Mix song saves it, turns the row green, stays in mix, and evicts temp after 2 songs."""
+    panel, engine = radio_env
+    music_dir = tmp_path / "fav_music"
+    music_dir.mkdir()
+    engine.folder_path = str(music_dir)
+    engine.playlist = []
+
+    cache_dir = tmp_path / "fav_radio_cache"
+    cache_dir.mkdir()
+    orig_radio_mix = panel.radio_mix
+    mgr = RadioMixManager(panel, cache_dir=str(cache_dir))
+    mgr.track_saved_permanently.connect(panel._on_radio_saved_permanently)
+    panel.radio_mix = mgr
+    try:
+        def _mk(name: str) -> str:
+            op = cache_dir / f"{name}.opus"
+            lrc = cache_dir / f"{name}.lrc"
+            op.write_bytes(b"opus-data")
+            lrc.write_text("[00:01.00] lyrics", encoding="utf-8")
+            return str(op)
+
+        song_a = _mk("Artist A - First Song")
+        song_b = _mk("Artist B - Loved Song")
+        song_c = _mk("Artist C - Buffered Song")
+        mgr.played_history = [song_a, song_b]
+        mgr.prefetch_queue = [song_c]
+        engine._active_file_path = song_b
+
+        panel.on_playlist_selected(RADIO_PLAYLIST_NAME)
+        assert panel.list_tracks.count() == 3
+
+        # Click the heart button on song_b's row
+        row_b = panel.list_tracks.itemWidget(panel.list_tracks.item(1))
+        assert row_b is not None
+        row_b.btn_fav.click()
+
+        dest_b = music_dir / "Downloaded Songs" / "Artist B - Loved Song.opus"
+        dest_b_lrc = music_dir / "Downloaded Songs" / "Artist B - Loved Song.lrc"
+        assert dest_b.exists()
+        assert dest_b_lrc.exists()
+        assert os.path.normpath(str(dest_b)) in panel.favourite_tracks
+        assert panel.list_tracks.count() == 3  # Still present in Random Mix!
+        assert row_b.is_fav is True
+        assert row_b.is_saved is True
+        assert "#22c55e" in row_b.styleSheet() or "163, 74" in row_b.styleSheet()
+
+        # Re-saving does not create duplicate copy
+        ok2, _ = mgr.save_track_permanently(song_b)
+        assert ok2 is True
+        assert not (music_dir / "Downloaded Songs" / "Artist B - Loved Song (1).opus").exists()
+
+        # Play 3 more songs -> song_b temp copy disappears from Random Mix naturally after 2 songs
+        for n in ("Song D", "Song E", "Song F"):
+            mgr.record_played_radio_track(_mk(n))
+
+        assert not os.path.exists(song_b)
+        assert dest_b.exists()
+        assert panel.is_favourite(str(dest_b)) is True
+        panel.on_playlist_selected("★ Favourites")
+        from PyQt6.QtCore import Qt
+
+        fav_titles = [
+            panel.list_tracks.item(i).data(Qt.ItemDataRole.UserRole + 1)
+            for i in range(panel.list_tracks.count())
+        ]
+        assert str(dest_b) in fav_titles
+    finally:
+        engine._active_file_path = ""
+        panel.radio_mix = orig_radio_mix
+        panel.on_playlist_selected("All Tracks")
+
+
+def test_manual_double_click_on_last_random_mix_song_triggers_buffer(radio_env, tmp_path):
+    """Double-clicking a buffered or last song in ★ Random Mix updates history & tops up buffer."""
+    import wave
+
+    from PyQt6.QtCore import Qt
+
+    panel, engine = radio_env
+    cache_dir = tmp_path / "manual_select_cache"
+    cache_dir.mkdir()
+    orig_radio_mix = panel.radio_mix
+    mgr = RadioMixManager(panel, cache_dir=str(cache_dir))
+    panel.radio_mix = mgr
+    try:
+        def _mk(name: str) -> str:
+            p = cache_dir / f"{name}.wav"
+            with wave.open(str(p), "wb") as wf:
+                wf.setnchannels(2)
+                wf.setsampwidth(2)
+                wf.setframerate(8000)
+                wf.writeframes(b"\x00\x00\x00\x00" * 400)
+            return str(p)
+
+        s_prev = _mk("Prev Song")
+        s_cur = _mk("Current Song")
+        s_buf1 = _mk("Buffered Next 1")
+        s_last = _mk("Buffered Last 2")
+        mgr.played_history = [s_prev, s_cur]
+        mgr.prefetch_queue = [s_buf1, s_last]
+        engine._active_file_path = s_cur
+
+        panel.on_playlist_selected(RADIO_PLAYLIST_NAME)
+        assert panel.list_tracks.count() == 4
+        last_item = panel.list_tracks.item(3)
+        assert last_item.data(Qt.ItemDataRole.UserRole + 1) == s_last
+
+        with (
+            patch.object(mgr, "prefetch_next") as mock_prefetch,
+            patch.object(engine, "load_file", wraps=engine.load_file) as mock_load,
+        ):
+            panel.on_track_double_clicked(last_item)
+
+        mock_load.assert_called_once_with(s_last, auto_play=True)
+        mock_prefetch.assert_called_once()
+        assert mgr.prefetch_queue == []
+        assert mgr.played_history[-1] == s_last
+
+        # Active row highlighting in ★ Random Mix marks only the clicked track
+        cur_flags = [
+            panel.list_tracks.itemWidget(panel.list_tracks.item(i)).is_current
+            for i in range(panel.list_tracks.count())
+        ]
+        assert cur_flags.count(True) == 1
+        assert cur_flags[-1] is True
+    finally:
+        engine._active_file_path = ""
+        panel.radio_mix = orig_radio_mix
+        panel.on_playlist_selected("All Tracks")

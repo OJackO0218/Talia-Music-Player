@@ -15,11 +15,16 @@ for path in (ROOT / "src", ROOT / "Talia Lyrics Fetch Automated"):
 import pytest  # noqa: E402
 
 
+_SESSION_QAPP = None
+
+
 @pytest.fixture(scope="session", autouse=True)
 def qapp():
+    global _SESSION_QAPP
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
+    _SESSION_QAPP = app
     yield app
 
 
@@ -71,7 +76,6 @@ def cleanup_after_test():
                             t.stop()
                         except Exception:
                             pass
-            app.processEvents()
     except Exception:
         pass
 

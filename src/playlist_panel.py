@@ -76,6 +76,7 @@ class TrackRowWidget(QFrame):
         play_count: int = 0,
         is_fav: bool = False,
         is_checked: bool = False,
+        is_saved: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -88,6 +89,7 @@ class TrackRowWidget(QFrame):
         self.is_current = is_current
         self.play_count = play_count
         self.is_fav = is_fav
+        self.is_saved = is_saved
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("trackRow")
@@ -186,14 +188,24 @@ class TrackRowWidget(QFrame):
 
     def _update_row_appearance(self):
         if self.is_current:
-            # Active / Currently playing: Bright cyan background matching Figma Song_Buttons
-            self.setStyleSheet("""
-                QFrame#trackRow, QWidget#trackRow {
-                    background-color: #00F5FF;
-                    border: 1px solid #00F5FF;
-                    border-radius: 2px;
-                }
-            """)
+            if self.is_saved:
+                # Active + Saved in Random Mix: vivid emerald highlight
+                self.setStyleSheet("""
+                    QFrame#trackRow, QWidget#trackRow {
+                        background-color: #22c55e;
+                        border: 1px solid #86efac;
+                        border-radius: 2px;
+                    }
+                """)
+            else:
+                # Active / Currently playing: Bright cyan background matching Figma Song_Buttons
+                self.setStyleSheet("""
+                    QFrame#trackRow, QWidget#trackRow {
+                        background-color: #00F5FF;
+                        border: 1px solid #00F5FF;
+                        border-radius: 2px;
+                    }
+                """)
             self.lbl_idx.setStyleSheet("color: #000000; font-family: 'Share Tech Mono', 'Consolas', monospace; font-size: 11px; font-weight: bold;")
             self.lbl_title.setStyleSheet("color: #000000; font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 12px; text-transform: uppercase;")
             self.lbl_sub.setStyleSheet("color: #1a1a24; font-family: 'Rajdhani', sans-serif; font-size: 9px; font-weight: 600; text-transform: uppercase;")
@@ -204,6 +216,24 @@ class TrackRowWidget(QFrame):
             else:
                 self.btn_fav.setText("♡")
                 self.btn_fav.setStyleSheet("QPushButton { background: transparent; color: #000000; border: none; font-size: 16px; font-weight: bold; }")
+        elif self.is_saved:
+            # Saved/Loved track kept in Random Mix: distinct emerald green highlight
+            self.setStyleSheet("""
+                QFrame#trackRow, QWidget#trackRow {
+                    background-color: rgba(22, 163, 74, 0.24);
+                    border: 1px solid rgba(74, 222, 128, 175);
+                    border-radius: 2px;
+                }
+                QFrame#trackRow:hover, QWidget#trackRow:hover {
+                    background-color: rgba(34, 197, 94, 0.36);
+                    border-color: #4ade80;
+                }
+            """)
+            self.lbl_idx.setStyleSheet("color: #86efac; font-family: 'Share Tech Mono', 'Consolas', monospace; font-size: 11px;")
+            self.lbl_title.setStyleSheet("color: #86efac; font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 12px; text-transform: uppercase;")
+            self.lbl_sub.setStyleSheet("color: #bbf7d0; font-family: 'Rajdhani', sans-serif; font-size: 9px; font-weight: 600; text-transform: uppercase;")
+            self.lbl_play_count.setStyleSheet("color: #4ade80; font-family: 'Share Tech Mono', 'Consolas', monospace; font-size: 11px; font-weight: bold;")
+            self._update_fav_style()
         else:
             # Normal state: Figma Song_Buttons (dark sleek row with subtle coral/dark border)
             self.setStyleSheet("""
@@ -257,7 +287,18 @@ class TrackRowWidget(QFrame):
     def _on_fav_clicked(self):
         if self.panel and hasattr(self.panel, "toggle_favourite"):
             self.is_fav = self.panel.toggle_favourite(self.path)
+            if (
+                getattr(self.panel, "current_playlist", "") == "★ Random Mix"
+                and hasattr(self.panel, "radio_mix")
+                and self.panel.radio_mix
+            ):
+                self.is_saved = self.panel.radio_mix.is_track_saved(self.path)
+            self.btn_fav.setToolTip("Remove from favourites" if self.is_fav else "Add to favourites")
             self._update_row_appearance()
+
+    def set_saved(self, is_saved: bool):
+        self.is_saved = bool(is_saved)
+        self._update_row_appearance()
 
     def _on_batch_toggled(self, checked: bool):
         if self.panel and hasattr(self.panel, "on_track_batch_toggled"):
@@ -433,7 +474,17 @@ class PlaylistPanelMixin:
         base_dir = self.audio_engine.folder_path
         self.list_tracks.clear()
         cur_idx = self.audio_engine.current_index
-        cur_path = self.audio_engine.playlist[cur_idx] if 0 <= cur_idx < len(self.audio_engine.playlist) else None
+        active_p = getattr(self.audio_engine, "_active_file_path", "")
+        cur_path = (
+            active_p
+            if active_p
+            else (
+                self.audio_engine.playlist[cur_idx]
+                if 0 <= cur_idx < len(self.audio_engine.playlist)
+                else None
+            )
+        )
+        cur_norm = os.path.normcase(os.path.abspath(cur_path)) if cur_path else ""
 
         # 1. Base tracks from active playlist (all tracks, favourites, folder playlists, or custom)
         cur_pl = getattr(self, "current_playlist", "All Tracks")
@@ -498,7 +549,15 @@ class PlaylistPanelMixin:
                     sub_txt = ""
 
                 orig_i = playlist_index_map.get(path, -1)
-                is_cur = (path == cur_path)
+                is_cur = bool(
+                    cur_norm and os.path.normcase(os.path.abspath(path)) == cur_norm
+                )
+                is_saved_row = bool(
+                    cur_pl == "★ Random Mix"
+                    and hasattr(self, "radio_mix")
+                    and self.radio_mix
+                    and self.radio_mix.is_track_saved(path)
+                )
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, orig_i)
                 item.setData(Qt.ItemDataRole.UserRole + 1, path)
@@ -518,6 +577,7 @@ class PlaylistPanelMixin:
                     play_count=self.get_play_count(path),
                     is_fav=self.is_favourite(path),
                     is_checked=(path in selected_batch),
+                    is_saved=is_saved_row,
                 )
                 item.setSizeHint(QSize(200, 38))
                 self.list_tracks.addItem(item)
@@ -580,7 +640,17 @@ class PlaylistPanelMixin:
     def is_favourite(self, path: str) -> bool:
         norm = os.path.normpath(path)
         favs = getattr(self, "favourite_tracks", set())
-        return norm in favs
+        if norm in favs:
+            return True
+        if (
+            hasattr(self, "radio_mix")
+            and self.radio_mix
+            and self.radio_mix.is_radio_cached_track(path)
+        ):
+            saved_dest = self.radio_mix.get_saved_library_path(path)
+            if saved_dest and os.path.normpath(saved_dest) in favs:
+                return True
+        return False
 
     def toggle_favourite(self, path: str) -> bool:
         norm = os.path.normpath(path)
@@ -589,11 +659,33 @@ class PlaylistPanelMixin:
         elif isinstance(self.favourite_tracks, list):
             self.favourite_tracks = set(self.favourite_tracks)
 
-        if norm in self.favourite_tracks:
-            self.favourite_tracks.remove(norm)
+        is_radio = bool(
+            hasattr(self, "radio_mix")
+            and self.radio_mix
+            and self.radio_mix.is_radio_cached_track(path)
+        )
+        currently_fav = self.is_favourite(path)
+
+        if currently_fav:
+            self.favourite_tracks.discard(norm)
+            if is_radio:
+                saved_dest = self.radio_mix.get_saved_library_path(path)
+                if saved_dest:
+                    self.favourite_tracks.discard(os.path.normpath(saved_dest))
             res = False
         else:
-            self.favourite_tracks.add(norm)
+            target_norm = norm
+            if is_radio:
+                if not self.radio_mix.is_track_saved(path):
+                    if hasattr(self, "save_radio_track_permanently"):
+                        self.save_radio_track_permanently(path)
+                    else:
+                        self.radio_mix.save_track_permanently(path)
+                saved_dest = self.radio_mix.get_saved_library_path(path)
+                if saved_dest:
+                    self.favourite_tracks.discard(norm)
+                    target_norm = os.path.normpath(saved_dest)
+            self.favourite_tracks.add(target_norm)
             res = True
 
         try:
@@ -608,6 +700,18 @@ class PlaylistPanelMixin:
         cur_pl = getattr(self, "current_playlist", "All Tracks")
         if cur_pl in ("Favourites", "★ Favourites"):
             self.populate_playlist_ui()
+        elif cur_pl == "★ Random Mix" and is_radio and hasattr(self, "list_tracks"):
+            target_key = os.path.normcase(os.path.abspath(path))
+            for r in range(self.list_tracks.count()):
+                it = self.list_tracks.item(r)
+                p_row = it.data(Qt.ItemDataRole.UserRole + 1) if it else ""
+                if p_row and os.path.normcase(os.path.abspath(p_row)) == target_key:
+                    w = self.list_tracks.itemWidget(it)
+                    if w is not None:
+                        w.is_fav = res
+                        if hasattr(w, "set_saved"):
+                            w.set_saved(self.radio_mix.is_track_saved(p_row))
+                    break
         return res
 
     def get_track_duration(self, path: str) -> float:
@@ -1255,7 +1359,10 @@ class PlaylistPanelMixin:
             and self.radio_mix
             and self.radio_mix.is_radio_cached_track(path)
         ):
-            action_save_radio = menu.addAction("Save Permanently to Library")
+            is_saved_radio = self.radio_mix.is_track_saved(path)
+            action_save_radio = menu.addAction(
+                "Saved to Library ✓" if is_saved_radio else "Save Permanently to Library"
+            )
         action_queue = menu.addAction("Add to Queue")
         action_play_next = menu.addAction("Play Next in Queue")
         action_party_queue = None
@@ -1318,7 +1425,17 @@ class PlaylistPanelMixin:
                         w.chk_batch.blockSignals(False)
             self._update_batch_delete_btn()
         elif selected == action_play:
-            if orig_idx is not None and orig_idx >= 0:
+            if (
+                hasattr(self, "radio_mix")
+                and self.radio_mix
+                and path
+                and self.radio_mix.is_radio_cached_track(path)
+            ):
+                self.radio_mix.select_radio_track(path)
+                self.audio_engine.load_file(path, auto_play=True)
+                if getattr(self, "current_playlist", "") == "★ Random Mix":
+                    self.populate_playlist_ui()
+            elif orig_idx is not None and orig_idx >= 0:
                 self.audio_engine.play_index(orig_idx)
             else:
                 self.audio_engine.load_file(path, auto_play=True)
